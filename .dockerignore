@@ -1,0 +1,9 @@
+Image
+kernel.iso
+kernel/system
+kernel/system.bin
+*.o
+*.bin
+.git
+tools/build
+.iso_tmp

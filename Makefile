@@ -1,0 +1,118 @@
+# Minimal Linux 0.01 Kernel - Makefile
+# Supports: native Linux, Docker, cross-compiler
+#
+# 依赖要求（详见 DEPENDENCIES.md）：
+#   必需: as, gcc, ld, objcopy, make
+#   运行: qemu-system-i386
+#   ISO:  xorriso (或 genisoimage/mkisofs)
+#
+#  Linux:  sudo apt install build-essential gcc-multilib qemu-system-x86 xorriso
+#  macOS:  brew install qemu xorriso && 使用 Docker 编译
+#  Docker: docker build -t linux-0.01-builder .
+
+# --- Toolchain auto-detection ---
+ifeq ($(shell uname -s),Linux)
+  # Linux native: use GCC + binutils
+  AS      = as
+  CC      = gcc
+  LD      = ld
+  OBJCOPY = objcopy
+  ASFLAGS = -32
+  CFLAGS  = -m32 -Wall -O0 -fstrength-reduce -fomit-frame-pointer \
+            -nostdinc -Iinclude -fno-stack-protector -fno-builtin \
+            -ffreestanding
+  LDFLAGS = -m elf_i386 -T kernel.ld -e startup_32
+else ifeq ($(shell command -v i386-elf-gcc 2>/dev/null),)
+  # macOS fallback: try Docker
+  DOCKER_IMAGE = linux-0.01-builder
+  DOCKER = docker
+  BUILD_IN_DOCKER = $(DOCKER) run --rm -v $(PWD):/kernel -w /kernel \
+                     $(DOCKER_IMAGE) make
+else
+  # macOS with Homebrew cross-compiler
+  AS      = i386-elf-as
+  CC      = i386-elf-gcc
+  LD      = i386-elf-ld
+  OBJCOPY = i386-elf-objcopy
+  ASFLAGS =
+  CFLAGS  = -Wall -O0 -fstrength-reduce -fomit-frame-pointer \
+            -nostdinc -Iinclude -fno-stack-protector -fno-builtin \
+            -ffreestanding
+  LDFLAGS = -T kernel.ld -e startup_32
+endif
+
+OBJS = kernel/main.o kernel/sched.o kernel/process.o kernel/sys.o \
+       kernel/asm.o kernel/vsprintf.o kernel/panic.o \
+       mm/memory.o mm/page.o \
+       fs/minix.o fs/buffer.o fs/bitmap.o fs/inode.o fs/file_dev.o fs/namei.o \
+       drivers/console.o drivers/keyboard.o drivers/hd.o drivers/tty_io.o \
+       lib/string.o lib/ctype.o lib/malloc.o lib/close.o \
+       init/shell.o
+
+HEAD_OBJ = boot/head.o
+SETUP_OBJ = boot/setup.o
+BOOT_OBJ = boot/boot.o
+
+all: Image
+
+# Compile C files
+%.o: %.c
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+# Assemble .s files
+%.o: %.s
+	$(AS) $(ASFLAGS) -o $@ $<
+
+# Boot sector raw binary
+boot/boot: $(BOOT_OBJ)
+	$(OBJCOPY) -O binary $(BOOT_OBJ) boot/boot
+
+# Setup binary
+boot/setup: $(SETUP_OBJ)
+	$(OBJCOPY) -O binary $(SETUP_OBJ) boot/setup
+
+# Link kernel ELF
+kernel/system: $(HEAD_OBJ) $(OBJS)
+	$(LD) $(LDFLAGS) -o kernel/system $(HEAD_OBJ) $(OBJS)
+
+# Convert kernel to raw binary
+kernel/system.bin: kernel/system
+	$(OBJCOPY) -O binary kernel/system kernel/system.bin
+
+# Build tool
+tools/build: tools/build.c
+	gcc -m32 -o $@ $< 2>/dev/null || gcc -o $@ $<
+
+# Disk image (bootable floppy, 1.44MB)
+Image: boot/boot boot/setup kernel/system.bin tools/build
+	tools/build boot/boot boot/setup kernel/system.bin
+	@scripts/pad-floppy.sh Image 2>/dev/null || true
+
+# Bootable ISO (El Torito)
+iso: Image
+	@scripts/mkiso.sh Image kernel.iso
+
+# Docker build
+docker-build:
+	$(DOCKER) build -t $(DOCKER_IMAGE) .
+	$(DOCKER) run --rm -v $(PWD):/kernel -w /kernel $(DOCKER_IMAGE) \
+	    make clean all
+
+clean:
+	rm -f Image kernel.iso kernel/system kernel/system.bin
+	rm -f boot/boot boot/setup
+	rm -f $(OBJS) $(HEAD_OBJ) $(SETUP_OBJ) $(BOOT_OBJ)
+	rm -f tools/build
+	rm -f *~ core .image_floppy_padded
+	rm -rf .iso_tmp
+
+run: Image
+	qemu-system-i386 -fda Image -m 4M -boot a
+
+run-cd: kernel.iso
+	qemu-system-i386 -cdrom kernel.iso -m 4M -boot d
+
+debug: Image
+	qemu-system-i386 -fda Image -m 4M -boot a -s -S
+
+.PHONY: all clean run run-cd debug iso docker-build

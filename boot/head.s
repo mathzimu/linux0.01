@@ -1,0 +1,251 @@
+.text
+.globl startup_32, main
+.globl divide_error, timer_interrupt, system_call
+.globl keyboard_interrupt, hd_interrupt
+.globl _gdt, _idt, gdt_descr, idt_descr
+
+.equ PGDIR, 0x100000
+.equ PGTBL0, 0x101000
+.equ KERNEL_CS, 0x08
+.equ KERNEL_DS, 0x10
+.equ USER_CS, 0x1B
+.equ USER_DS, 0x23
+
+startup_32:
+    mov $KERNEL_DS, %ax
+    mov %ax, %ds
+    mov %ax, %es
+    mov %ax, %fs
+    mov %ax, %gs
+    mov %ax, %ss
+
+    lea _end, %esp
+    add $0x1000, %esp
+
+    call setup_paging
+    call setup_idt
+
+    lgdt gdt_descr
+    ljmp $KERNEL_CS, $flush_cs
+
+flush_cs:
+    mov $KERNEL_DS, %ax
+    mov %ax, %ds
+    mov %ax, %es
+    mov %ax, %fs
+    mov %ax, %gs
+    mov %ax, %ss
+
+    lea _end, %esp
+    add $0x1000, %esp
+
+    xor %eax, %eax
+    mov %eax, %cr2
+
+    call main
+
+_idle:
+    jmp _idle
+
+setup_paging:
+    mov $PGDIR, %eax
+    mov %eax, %cr3
+
+    mov $PGDIR, %edi
+    xor %eax, %eax
+    mov $0x1000, %ecx
+    rep stosl
+
+    mov $PGDIR, %edi
+    lea (PGTBL0 + 0x07), %eax
+    stosl
+
+    mov $PGTBL0, %edi
+    lea 0x07, %eax
+    mov $0x400, %ecx
+1:  stosl
+    add $0x1000, %eax
+    loop 1b
+
+    mov %cr0, %eax
+    or  $0x80000001, %eax
+    mov %eax, %cr0
+    ret
+
+setup_idt:
+    lea _idt, %edi
+    mov $256, %ecx
+    lea ignore_int, %edx
+    mov %edx, %eax
+    shr $16, %eax
+    shl $16, %eax
+    or  $0x8E00, %eax
+    mov %edx, %ebx
+    and $0xFFFF, %ebx
+    or  $0x00080000, %ebx
+1:  mov %ebx, (%edi)
+    mov %eax, 4(%edi)
+    add $8, %edi
+    loop 1b
+
+    .macro set_idt_entry vec, handler, type
+    lea _idt, %edi
+    add $\vec*8, %edi
+    lea \handler, %edx
+    mov %edx, %eax
+    shr $16, %eax
+    shl $16, %eax
+    or  $\type, %eax
+    mov %edx, %ebx
+    and $0xFFFF, %ebx
+    or  $0x00080000, %ebx
+    mov %ebx, (%edi)
+    mov %eax, 4(%edi)
+    .endm
+
+    set_idt_entry 0, divide_error, 0x8E00
+    set_idt_entry 0x20, timer_interrupt, 0x8E00
+    set_idt_entry 0x21, keyboard_interrupt, 0x8E00
+    set_idt_entry 0x2E, hd_interrupt, 0x8E00
+    set_idt_entry 0x0E, page_fault, 0x8E00
+    set_idt_entry 0x80, system_call, 0xEF00
+
+    lidt idt_descr
+    ret
+
+ignore_int:
+    iret
+
+divide_error:
+    push $0
+    push $0
+    call panic
+    iret
+
+timer_interrupt:
+    push %ds
+    push %es
+    push %fs
+    push %gs
+    pushal
+    mov $KERNEL_DS, %ax
+    mov %ax, %ds
+    mov %ax, %es
+    mov $0x20, %al
+    outb %al, $0x20
+    call do_timer
+    popal
+    pop %gs
+    pop %fs
+    pop %es
+    pop %ds
+    iret
+
+system_call:
+    push %ds
+    push %es
+    push %fs
+    push %gs
+    push %eax
+    push %ecx
+    push %edx
+    push %ebx
+    push %ebp
+    push %esi
+    push %edi
+    mov $KERNEL_DS, %ax
+    mov %ax, %ds
+    mov %ax, %es
+    mov %ax, %fs
+    mov %ax, %gs
+    call *sys_call_table(,%eax,4)
+    pop %edi
+    pop %esi
+    pop %ebp
+    pop %ebx
+    pop %edx
+    pop %ecx
+    add $4, %esp
+    pop %gs
+    pop %fs
+    pop %es
+    pop %ds
+    iret
+
+keyboard_interrupt:
+    push %ds
+    push %es
+    push %fs
+    push %gs
+    pushal
+    mov $KERNEL_DS, %ax
+    mov %ax, %ds
+    mov %ax, %es
+    xor %al, %al
+    inb $0x60, %al
+    push %eax
+    call kbd_interrupt_handler
+    pop %eax
+    mov $0x20, %al
+    outb %al, $0x20
+    popal
+    pop %gs
+    pop %fs
+    pop %es
+    pop %ds
+    iret
+
+hd_interrupt:
+    push %ds
+    push %es
+    push %fs
+    push %gs
+    pushal
+    mov $KERNEL_DS, %ax
+    mov %ax, %ds
+    mov %ax, %es
+    mov $0x20, %al
+    outb %al, $0x20
+    outb %al, $0xA0
+    call hd_interrupt_handler
+    popal
+    pop %gs
+    pop %fs
+    pop %es
+    pop %ds
+    iret
+
+.data
+.globl _gdt, _idt, gdt_descr, idt_descr
+
+_gdt:
+    .quad 0x0000000000000000
+    .quad 0x00CF9A000000FFFF
+    .quad 0x00CF92000000FFFF
+    .quad 0x00CFFA000000FFFF
+    .quad 0x00CFF2000000FFFF
+    .fill 128, 8, 0
+
+gdt_descr:
+    .word (132*8)-1
+    .long _gdt
+
+_idt:
+    .fill 256, 8, 0
+
+idt_descr:
+    .word (256*8)-1
+    .long _idt
+
+sys_call_table:
+    .long sys_setup
+    .long sys_exit
+    .long sys_fork
+    .long sys_read
+    .long sys_write
+    .long sys_open
+    .long sys_close
+    .long sys_getpid
+    .long sys_pause
+    .long sys_time
+    .long sys_setup
