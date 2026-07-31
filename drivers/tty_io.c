@@ -6,10 +6,12 @@ struct tty_struct tty_table[1];
 
 extern void con_init(void);
 extern void con_write(struct tty_struct *tty);
+extern void kbd_init(void);
 
 void tty_init(void)
 {
     con_init();
+    kbd_init();
 }
 
 void tty_read(struct tty_struct *tty, char *buf, int nr)

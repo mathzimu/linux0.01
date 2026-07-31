@@ -1,6 +1,7 @@
 #include <linux/kernel.h>
 #include <linux/sched.h>
 #include <linux/fs.h>
+#include <linux/mm.h>
 #include <linux/hdreg.h>
 #include <asm/system.h>
 
@@ -47,6 +48,17 @@ void buffer_init(long buffer_end)
 
     for (i = 0; i < NR_BUFFERS; i++)
         hash_table[i] = NULL;
+
+    /* Protect buffer cache pages from the page allocator */
+    {
+        unsigned long cache_start = (unsigned long)data_start;
+        unsigned long cache_end = (unsigned long)buffer_end;
+        int first, last, j;
+        first = MAP_NR(cache_start & ~(PAGE_SIZE - 1));
+        last = MAP_NR(cache_end - 1);
+        for (j = first; j <= last && j < max_map_nr; j++)
+            mem_map[j] = USED;
+    }
 }
 
 struct buffer_head *getblk(int dev, int block)
@@ -119,6 +131,8 @@ void brelse(struct buffer_head *buf)
     buf->b_count--;
     if (buf->b_count) return;
 
+    if (buf == free_list) return;
+
     if (buf->b_prev_free && buf->b_next_free) {
         buf->b_prev_free->b_next_free = buf->b_next_free;
         buf->b_next_free->b_prev_free = buf->b_prev_free;
@@ -135,6 +149,7 @@ void ll_rw_block(int rw, struct buffer_head *bh)
 {
     unsigned int lba;
     int nsects;
+    int ret;
 
     if (rw != READ) return;
     if (!bh) return;
@@ -144,9 +159,10 @@ void ll_rw_block(int rw, struct buffer_head *bh)
     lba = bh->b_blocknr * (BLOCK_SIZE / 512);
     nsects = BLOCK_SIZE / 512;
 
-    hd_read_sectors(lba, nsects, bh->b_data);
+    ret = hd_read_sectors(lba, nsects, bh->b_data);
+    if (ret == 0)
+        bh->b_uptodate = 1;
 
-    bh->b_uptodate = 1;
     bh->b_lock = 0;
 }
 
@@ -169,7 +185,8 @@ void sleep_on(struct task_struct **p)
     current->state = TASK_UNINTERRUPTIBLE;
     schedule();
 
-    if (tmp)
+    if (tmp && (tmp->state == TASK_UNINTERRUPTIBLE ||
+                tmp->state == TASK_INTERRUPTIBLE))
         tmp->state = TASK_RUNNING;
 }
 

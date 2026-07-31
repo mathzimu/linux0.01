@@ -1,6 +1,7 @@
 #include <linux/kernel.h>
 #include <linux/sched.h>
 #include <linux/tty.h>
+#include <asm/io.h>
 
 static unsigned char keymap[128] = {
     0, 27, '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=', '\b',
@@ -19,6 +20,27 @@ static unsigned char shift_map[128] = {
 };
 
 static int shift_pressed = 0;
+
+static void kbd_wait_write(void)
+{
+    int timeout = 100000;
+    while (timeout-- && (inb(0x64) & 0x02))
+        ;
+}
+
+static void kbd_flush_read(void)
+{
+    int timeout = 100000;
+    while (timeout-- && (inb(0x64) & 0x01))
+        (void)inb(0x60);
+}
+
+void kbd_init(void)
+{
+    kbd_flush_read();
+    kbd_wait_write();
+    outb(0xAE, 0x64);   /* enable keyboard interface */
+}
 
 void kbd_interrupt_handler(int scancode)
 {

@@ -15,15 +15,17 @@ static int hd_busy(void)
     return -1;
 }
 
-static void hd_wait_drq(void)
+static int hd_wait_drq(void)
 {
     int tries = 100000;
     while (tries--) {
         unsigned char status = inb(HD_STATUS);
-        if (!(status & (HD_STATUS_BSY | HD_STATUS_ERR)) &&
-            (status & HD_STATUS_DRQ))
-            return;
+        if (status & HD_STATUS_ERR)
+            return -1;
+        if (!(status & HD_STATUS_BSY) && (status & HD_STATUS_DRQ))
+            return 0;
     }
+    return -1;
 }
 
 void hd_out(unsigned int drive, unsigned int nsect,
@@ -49,10 +51,12 @@ int hd_read_sectors(unsigned int lba, unsigned int nsects, char *buf)
     head = (lba / 63) % 16;
     sect = (lba % 63) + 1;
 
+    if (hd_busy()) return -1;
+
     hd_out(0, nsects, sect, head, cyl, HD_CMD_READ);
 
     for (j = 0; j < nsects; j++) {
-        hd_wait_drq();
+        if (hd_wait_drq() < 0) return -1;
         insl(HD_DATA, buf + j * 512, 512 / 4);
     }
 

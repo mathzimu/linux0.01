@@ -117,8 +117,7 @@ ignore_int:
     iret
 
 divide_error:
-    push $0
-    push $0
+    push $divide_msg
     call panic
     iret
 
@@ -142,6 +141,7 @@ timer_interrupt:
     iret
 
 system_call:
+    movl %esp, syscall_esp
     push %ds
     push %es
     push %fs
@@ -169,7 +169,14 @@ system_call:
     /* reload saved syscall number for dispatch */
     mov 24(%esp), %eax
 
-    call *sys_call_table(,%eax,4)
+    cmpl $10, %eax
+    jb 1f
+    movl $-1, %eax
+    jmp 2f
+1:  call *sys_call_table(,%eax,4)
+.globl ret_from_sys_call
+ret_from_sys_call:
+2:
 
     /* store return value where saved eax lives */
     mov %eax, 24(%esp)
@@ -233,6 +240,13 @@ hd_interrupt:
 
 .data
 .globl _gdt, _idt, gdt_descr, idt_descr
+.globl syscall_esp
+
+syscall_esp:
+    .long 0
+
+divide_msg:
+    .string "Divide error"
 
 _gdt:
     .quad 0x0000000000000000
@@ -240,10 +254,10 @@ _gdt:
     .quad 0x00CF92000000FFFF
     .quad 0x00CFFA000000FFFF
     .quad 0x00CFF2000000FFFF
-    .fill 128, 8, 0
+    .fill 132, 8, 0
 
 gdt_descr:
-    .word (132*8)-1
+    .word (137*8)-1
     .long _gdt
 
 _idt:
@@ -264,4 +278,3 @@ sys_call_table:
     .long sys_getpid
     .long sys_pause
     .long sys_time
-    .long sys_setup

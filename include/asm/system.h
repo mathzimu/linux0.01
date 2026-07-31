@@ -39,6 +39,34 @@ static inline void write_cr3(unsigned long val)
     __asm__ volatile("movl %0, %%cr3" : : "r"(val));
 }
 
+#define set_tss_desc(n, addr) \
+do { \
+    unsigned char *__cp = (unsigned char *)(n); \
+    unsigned long __addr = (unsigned long)(addr); \
+    __cp[0] = 0x67; \
+    __cp[1] = 0x00; \
+    __cp[2] = (unsigned char)(__addr); \
+    __cp[3] = (unsigned char)(__addr >> 8); \
+    __cp[4] = (unsigned char)(__addr >> 16); \
+    __cp[5] = 0x89; \
+    __cp[6] = 0x00; \
+    __cp[7] = (unsigned char)(__addr >> 24); \
+} while(0)
+
+#define set_ldt_desc(n, addr) \
+do { \
+    unsigned char *__cp = (unsigned char *)(n); \
+    unsigned long __addr = (unsigned long)(addr); \
+    __cp[0] = 0x17; \
+    __cp[1] = 0x00; \
+    __cp[2] = (unsigned char)(__addr); \
+    __cp[3] = (unsigned char)(__addr >> 8); \
+    __cp[4] = (unsigned char)(__addr >> 16); \
+    __cp[5] = 0x82; \
+    __cp[6] = 0x00; \
+    __cp[7] = (unsigned char)(__addr >> 24); \
+} while(0)
+
 #define switch_to(n) \
 do { \
     struct { long a, b; } __tmp; \

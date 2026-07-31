@@ -53,7 +53,11 @@ long sys_read(unsigned int fd, char *buf, unsigned long count)
             if (tty_table[0].read_cnt == 0) {
                 if (i) break;
                 current->state = TASK_INTERRUPTIBLE;
-                schedule();
+                tty_table[0].read_waiter = current;
+                if (tty_table[0].read_cnt == 0)
+                    schedule();
+                tty_table[0].read_waiter = NULL;
+                current->state = TASK_RUNNING;
                 i--;
                 continue;
             }

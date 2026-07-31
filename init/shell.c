@@ -27,7 +27,10 @@ static int read_line(char *buf, int size)
     while (i < size - 1) {
         if (tty_table[0].read_cnt == 0) {
             current->state = TASK_INTERRUPTIBLE;
-            schedule();
+            tty_table[0].read_waiter = current;
+            if (tty_table[0].read_cnt == 0)
+                schedule();
+            tty_table[0].read_waiter = NULL;
             current->state = TASK_RUNNING;
             continue;
         }

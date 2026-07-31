@@ -7,18 +7,28 @@
 
 extern unsigned long _end;
 extern void shell_main(void);
-
-void move_to_user_mode(void);
+extern int sys_setup(void);
 
 void main(void)
 {
     unsigned long memory_start, memory_end;
+    unsigned short ext_kb;
 
-    memory_end = (unsigned long) *((unsigned short *)0x100002);
-    if (memory_end == 0)
+    /* int 15/88 stored extended memory (KB above 1MB) at physical 0x10002 */
+    ext_kb = *((unsigned short *)0x10002);
+    if (ext_kb == 0)
         memory_end = 0x400000; /* 4MB default */
+    else
+        memory_end = (1 << 20) + ((unsigned long)ext_kb << 10);
 
-    memory_end &= 0xFFFFFF00;
+    if (memory_end > 0x400000)   /* only the first 4MB is mapped */
+        memory_end = 0x400000;
+
+    memory_end &= 0xFFFFF000;
+
+    if (memory_end < 0x300000)
+        memory_end = 0x400000;
+
     memory_start = (unsigned long) &_end;
     memory_start += 0x1000;
 
@@ -27,32 +37,12 @@ void main(void)
 
     tty_init();
 
+    if (sys_setup() < 0)
+        printk("Warning: no root filesystem found\n");
+
     sched_init();
 
     sti();
 
-    move_to_user_mode();
-
     shell_main();
-}
-
-void move_to_user_mode(void)
-{
-    __asm__ volatile(
-        "movl %%esp, %%eax\n\t"
-        "pushl $0x23\n\t"
-        "pushl %%eax\n\t"
-        "pushfl\n\t"
-        "pushl $0x1B\n\t"
-        "pushl $1f\n\t"
-        "iret\n"
-        "1:\n\t"
-        "movl $0x23, %%eax\n\t"
-        "movw %%ax, %%ds\n\t"
-        "movw %%ax, %%es\n\t"
-        "movw %%ax, %%fs\n\t"
-        "movw %%ax, %%gs\n\t"
-        :
-        :
-        : "eax");
 }

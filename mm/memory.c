@@ -32,7 +32,7 @@ void mem_init(unsigned long start_mem, unsigned long end_mem)
     {
         unsigned long map_start = (unsigned long)mem_map;
         unsigned long map_end = map_start + map_size;
-        int first = MAP_NR((map_start + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1));
+        int first = MAP_NR(map_start & ~(PAGE_SIZE - 1));
         int last = MAP_NR(map_end - 1);
         int j;
         for (j = first; j <= last && j < max_map_nr; j++)
@@ -40,7 +40,7 @@ void mem_init(unsigned long start_mem, unsigned long end_mem)
     }
 
     /* Reserve kernel image pages (from LOW_MEM up to start_mem) */
-    {
+    if (start_mem > LOW_MEM) {
         int kstart = 0;
         int kend = MAP_NR(start_mem - 1);
         int j;

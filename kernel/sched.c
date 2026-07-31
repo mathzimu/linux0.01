@@ -45,42 +45,29 @@ void sched_init(void)
     task[0] = &init_task;
 
     init_task.tss.ss0 = KERNEL_DS;
-    init_task.tss.esp0 = (unsigned long)&_end + 0x2000;
+    init_task.tss.esp0 = (unsigned long)&_end + 0x1000;
 
-    /* Task 0 TSS at GDT entry 8, selector = 8*8 = 64 */
-    p = (struct desc_struct *)(&_gdt) + 8;
-    p->a = ((unsigned long)&init_task.tss) & 0xFFFF;
-    p->a |= ((((unsigned long)&init_task.tss) >> 16) << 16) & 0xFF000000;
-    p->a |= 0x89000000;
-    p->b = ((unsigned long)&init_task.tss) & 0xFF000000;
-    p->b |= 0x00408900;
-    p->b |= 0x00000040;
-
-    /* Task 0 LDT at GDT entry 9, selector = 9*8 = 72 */
     init_task.ldt[0].a = 0x0000FFFF;
     init_task.ldt[0].b = 0x00CFFA00;
     init_task.ldt[1].a = 0x0000FFFF;
     init_task.ldt[1].b = 0x00CFF200;
 
+    p = (struct desc_struct *)(&_gdt) + 8;
+    set_tss_desc(p, &init_task.tss);
     p = (struct desc_struct *)(&_gdt) + 9;
-    p->a = ((unsigned long)&init_task.ldt) & 0xFFFF;
-    p->a |= ((((unsigned long)&init_task.ldt) >> 16) << 16) & 0xFF000000;
-    p->a |= 0x82000000;
-    p->b = ((unsigned long)&init_task.ldt) & 0xFF000000;
-    p->b |= 0x00408200;
-    p->b |= 0x00000040;
+    set_ldt_desc(p, &init_task.ldt);
 
     init_task.tss.ldt = 72;
     ltr(64);
 
     __asm__ volatile(
-        "movl $0x3f, %%eax\n\t"
-        "movl $0x43, %%edx\n\t"
-        "outl %%eax, %%edx\n\t"
-        "movl $1193180, %%eax\n\t"
-        "movl $0x40, %%edx\n\t"
-        "outl %%eax, %%edx\n\t"
-        : : : "eax", "edx"
+        "movb $0x36, %%al\n\t"
+        "outb %%al, $0x43\n\t"
+        "movb $0x9b, %%al\n\t"
+        "outb %%al, $0x40\n\t"
+        "movb $0x2e, %%al\n\t"
+        "outb %%al, $0x40\n\t"
+        : : : "al"
     );
 }
 
@@ -91,7 +78,7 @@ void schedule(void)
 
     while (1) {
         c = -1;
-        next = 0;
+        next = -1;
         p = &task[NR_TASKS];
 
         while (--p >= &task[0]) {
@@ -102,7 +89,15 @@ void schedule(void)
             }
         }
 
-        if (c) break;
+        if (c > 0) break;
+
+        if (c < 0) {
+            unsigned long eflags;
+            __asm__ volatile("pushfl; popl %0" : "=r"(eflags));
+            if (eflags & 0x200)
+                __asm__ volatile("hlt");
+            return;
+        }
 
         for (p = &task[NR_TASKS - 1]; p >= &task[0]; p--) {
             if (*p == NULL) continue;
