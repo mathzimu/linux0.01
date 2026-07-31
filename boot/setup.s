@@ -43,14 +43,16 @@ _start:
     mov $0xFF, %al
     outb %al, $0xA1
 
-    lgdt (gdt_descr - _start + SETUPSEG*16)
-    lidt (idt_descr - _start + SETUPSEG*16)
+    lgdt (gdt_descr - _start)
+    lidt (idt_descr - _start)
 
     mov %cr0, %eax
     or  $1, %al
     mov %eax, %cr0
 
-    ljmp $0x08, $(SYSSEG*16 + SYSOFF)
+    .byte 0x66, 0xea
+    .long SYSSEG*16 + SYSOFF
+    .word 0x08
 
 gdt:
     .quad 0x0000000000000000

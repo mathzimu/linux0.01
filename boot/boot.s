@@ -33,7 +33,7 @@ _start:
     mov $0x0200 | SETUP_SECTORS, %ax
     int $0x13
     jnc load_setup_ok
-    jmp load_setup
+    jmp _start
 
 load_setup_ok:
     /* Load kernel: kernel_sectors sectors from CHS(0,0,1+1+SETUP_SECTORS) */
@@ -58,7 +58,7 @@ load_setup_ok:
     mov $0x02, %ah
     int $0x13
     jnc load_done
-    jmp load_system
+    jmp load_done
 
 load_done:
     mov $SETUPSEG, %ax

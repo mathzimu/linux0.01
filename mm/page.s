@@ -11,10 +11,12 @@ page_fault:
     mov $0x10, %ax
     mov %ax, %ds
     mov %ax, %es
+    mov %ax, %fs
+    mov %ax, %gs
 
     mov %cr2, %eax
     push %eax
-    mov 48(%esp), %eax
+    mov 52(%esp), %eax
     push %eax
     call do_no_page
     add $8, %esp

@@ -27,6 +27,8 @@
 
 #ifndef __ASSEMBLER__
 
+#include <asm/system.h>
+
 struct tss_struct {
     long back_link;
     long esp0;

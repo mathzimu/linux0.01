@@ -15,7 +15,7 @@ long sys_write(unsigned int fd, const char *buf, unsigned long count)
     long result;
     char c;
 
-    if (fd == 0 || fd == 1 || fd == 2) {
+    if (fd == 1 || fd == 2) {
         unsigned long i;
         for (i = 0; i < count; i++) {
             c = get_fs_byte(buf + i);
@@ -26,11 +26,14 @@ long sys_write(unsigned int fd, const char *buf, unsigned long count)
         return count;
     }
 
+    if (fd == 0)
+        return -1;
+
     if (fd >= NR_OPEN || !current->filp[fd])
         return -1;
 
     struct file *f = current->filp[fd];
-    if (!(f->f_mode & 1))
+    if (f->f_mode == 0)
         return -1;
 
     result = file_write(f->f_inode, f, buf, count);
@@ -50,7 +53,6 @@ long sys_read(unsigned int fd, char *buf, unsigned long count)
             if (tty_table[0].read_cnt == 0) {
                 if (i) break;
                 current->state = TASK_INTERRUPTIBLE;
-                current->tss.esp = (unsigned long)&(current->tss.esp);
                 schedule();
                 i--;
                 continue;
@@ -64,6 +66,7 @@ long sys_read(unsigned int fd, char *buf, unsigned long count)
                 break;
             }
         }
+        current->state = TASK_RUNNING;
         return i;
     }
 
@@ -71,7 +74,7 @@ long sys_read(unsigned int fd, char *buf, unsigned long count)
         return -1;
 
     struct file *f = current->filp[fd];
-    if (!(f->f_mode & 2))
+    if (f->f_mode == 1)
         return -1;
 
     result = file_read(f->f_inode, f, buf, count);

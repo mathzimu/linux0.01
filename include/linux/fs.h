@@ -77,8 +77,8 @@ struct buffer_head *bread(int dev, int block);
 void brelse(struct buffer_head *buf);
 int sys_open(const char *filename, int flag);
 int sys_close(unsigned int fd);
-int sys_read(unsigned int fd, char *buf, unsigned long count);
-int sys_write(unsigned int fd, const char *buf, unsigned long count);
+long sys_read(unsigned int fd, char *buf, unsigned long count);
+long sys_write(unsigned int fd, const char *buf, unsigned long count);
 
 struct m_inode *iget(int dev, int nr);
 void iput(struct m_inode *inode);

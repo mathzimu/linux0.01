@@ -110,9 +110,14 @@ void schedule(void)
         }
     }
 
-    if (next != (int)(current - task)) {
-        current = task[next];
-        switch_to(next);
+    {
+        int current_idx;
+        for (current_idx = 0; current_idx < NR_TASKS; current_idx++)
+            if (task[current_idx] == current) break;
+        if (next != current_idx) {
+            current = task[next];
+            switch_to(next);
+        }
     }
 }
 

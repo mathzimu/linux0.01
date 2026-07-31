@@ -146,26 +146,42 @@ system_call:
     push %es
     push %fs
     push %gs
+
+    /* save syscall number in a scratch slot below the arg regs */
     push %eax
-    push %ecx
-    push %edx
-    push %ebx
-    push %ebp
-    push %esi
-    push %edi
+
+    /* push args in reverse so the lowest-address arg is %ebx (arg0) */
+    push %ebp                /* [arg5] */
+    push %edi                /* [arg4] */
+    push %esi                /* [arg3] */
+    push %edx                /* [arg2] */
+    push %ecx                /* [arg1] */
+    push %ebx                /* [arg0] */
+
     mov $KERNEL_DS, %ax
     mov %ax, %ds
     mov %ax, %es
+    mov $USER_DS, %ax
     mov %ax, %fs
+    mov $KERNEL_DS, %ax
     mov %ax, %gs
+
+    /* reload saved syscall number for dispatch */
+    mov 24(%esp), %eax
+
     call *sys_call_table(,%eax,4)
-    pop %edi
-    pop %esi
-    pop %ebp
+
+    /* store return value where saved eax lives */
+    mov %eax, 24(%esp)
+
+    /* unwind: restore ebx..ebp (6), pop saved_eax into a slot, fixup */
     pop %ebx
-    pop %edx
     pop %ecx
-    add $4, %esp
+    pop %edx
+    pop %esi
+    pop %edi
+    pop %ebp
+    pop %eax                 /* restore return value into eax */
     pop %gs
     pop %fs
     pop %es

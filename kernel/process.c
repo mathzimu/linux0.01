@@ -8,15 +8,18 @@ int sys_fork(void)
 {
     struct task_struct *p;
     int i, pid;
+    int nr;
 
     p = (struct task_struct *)get_free_page();
     if (!p)
         return -1;
 
+    nr = -1;
     pid = 0;
     for (i = 0; i < NR_TASKS; i++) {
         if (task[i]) continue;
         task[i] = p;
+        nr = i;
         pid = i + 1;
         break;
     }
@@ -51,12 +54,9 @@ int sys_fork(void)
     p->tss.fs = current->tss.fs;
     p->tss.gs = current->tss.gs;
 
-    i = (int)p;
-    i >>= 4;
     p->tss.cr3 = read_cr3();
 
     {
-        int nr = (int)(p - task[0]);
         int tss_entry = 8 + nr * 2;
         int ldt_entry = tss_entry + 1;
         struct desc_struct *p_desc = (struct desc_struct *)(&_gdt) + tss_entry;
@@ -78,11 +78,6 @@ int sys_fork(void)
 
         p->tss.ldt = ldt_entry * 8;
     }
-
-    p->ldt[0].a = 0x0000FFFF;
-    p->ldt[0].b = 0x00CFFA00;
-    p->ldt[1].a = 0x0000FFFF;
-    p->ldt[1].b = 0x00CFF200;
 
     return pid;
 }

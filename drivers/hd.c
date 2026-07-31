@@ -15,17 +15,15 @@ static int hd_busy(void)
     return -1;
 }
 
-static int hd_ready(void)
+static void hd_wait_drq(void)
 {
-    int status;
-
-    if (hd_busy()) return -1;
-
-    status = inb(HD_STATUS);
-    if (status & HD_STATUS_ERR) return -1;
-    if (!(status & HD_STATUS_DRDY)) return -1;
-
-    return 0;
+    int tries = 100000;
+    while (tries--) {
+        unsigned char status = inb(HD_STATUS);
+        if (!(status & (HD_STATUS_BSY | HD_STATUS_ERR)) &&
+            (status & HD_STATUS_DRQ))
+            return;
+    }
 }
 
 void hd_out(unsigned int drive, unsigned int nsect,
@@ -34,12 +32,31 @@ void hd_out(unsigned int drive, unsigned int nsect,
 {
     if (hd_busy()) return;
 
-    outb((drive << 4) | (head & 0xF), HD_CURRENT);
+    outb(0xA0 | (drive << 4) | (head & 0x0F), HD_CURRENT);
     outb(nsect, HD_NSECTOR);
     outb(sect, HD_SECTOR);
-    outb(cyl, HD_LCYL);
-    outb(cyl >> 8, HD_HCYL);
+    outb(cyl & 0xFF, HD_LCYL);
+    outb((cyl >> 8) & 0xFF, HD_HCYL);
     outb(cmd, HD_COMMAND);
+}
+
+int hd_read_sectors(unsigned int lba, unsigned int nsects, char *buf)
+{
+    unsigned int cyl, head, sect;
+    int j;
+
+    cyl = lba / (16 * 63);
+    head = (lba / 63) % 16;
+    sect = (lba % 63) + 1;
+
+    hd_out(0, nsects, sect, head, cyl, HD_CMD_READ);
+
+    for (j = 0; j < nsects; j++) {
+        hd_wait_drq();
+        insl(HD_DATA, buf + j * 512, 512 / 4);
+    }
+
+    return 0;
 }
 
 int hd_request(void)
@@ -50,5 +67,3 @@ int hd_request(void)
 void hd_interrupt_handler(void)
 {
 }
-
-

@@ -12,6 +12,8 @@ extern int sys_exit(int ret);
 #define SHELL_BUF_SIZE 256
 #define MAX_ARGS 16
 
+extern void con_init(void);
+
 static void print_prompt(void)
 {
     printk("$ ");
@@ -26,6 +28,7 @@ static int read_line(char *buf, int size)
         if (tty_table[0].read_cnt == 0) {
             current->state = TASK_INTERRUPTIBLE;
             schedule();
+            current->state = TASK_RUNNING;
             continue;
         }
 
@@ -39,7 +42,10 @@ static int read_line(char *buf, int size)
             return i;
         }
         if (c == '\b') {
-            if (i > 0) i--;
+            if (i > 0) {
+                i--;
+                tty_write(&tty_table[0], "\b \b", 3);
+            }
             continue;
         }
 
@@ -56,7 +62,7 @@ static int parse_args(char *cmd, char **argv, int max_args)
     int argc = 0;
     int in_word = 0;
 
-    while (*cmd && argc < max_args) {
+    while (*cmd && argc < max_args - 1) {
         if (*cmd == ' ' || *cmd == '\t') {
             *cmd = '\0';
             in_word = 0;
@@ -110,7 +116,7 @@ static void cmd_ps(int argc, char **argv)
 void shell_main(void)
 {
     char buf[SHELL_BUF_SIZE];
-    char *argv[MAX_ARGS];
+    char *argv[MAX_ARGS + 1];
     int argc;
 
     printk("Minimal Linux 0.01 Equivalent Kernel\n");
@@ -132,7 +138,7 @@ void shell_main(void)
         } else if (strcmp(argv[0], "ps") == 0) {
             cmd_ps(argc, argv);
         } else if (strcmp(argv[0], "clear") == 0) {
-            printk("\033[2J");
+            con_init();
         } else if (strcmp(argv[0], "exit") == 0) {
             printk("Goodbye.\n");
             sys_exit(0);

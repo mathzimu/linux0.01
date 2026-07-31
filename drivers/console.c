@@ -28,7 +28,7 @@ static void scroll(void)
     for (i = 0; i < (80 * (25 - 1)); i++)
         video_mem[i] = video_mem[i + 80];
     for (i = 80 * (25 - 1); i < 80 * 25; i++)
-        video_mem[i] = 0x0700;
+        video_mem[i] = 0x0720;
     cursor_y = 24;
     cursor_x = 0;
 }
@@ -64,10 +64,12 @@ void con_write(struct tty_struct *tty)
         case '\t':
             cursor_x = (cursor_x + 8) & ~7;
             break;
-        case '\b':
-            if (cursor_x > 0) cursor_x--;
-            video_mem[cursor_y * 80 + cursor_x] = 0x0720;
-            break;
+case '\b':
+    if (cursor_x > 0) {
+        cursor_x--;
+        video_mem[cursor_y * 80 + cursor_x] = 0x0720;
+    }
+    break;
         default:
             if (c >= 32) {
                 video_mem[cursor_y * 80 + cursor_x] = 0x0700 | (unsigned short)c;

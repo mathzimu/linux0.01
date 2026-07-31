@@ -1,6 +1,7 @@
 #include <linux/kernel.h>
 #include <linux/sched.h>
 #include <linux/fs.h>
+#include <linux/hdreg.h>
 #include <asm/system.h>
 
 static struct buffer_head *free_list = NULL;
@@ -12,15 +13,19 @@ void buffer_init(long buffer_end)
 {
     struct buffer_head *bh;
     char *data;
+    char *data_start;
     int i;
 
-    data = (char *)buffer_end;
-    bh = (struct buffer_head *)&data[-NR_BUFFERS * sizeof(struct buffer_head)];
-    data -= NR_BUFFERS * sizeof(struct buffer_head);
-    buffer_mem = data;
+    long total_bh_size = NR_BUFFERS * sizeof(struct buffer_head);
+    long total_data_size = NR_BUFFERS * BLOCK_SIZE;
+
+    bh = (struct buffer_head *)(buffer_end - total_bh_size);
+    data_start = (char *)bh - total_data_size;
+    buffer_mem = data_start;
     nr_buffers = NR_BUFFERS;
 
     free_list = bh;
+    data = data_start;
     for (i = 0; i < NR_BUFFERS; i++) {
         bh[i].b_data = data;
         bh[i].b_dev = 0;
@@ -128,6 +133,21 @@ void brelse(struct buffer_head *buf)
 
 void ll_rw_block(int rw, struct buffer_head *bh)
 {
+    unsigned int lba;
+    int nsects;
+
+    if (rw != READ) return;
+    if (!bh) return;
+
+    bh->b_lock = 1;
+
+    lba = bh->b_blocknr * (BLOCK_SIZE / 512);
+    nsects = BLOCK_SIZE / 512;
+
+    hd_read_sectors(lba, nsects, bh->b_data);
+
+    bh->b_uptodate = 1;
+    bh->b_lock = 0;
 }
 
 void wait_on_buffer(struct buffer_head *bh)

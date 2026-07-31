@@ -1,5 +1,7 @@
 #include <string.h>
 
+#define NULL ((void *)0)
+
 char *strcpy(char *dest, const char *src)
 {
     char *tmp = dest;

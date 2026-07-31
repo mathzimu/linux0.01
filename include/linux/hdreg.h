@@ -39,4 +39,9 @@ struct partition {
     unsigned long nr_sects;
 };
 
+int hd_read_sectors(unsigned int lba, unsigned int nsects, char *buf);
+void hd_out(unsigned int drive, unsigned int nsect,
+            unsigned int sect, unsigned int head,
+            unsigned int cyl, unsigned int cmd);
+
 #endif

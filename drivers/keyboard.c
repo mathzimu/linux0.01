@@ -1,4 +1,5 @@
 #include <linux/kernel.h>
+#include <linux/sched.h>
 #include <linux/tty.h>
 
 static unsigned char keymap[128] = {
@@ -41,9 +42,15 @@ void kbd_interrupt_handler(int scancode)
             c = keymap[scancode];
 
         if (c) {
-            tty_table[0].read_buf[tty_table[0].read_head] = c;
-            tty_table[0].read_head = (tty_table[0].read_head + 1) % TTY_BUF_SIZE;
-            tty_table[0].read_cnt++;
+            if (tty_table[0].read_cnt < TTY_BUF_SIZE) {
+                tty_table[0].read_buf[tty_table[0].read_head] = c;
+                tty_table[0].read_head = (tty_table[0].read_head + 1) % TTY_BUF_SIZE;
+                tty_table[0].read_cnt++;
+            }
+            if (tty_table[0].read_waiter) {
+                tty_table[0].read_waiter->state = TASK_RUNNING;
+                tty_table[0].read_waiter = NULL;
+            }
         }
     }
 }

@@ -1,10 +1,12 @@
 #ifndef _HEAD_H
 #define _HEAD_H
 
+#ifndef _DESC_STRUCT_DEFINED
 #define _DESC_STRUCT_DEFINED
 struct desc_struct {
     unsigned long a, b;
 };
+#endif
 typedef struct desc_struct desc_table[256];
 
 extern desc_table _gdt, _idt;
