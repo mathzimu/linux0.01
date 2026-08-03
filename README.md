@@ -92,13 +92,26 @@ linux0.01/
 ├── tools/         # 构建工具
 │   └── build.c    # 镜像拼接器
 ├── scripts/       # 辅助脚本
-├── docs/          # 设计文档
-│   ├── SRS.md     # 需求规格说明书
-│   └── HLD.md     # 高层次架构设计
+├── docs/          # 教学与设计文档（从 docs/INDEX.md 进入）
+│   ├── INDEX.md   # 学习路径总索引
+│   ├── TUTORIAL.md / tutorial/  # 源码实现教程
+│   ├── PREREQ-*.md # 前置知识
+│   ├── LIMITATIONS.md # 已知简化（以源码为准）
+│   ├── SRS.md / HLD.md  # 需求与高层设计（背景）
 ├── DEPENDENCIES.md # 依赖详细说明
 ├── Dockerfile     # Docker 构建环境
 └── Makefile       # 构建系统
 ```
+
+## 学习路径
+
+1. 本文：编译运行、目录结构  
+2. [`docs/INDEX.md`](docs/INDEX.md)：文档地图  
+3. `docs/PREREQ-*.md`：汇编 / C / 体系结构 / OS 理论  
+4. [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md)：当前实现边界  
+5. [`docs/TUTORIAL.md`](docs/TUTORIAL.md) + `docs/tutorial/`：按文件读源码  
+
+**关键事实：** Shell 在 **内核态** 运行（`main` 直接 `shell_main`）；分页恒等映射 **0–4MB**；无 `move_to_user_mode`。
 
 ## 启动流程
 
@@ -119,13 +132,10 @@ BIOS POST
                  ├─ 设置 IDT（256中断门）
                  ├─ 加载内核 GDT
                  └─ call main()
-                      ├─ mem_init()
-                      ├─ buffer_init()
-                      ├─ tty_init()
-                      ├─ sched_init()
+                      ├─ mem_init() / buffer_init() / tty_init()
+                      ├─ sys_setup() / sched_init()
                       ├─ sti() 开中断
-                      ├─ move_to_user_mode() → 用户态(ring3)
-                      └─ shell_main()
+                      └─ shell_main()   ← 内核态 Shell（不返回）
 ```
 
 ## 系统调用

@@ -222,7 +222,7 @@ Power On
   │   └── Switch to protected mode (set CR0.PE)
   │
   ├── Jump to head.s (0x100100)
-  │   ├── Set up page directory + page tables (identity map 0-16MB)
+  │   ├── Set up page directory + page tables (identity map 0-4MB; see LIMITATIONS.md)
   │   ├── Enable paging (set CR0.PG)
   │   ├── Set up IDT (256 interrupt gates)
   │   ├── Initialize kernel segments (CS=0x08, DS=0x10)
@@ -237,7 +237,7 @@ Power On
       ├── sched_init()     → Initialize scheduler + timer
       ├── ipc_init()       → (No-op, placeholder)
       ├── sti()            → Enable interrupts
-      ├── move_to_user_mode()→ Switch to user mode (CPL=3)
+      ├── shell_main()        → interactive shell (Ring 0 in current tree; see LIMITATIONS.md)
       └── shell()          → Enter shell (init process)
 ```
 
