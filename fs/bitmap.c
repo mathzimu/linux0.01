@@ -31,7 +31,7 @@ int new_block(int dev)
 {
     struct buffer_head *bh;
     struct super_block *sb;
-    int i, j, bit;
+    int i, j;
 
     sb = get_super(dev);
     if (!sb) return 0;
@@ -62,8 +62,8 @@ void free_inode(struct m_inode *inode)
     struct super_block *sb = get_super(inode->i_dev);
     if (!sb) return;
 
-    int block = 2 + (inode->i_num - 1) / (BLOCK_SIZE * 8 / sizeof(short));
-    int bit = (inode->i_num - 1) & ((BLOCK_SIZE * 8) - 1);
+    int block = 2 + (inode->i_num - 1) / (BLOCK_SIZE * 8);
+    int bit = (inode->i_num - 1) & (BLOCK_SIZE * 8 - 1);
 
     struct buffer_head *bh = bread(inode->i_dev, block);
     if (!bh) return;
@@ -75,5 +75,39 @@ void free_inode(struct m_inode *inode)
 
 struct m_inode *new_inode(int dev)
 {
+    struct super_block *sb = get_super(dev);
+    if (!sb) return NULL;
+
+    struct buffer_head *bh;
+    int i, j;
+
+    for (i = 0; i < sb->s_imap_blocks; i++) {
+        bh = bread(dev, 2 + i);
+        if (!bh) continue;
+
+        for (j = 0; j < BLOCK_SIZE * 8; j++) {
+            if (!(((char *)bh->b_data)[j / 8] & (1 << (j % 8)))) {
+                ((char *)bh->b_data)[j / 8] |= (1 << (j % 8));
+                bh->b_dirt = 1;
+                brelse(bh);
+
+                struct m_inode *inode = iget(dev, i * (BLOCK_SIZE * 8) + j + 1);
+                if (inode) {
+                    inode->i_mode = 0;
+                    inode->i_uid = 0;
+                    inode->i_size = 0;
+                    inode->i_mtime = 0;
+                    inode->i_gid = 0;
+                    inode->i_nlinks = 1;
+                    for (int k = 0; k < 9; k++)
+                        inode->i_zone[k] = 0;
+                    inode->i_dirt = 1;
+                }
+                return inode;
+            }
+        }
+        brelse(bh);
+    }
+
     return NULL;
 }

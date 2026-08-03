@@ -17,7 +17,7 @@ struct super_block *get_super(int dev)
     return NULL;
 }
 
-static struct minix_superblock {
+struct minix_superblock {
     unsigned short s_ninodes;
     unsigned short s_nzones;
     unsigned short s_imap_blocks;
@@ -57,6 +57,6 @@ int sys_setup(void)
     super_block[0].s_magic = sb->s_magic;
 
     brelse(bh);
-    printk("MINIX: superblock loaded, magic=0x%x\n", sb->s_magic);
+    printk("MINIX: superblock loaded, magic=0x%x\n", super_block[0].s_magic);
     return 0;
 }

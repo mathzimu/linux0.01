@@ -77,6 +77,7 @@ void free_page(unsigned long addr)
     i = MAP_NR(addr);
     if (i >= max_map_nr) return;
     if (mem_map[i] <= 0) return;
+    if (mem_map[i] >= USED) return;
 
     mem_map[i]--;
 }

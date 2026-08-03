@@ -33,8 +33,9 @@ static int vsprintf(char *buf, const char *fmt, va_list args)
     char *p, *str;
     int num;
     unsigned long unum;
+    char *end = buf + 1023;  // Leave space for null terminator
 
-    for (str = buf; *fmt; fmt++) {
+    for (str = buf; *fmt && str < end; fmt++) {
         if (*fmt != '%') {
             *str++ = *fmt;
             continue;
@@ -46,31 +47,38 @@ static int vsprintf(char *buf, const char *fmt, va_list args)
         case 'i':
             num = va_arg(args, int);
             if (num < 0) {
-                *str++ = '-';
-                num = -num;
+                if (str < end) *str++ = '-';
+                unum = (unsigned long)(-(long)num);
+                if (str < end)
+                    str += num_to_str(str, unum, 10);
+            } else {
+                if (str < end)
+                    str += num_to_str(str, (unsigned long)num, 10);
             }
-            str += num_to_str(str, num, 10);
             break;
         case 'u':
             unum = va_arg(args, unsigned int);
-            str += num_to_str(str, unum, 10);
+            if (str < end)
+                str += num_to_str(str, unum, 10);
             break;
         case 'x':
         case 'X':
             unum = va_arg(args, unsigned int);
-            str += num_to_str(str, unum, 16);
+            if (str < end)
+                str += num_to_str(str, unum, 16);
             break;
         case 's':
             p = va_arg(args, char *);
-            while (*p)
+            while (*p && str < end)
                 *str++ = *p++;
             break;
         case 'c':
-            *str++ = (char)va_arg(args, int);
+            if (str < end)
+                *str++ = (char)va_arg(args, int);
             break;
         default:
-            *str++ = '%';
-            *str++ = *fmt;
+            if (str < end) *str++ = '%';
+            if (str < end) *str++ = *fmt;
             break;
         }
     }

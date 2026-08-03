@@ -39,6 +39,11 @@ int sys_fork(void)
 
     *p = *current;
 
+    for (i = 0; i < NR_OPEN; i++) {
+        if (p->filp[i])
+            p->filp[i]->f_count++;
+    }
+
     p->pid = pid;
     p->counter = p->priority;
     p->state = TASK_RUNNING;

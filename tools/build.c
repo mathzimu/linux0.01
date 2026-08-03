@@ -17,7 +17,7 @@ int main(int argc, char *argv[])
 {
     FILE *boot_f, *setup_f, *system_f, *out;
     unsigned char buf[65536];
-    int len, i;
+    int len;
     long setup_size, system_size;
     unsigned int setup_sectors, kernel_sectors;
 

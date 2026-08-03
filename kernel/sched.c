@@ -79,14 +79,15 @@ void schedule(void)
     while (1) {
         c = -1;
         next = -1;
-        p = &task[NR_TASKS];
+        p = &task[NR_TASKS - 1];
 
-        while (--p >= &task[0]) {
-            if (*p == NULL) continue;
+        while (p >= &task[0]) {
+            if (*p == NULL) { p--; continue; }
             if ((*p)->state == TASK_RUNNING && (*p)->counter > c) {
                 c = (*p)->counter;
                 next = (int)(p - task);
             }
+            p--;
         }
 
         if (c > 0) break;
@@ -94,8 +95,9 @@ void schedule(void)
         if (c < 0) {
             unsigned long eflags;
             __asm__ volatile("pushfl; popl %0" : "=r"(eflags));
-            if (eflags & 0x200)
-                __asm__ volatile("hlt");
+            if (!(eflags & 0x200))
+                __asm__ volatile("sti");
+            __asm__ volatile("hlt");
             return;
         }
 

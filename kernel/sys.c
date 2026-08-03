@@ -58,8 +58,7 @@ long sys_read(unsigned int fd, char *buf, unsigned long count)
                     schedule();
                 tty_table[0].read_waiter = NULL;
                 current->state = TASK_RUNNING;
-                i--;
-                continue;
+                continue;  // Don't i--, just retry
             }
             c = tty_table[0].read_buf[tty_table[0].read_tail];
             tty_table[0].read_tail = (tty_table[0].read_tail + 1) % TTY_BUF_SIZE;
@@ -126,9 +125,9 @@ int sys_close(unsigned int fd)
     if (!f) return -1;
 
     current->filp[fd] = NULL;
-    if (f->f_count <= 1) {
+    f->f_count--;
+    if (f->f_count == 0) {
         iput(f->f_inode);
     }
-    f->f_count--;
     return 0;
 }

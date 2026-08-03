@@ -45,7 +45,6 @@ void con_init(void)
 
 void con_write(struct tty_struct *tty)
 {
-    int i;
     char c;
 
     while (tty->write_cnt > 0) {

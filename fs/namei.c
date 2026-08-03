@@ -45,14 +45,13 @@ static int next_entry(struct m_inode *dir, int i,
 static int name_eq(const char *de_name, const char *name, int namelen)
 {
     int j;
-    for (j = 0; j < 14; j++) {
-        if (j == namelen) {
-            if (de_name[j] == '\0') return 1;
-            return 0;
-        }
+    for (j = 0; j < namelen && j < 14; j++) {
         if (de_name[j] != name[j]) return 0;
     }
-    if (namelen != 14) return 0;
+    if (j == namelen) {
+        if (j == 14 || de_name[j] == '\0') return 1;
+        return 0;
+    }
     return 1;
 }
 

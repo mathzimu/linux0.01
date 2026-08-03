@@ -23,6 +23,7 @@ static void read_inode(struct m_inode *inode)
     bh = bread(inode->i_dev, block);
     if (!bh) {
         inode->i_dev = 0;
+        inode->i_count = 0;
         return;
     }
 
