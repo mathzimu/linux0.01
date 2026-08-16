@@ -41,9 +41,6 @@ make_iso_xorriso() {
     xorriso -as mkisofs \
         -o "$OUTPUT" \
         -b "$PADDED" \
-        -no-emul-boot \
-        -boot-load-size 4 \
-        -boot-info-table \
         -V "LINUX001" \
         . 2>/dev/null
 }
@@ -55,9 +52,6 @@ make_iso_genisoimage() {
     genisoimage \
         -o "$OUTPUT" \
         -b boot/floppy.img \
-        -no-emul-boot \
-        -boot-load-size 4 \
-        -boot-info-table \
         -V "LINUX001" \
         .iso_tmp 2>/dev/null
     RC=$?
@@ -72,9 +66,6 @@ make_iso_mkisofs() {
     mkisofs \
         -o "$OUTPUT" \
         -b boot/floppy.img \
-        -no-emul-boot \
-        -boot-load-size 4 \
-        -boot-info-table \
         -V "LINUX001" \
         .iso_tmp 2>/dev/null
     RC=$?

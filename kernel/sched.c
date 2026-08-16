@@ -94,6 +94,10 @@ void schedule(void)
 
         if (c < 0) {
             unsigned long eflags;
+            for (p = &task[NR_TASKS - 1]; p >= &task[0]; p--) {
+                if (*p == NULL) continue;
+                (*p)->counter = ((*p)->counter >> 1) + (*p)->priority;
+            }
             __asm__ volatile("pushfl; popl %0" : "=r"(eflags));
             if (!(eflags & 0x200))
                 __asm__ volatile("sti");

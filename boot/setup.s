@@ -10,7 +10,7 @@ _start:
     mov $SETUPSEG, %ax
     mov %ax, %ds
     mov %ax, %ss
-    mov $0x4000, %sp
+    mov $0x0800, %sp
 
     mov $0x88, %ah
     int $0x15

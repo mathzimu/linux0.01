@@ -8,6 +8,8 @@
 .equ SYSOFF,   0x0800  /* kernel at 0x10000 + 0x800 = 0x10800 */
 
 _start:
+    mov $0x07C0, %ax
+    mov %ax, %ds
     mov %dl, (drive)
     mov $0x2401, %ax
     int $0x15
