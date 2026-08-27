@@ -83,6 +83,7 @@ long sys_write(unsigned int fd, const char *buf, unsigned long count);
 struct m_inode *iget(int dev, int nr);
 void iput(struct m_inode *inode);
 struct m_inode *namei(const char *pathname);
+void sync_inodes(int dev);
 
 int file_read(struct m_inode *inode, struct file *filp, char *buf, int count);
 int file_write(struct m_inode *inode, struct file *filp, const char *buf, int count);
@@ -95,6 +96,7 @@ void sleep_on(struct task_struct **p);
 void wake_up(struct task_struct **p);
 void ll_rw_block(int rw, struct buffer_head *bh);
 void wait_on_buffer(struct buffer_head *bh);
+void sync_dev(int dev);
 
 extern struct file file_table[NR_FILE];
 extern struct m_inode inode_table[NR_INODE];

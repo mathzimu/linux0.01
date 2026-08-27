@@ -169,7 +169,7 @@ system_call:
     /* reload saved syscall number for dispatch */
     mov 24(%esp), %eax
 
-    cmpl $10, %eax
+    cmpl $12, %eax
     jb 1f
     movl $-1, %eax
     jmp 2f
@@ -177,10 +177,18 @@ system_call:
 .globl ret_from_sys_call
 ret_from_sys_call:
 2:
-
     /* store return value where saved eax lives */
     mov %eax, 24(%esp)
 
+    /* deliver pending signals before returning to the caller.
+       current->signal lives at offset 12 of struct task_struct. */
+    movl current, %ecx
+    cmpl $0, 12(%ecx)
+    je 3f
+    pushl %eax                  /* preserve syscall return value */
+    call do_signal
+    popl %eax
+3:
     /* unwind: restore ebx..ebp (6), pop saved_eax into a slot, fixup */
     pop %ebx
     pop %ecx
@@ -204,12 +212,18 @@ keyboard_interrupt:
     mov $KERNEL_DS, %ax
     mov %ax, %ds
     mov %ax, %es
+1:  /* drain the 8042 output buffer: the i8042 can queue several
+       scancodes; reading only one per IRQ loses keys typed fast */
     xor %al, %al
-    inb $0x60, %al
+    inb $0x64, %al          /* status register */
+    test $0x01, %al         /* output buffer full? */
+    jz 2f
+    inb $0x60, %al          /* read scancode */
     push %eax
     call kbd_interrupt_handler
     pop %eax
-    mov $0x20, %al
+    jmp 1b
+2:  mov $0x20, %al
     outb %al, $0x20
     popal
     pop %gs
@@ -278,3 +292,5 @@ sys_call_table:
     .long sys_getpid
     .long sys_pause
     .long sys_time
+    .long sys_kill
+    .long sys_sync

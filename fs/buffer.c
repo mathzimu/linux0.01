@@ -82,6 +82,26 @@ repeat:
     bh = free_list;
     while (bh) {
         if (!bh->b_count) {
+            /* Reusing a dirty buffer would silently lose its old
+               contents, so write it back before recycling. */
+            if (bh->b_dirt) {
+                bh->b_count = 1;         /* keep it off the recycle path */
+                ll_rw_block(WRITE, bh);
+                bh->b_count = 0;
+            }
+            /* Unlink from its OLD hash chain first: otherwise the old
+               chain keeps a ghost pointer to this buffer and walking it
+               later follows into the new chain, eventually cycling
+               forever in getblk. */
+            {
+                int old_i = (bh->b_dev ^ bh->b_blocknr) & (NR_BUFFERS - 1);
+                if (bh->b_prev)
+                    bh->b_prev->b_next = bh->b_next;
+                else if (hash_table[old_i] == bh)
+                    hash_table[old_i] = bh->b_next;
+                if (bh->b_next)
+                    bh->b_next->b_prev = bh->b_prev;
+            }
             bh->b_count = 1;
             bh->b_dev = dev;
             bh->b_blocknr = block;
@@ -151,7 +171,7 @@ void ll_rw_block(int rw, struct buffer_head *bh)
     int nsects;
     int ret;
 
-    if (rw != READ) return;
+    if (rw != READ && rw != WRITE) return;
     if (!bh) return;
 
     bh->b_lock = 1;
@@ -159,11 +179,38 @@ void ll_rw_block(int rw, struct buffer_head *bh)
     lba = bh->b_blocknr * (BLOCK_SIZE / 512);
     nsects = BLOCK_SIZE / 512;
 
-    ret = hd_read_sectors(lba, nsects, bh->b_data);
-    if (ret == 0)
-        bh->b_uptodate = 1;
+    if (rw == READ) {
+        ret = hd_read_sectors(lba, nsects, bh->b_data);
+        if (ret == 0)
+            bh->b_uptodate = 1;
+    } else {
+        ret = hd_write_sectors(lba, nsects, bh->b_data);
+        if (ret == 0) {
+            bh->b_dirt = 0;
+            bh->b_uptodate = 1;
+        }
+    }
 
     bh->b_lock = 0;
+}
+
+/* Write back every dirty buffer (and, via sync_inodes, every dirty
+   inode) belonging to dev.  The free_list is a circular list holding
+   all NR_BUFFERS heads, so walking it once reaches everything. */
+void sync_dev(int dev)
+{
+    int i;
+    struct buffer_head *bh = free_list;
+
+    for (i = 0; i < NR_BUFFERS; i++, bh = bh->b_next_free) {
+        if (bh->b_dev == dev && bh->b_dirt) {
+            bh->b_count++;
+            ll_rw_block(WRITE, bh);
+            bh->b_count--;
+        }
+    }
+
+    sync_inodes(dev);
 }
 
 void wait_on_buffer(struct buffer_head *bh)

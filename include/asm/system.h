@@ -75,7 +75,7 @@ do { \
         "je 1f\n\t" \
         "movw %%dx, %1\n\t" \
         "xchgl %%ecx, current\n\t" \
-        "ljmp %0\n\t" \
+        "ljmp *%0\n\t" \
         "1:" \
         : "=m"(*&__tmp.a), "=m"(*&__tmp.b) \
         : "d"(_TSS(n)), "c"(task[n]) \

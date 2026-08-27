@@ -14,10 +14,10 @@
 | **任务调度** | 100Hz 时钟中断、O(N) 优先级轮转、抢占式 |
 | **内存管理** | 4KB 分页、位图页帧分配器、恒等映射 0-4MB |
 | **中断处理** | IDT 256 门、时钟/键盘/硬盘/系统调用 (int 0x80) |
-| **设备驱动** | VGA 80×25 文本控制台、PS/2 键盘（含 Shift 处理）、IDE 硬盘 PIO |
-| **文件系统** | MINIX v1 只读、LRU 块缓冲、inode 缓存、路径解析 |
-| **系统调用** | setup/exit/fork/read/write/open/close/getpid/pause/time |
-| **Shell** | echo / help / ps / clear / exit |
+| **设备驱动** | VGA 80×25 文本控制台、PS/2 键盘（含 Shift 处理）、IDE 硬盘 PIO 读写、COM1 串口镜像 |
+| **文件系统** | MINIX v1 读写、LRU 块缓冲（脏块回写）、inode 缓存、路径解析 |
+| **系统调用** | setup/exit/fork/read/write/open/close/getpid/pause/time/kill/sync |
+| **Shell** | echo / help / ps / clear / exit / pid / time / sys / spawn / sig / ls / cat / sync / wtest |
 
 ## 快速开始
 
@@ -45,8 +45,17 @@ qemu-system-i386 -cdrom kernel.iso -m 4M -boot d
 ### macOS（Homebrew）
 
 ```bash
-brew install qemu xorriso
-# 编译推荐使用 Docker（见上）
+brew install qemu xorriso i686-elf-gcc i686-elf-binutils
+make          # 自动检测 i686-elf-* 交叉工具链
+# 或使用 Docker（见上）
+```
+
+### 无头自动化验证（可选）
+
+```bash
+# 串口捕获 + sendkey 注入，输出精确文本到 stdout
+python3 scripts/qemu-test.py --image Image --hda minix.img \
+    --keys "ls\ncat /hello.txt\n"
 ```
 
 ### 构建产物
@@ -83,15 +92,19 @@ linux0.01/
 ├── drivers/       # 设备驱动
 │   ├── console.c  # VGA 文本模式
 │   ├── keyboard.c # 键盘驱动
-│   ├── hd.c       # IDE 硬盘
+│   ├── hd.c       # IDE 硬盘（PIO 读写）
+│   ├── serial.c   # COM1 串口（控制台镜像，供无头测试）
 │   └── tty_io.c   # TTY 层
 ├── init/          # 用户态初始化
-│   └── shell.c    # Shell
+│   └── shell.c    # Shell（含系统调用/文件系统演示命令）
 ├── lib/           # C 标准库子集
-├── include/       # 头文件
+├── include/       # 头文件（含 unistd.h：int 0x80 系统调用包装宏）
 ├── tools/         # 构建工具
-│   └── build.c    # 镜像拼接器
+│   ├── build.c    # 镜像拼接器
+│   └── mkminix.c  # MINIX v1 测试磁盘制作工具
 ├── scripts/       # 辅助脚本
+│   ├── qemu-test.py # 无头 QEMU 测试驱动（串口捕获 + sendkey）
+│   └── ppm2png.py   # screendump PPM → PNG
 ├── docs/          # 教学与设计文档（从 docs/INDEX.md 进入）
 │   ├── INDEX.md   # 学习路径总索引
 │   ├── TUTORIAL.md / tutorial/  # 源码实现教程
@@ -111,7 +124,8 @@ linux0.01/
 4. [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md)：当前实现边界  
 5. [`docs/TUTORIAL.md`](docs/TUTORIAL.md) + `docs/tutorial/`：按文件读源码  
 
-**关键事实：** Shell 在 **内核态** 运行（`main` 直接 `shell_main`）；分页恒等映射 **0–4MB**；无 `move_to_user_mode`。
+**关键事实：** Shell 在 **内核态** 运行（`main` 直接 `shell_main`）；分页恒等映射 **0–4MB**；无 `move_to_user_mode`；
+fork/调度/信号/文件读写路径均可通过 Shell 命令实测（`spawn`/`sig`/`ls`/`cat`/`wtest`）。
 
 ## 启动流程
 
@@ -147,11 +161,16 @@ BIOS POST
 | 2 | `sys_fork`  | 创建子进程（TSS 切换） |
 | 3 | `sys_read`  | 读取文件/键盘输入 |
 | 4 | `sys_write` | 写入文件/控制台输出 |
-| 5 | `sys_open`  | 打开文件 |
+| 5 | `sys_open`  | 打开文件（fd 从 3 起分配） |
 | 6 | `sys_close` | 关闭文件 |
 | 7 | `sys_getpid`| 获取进程 ID |
-| 8 | `sys_pause` | 进程休眠 |
-| 9 | `sys_time`  | 获取系统时间 |
+| 8 | `sys_pause` | 进程休眠（可被信号唤醒） |
+| 9 | `sys_time`  | 获取系统时间（写 *tloc） |
+| 10 | `sys_kill`  | 发送信号（默认动作：SIGINT/SIGQUIT/SIGKILL 终止进程） |
+| 11 | `sys_sync`  | 将所有脏缓冲/inode 写回磁盘 |
+
+Shell 通过 `include/unistd.h` 的 `int $0x80` 包装宏实际调用上述接口
+（`sys`/`spawn`/`sig`/`ls`/`cat`/`wtest` 等命令），系统调用路径可运行验证。
 
 ## 内存布局
 
@@ -174,20 +193,42 @@ BIOS POST
 
 ```
 $ help
-  echo   - Echo text
-  help   - Show this help
-  ps     - List processes
-  clear  - Clear screen
-  exit   - Exit shell
+  echo    - Echo text
+  help    - Show this help
+  ps      - List processes
+  clear   - Clear screen
+  exit    - Exit shell
+  pid     - getpid() via int 0x80
+  time    - uptime via sys_time
+  sys     - syscall path demo (getpid/time/write/open/close)
+  spawn   - fork() demo: two children print and exit
+  sig     - pause/kill demo: SIGINT kills a child
+  ls      - list a directory (via open/read/close)
+  cat     - print a file (via open/read/close)
+  sync    - write back dirty buffers/inodes
+  wtest   - write /hello.txt through the write path
 
-$ echo Hello World
-Hello World
+$ spawn
+[parent] fork #1 -> pid 1
+[parent] fork #2 -> pid 2
+[parent] spawn done
+[child] getpid=2 time=10, exiting
+[child] getpid=1 time=10, exiting
 
 $ ps
 PID   STATE   COUNTER
-0     0       15
-1     0       15
+0     0       29
 ```
+
+## MINIX 测试磁盘
+
+```bash
+make minix.img                 # 用 tools/mkminix.c 生成 128KB MINIX v1 镜像
+qemu-system-i386 -fda Image -hda minix.img -m 4M -boot a
+# 然后可在 Shell 中: ls /  cat /hello.txt  wtest  cat /hello.txt
+```
+
+`minix.img` 含根目录（hello.txt / readme.txt / big.txt(18KB，走间接块) / docs/note.txt）。
 
 ## 设计原则
 

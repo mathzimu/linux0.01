@@ -7,7 +7,12 @@
 
 int sys_time(unsigned long *tloc)
 {
-    return jiffies / HZ;
+    int i = jiffies / HZ;
+
+    /* Match Linux 0.01 semantics: store the time at *tloc when given. */
+    if (tloc)
+        put_fs_long(i, tloc);
+    return i;
 }
 
 long sys_write(unsigned int fd, const char *buf, unsigned long count)
@@ -92,7 +97,9 @@ int sys_open(const char *filename, int flag)
     struct file *f;
     struct m_inode *inode;
 
-    for (fd = 0; fd < NR_OPEN; fd++) {
+    /* fds 0/1/2 are reserved for stdin/stdout/stderr (the tty), so
+       the first real file gets fd 3 — matching Unix convention. */
+    for (fd = 3; fd < NR_OPEN; fd++) {
         if (!current->filp[fd]) break;
     }
     if (fd >= NR_OPEN) return -1;
@@ -128,6 +135,40 @@ int sys_close(unsigned int fd)
     f->f_count--;
     if (f->f_count == 0) {
         iput(f->f_inode);
+    }
+    return 0;
+}
+
+int sys_kill(int pid, int sig)
+{
+    struct task_struct *p;
+
+    /* pid equals the task[] index: task[0]=init(pid 0), children get
+       pid = slot index (see sys_fork). */
+    if (pid < 0 || pid >= NR_TASKS)
+        return -1;
+    p = task[pid];
+    if (!p)
+        return -1;
+    if (sig == 0)
+        return 0;                    /* existence check only */
+    if (sig < 1 || sig >= 32)
+        return -1;
+
+    p->signal |= (1 << sig);
+    /* wake a task that is sleeping interruptibly (e.g. in sys_pause) */
+    if (p->state == TASK_INTERRUPTIBLE)
+        p->state = TASK_RUNNING;
+    return 0;
+}
+
+int sys_sync(void)
+{
+    int i;
+
+    for (i = 0; i < NR_SUPER; i++) {
+        if (super_block[i].s_dev)
+            sync_dev(super_block[i].s_dev);
     }
     return 0;
 }

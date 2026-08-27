@@ -17,3 +17,7 @@ tools/build
 *~
 core
 .DS_Store
+
+# MINIX test disk (generated)
+minix.img
+tools/mkminix

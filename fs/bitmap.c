@@ -14,7 +14,9 @@ void free_block(int dev, int block)
     if (block < sb->s_firstdatazone || block >= sb->s_nzones)
         return;
 
-    bit = block - sb->s_firstdatazone + 1;
+    /* zmap bit j corresponds to zone (s_firstdatazone + j);
+       must match new_block(). */
+    bit = block - sb->s_firstdatazone;
     bh = bread(dev, 2 + sb->s_imap_blocks + (bit / (BLOCK_SIZE * 8)));
     if (!bh) return;
 

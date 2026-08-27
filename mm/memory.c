@@ -1,6 +1,7 @@
 #include <linux/kernel.h>
 #include <linux/mm.h>
 #include <linux/sched.h>
+#include <linux/head.h>
 #include <string.h>
 #include <asm/system.h>
 
@@ -117,7 +118,17 @@ int free_page_tables(unsigned long from, unsigned long size)
     return 0;
 }
 
-void do_no_page(unsigned long error_code, unsigned long address)
+void do_no_page(unsigned long error_code, unsigned long eip, unsigned long address)
 {
+    unsigned long pde, pte;
+
+    pde = *(unsigned long *)(PAGE_DIRECTORY + ((address >> 22) << 2));
+    pte = *(unsigned long *)(PAGE_TABLE_0 + ((address >> 12) << 2));
+
+    printk("\nPAGE FAULT: addr=0x%x err=0x%x eip=0x%x pid=%d state=%d\n",
+           address, error_code, eip, current->pid, current->state);
+    printk("  cr3=0x%lx pde[0x%x]=0x%lx pte[0x%x]=0x%lx\n",
+           read_cr3(), (unsigned)(address >> 22), pde,
+           (unsigned)(address >> 12), pte);
     panic("page fault");
 }

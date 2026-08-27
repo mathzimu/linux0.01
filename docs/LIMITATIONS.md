@@ -24,36 +24,40 @@
 
 | 项目 | 事实 |
 |------|------|
-| 调度 | O(N) counter + priority，硬件 `ljmp` TSS 切换 |
-| fork | 复制 task_struct + 内核栈帧；`f_count++` |
-| exit | 摘掉 task 槽并 `free_page`，无 wait/zombie 回收 |
-| 信号 | `signal` 字段存在，未实现投递 |
+| 调度 | O(N) counter + priority，硬件 `ljmp` TSS 切换（`schedule()` 不预改 current，由 `switch_to` 内 `xchg`） |
+| fork | 复制 task_struct + 内核栈帧；`f_count++`；pid == task[] 槽位 |
+| exit | 摘掉 task 槽；**不释放任务页**（无 wait/zombie 回收，泄漏 4KB/进程，避免 use-after-free） |
+| 信号 | **最小投递已实现**：`sys_kill` 置位 + 唤醒 TASK_INTERRUPTIBLE；`ret_from_sys_call` 调用 `do_signal`；默认动作 SIGINT/SIGQUIT/SIGKILL → exit(128+sig)，其余忽略 |
+| 用户态 | 无 `move_to_user_mode`，Shell 在内核态直接调用；**无自定义信号处理器投递**（仅默认动作） |
 
 ## 4. 文件系统
 
 | 项目 | 事实 |
 |------|------|
 | 类型 | MINIX v1 |
-| `sys_setup` | 读超级块到 `super_block[0]` |
-| 写路径 | `file_write` / `new_block` 存在，但 `ll_rw_block` **只处理 READ** |
-| Shell ls/cat | 打印 “not yet implemented” |
+| `sys_setup` | 读超级块到 `super_block[0]`（无分区表解析，dev 硬编码 0x301） |
+| 写路径 | **已打通**：`file_write` → 脏缓冲 → `sync_dev`/`sys_sync` → `ll_rw_block(WRITE)` → `hd_write_sectors` 落盘；inode 同步经 `write_inode` |
+| 缓冲 | `getblk` 复用前回写脏块、并从旧哈希链摘除（避免链环死循环）；**无 writeback 定时器**（需显式 `sync`） |
+| Shell ls/cat | **已实现**，走 open/read/close 系统调用；`wtest` 演示写路径 |
+| 文件创建 | 无 `mknod`/`mkdir`/O_CREAT（`new_inode`/`new_block` 已实现但无 syscall 暴露） |
 
 ## 5. 设备
 
 | 项目 | 事实 |
 |------|------|
 | 控制台 | VGA 文本 0xB8000 |
-| 键盘 | PS/2 扫描码 + Shift |
-| 硬盘 | IDE PIO 读；从 PIC 启动时 mask=0xFF，读路径为轮询 |
-| 串口 | 未实现 |
+| 键盘 | PS/2 扫描码 + Shift；IRQ 处理时**排空 8042 输出缓冲**（快速连击不丢键） |
+| 硬盘 | IDE PIO 读写；从 PIC 启动时 mask=0xFF，读写路径为轮询 |
+| 串口 | **COM1 已实现**：控制台输出镜像，供 `-serial file:` 无头测试捕获精确文本 |
 
 ## 6. 构建与运行
 
 | 项目 | 事实 |
 |------|------|
 | 目标 | i386 32-bit freestanding |
-| macOS | 需 Docker 或 `i386-elf-gcc` |
-| 运行 | QEMU `-fda Image` 或 `-cdrom kernel.iso`，内存 4M |
+| macOS | Homebrew `i686-elf-gcc` + `i686-elf-binutils` 直接构建（Makefile 自动检测），或 Docker |
+| 运行 | QEMU `-fda Image` 或 `-cdrom kernel.iso`，内存 4M；MINIX 测试盘 `make minix.img` + `-hda minix.img` |
+| 自动化 | `scripts/qemu-test.py` 无头驱动（串口文本 + sendkey），`scripts/ppm2png.py` 转截图 |
 
 ## 7. 与文档/设计稿的关系
 

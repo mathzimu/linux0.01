@@ -22,14 +22,8 @@ ifeq ($(shell uname -s),Linux)
             -nostdinc -Iinclude -fno-stack-protector -fno-builtin \
             -ffreestanding
   LDFLAGS = -m elf_i386 -T kernel.ld -e startup_32
-else ifeq ($(shell command -v i386-elf-gcc 2>/dev/null),)
-  # macOS fallback: try Docker
-  DOCKER_IMAGE = linux-0.01-builder
-  DOCKER = docker
-  BUILD_IN_DOCKER = $(DOCKER) run --rm -v $(PWD):/kernel -w /kernel \
-                     $(DOCKER_IMAGE) make
-else
-  # macOS with Homebrew cross-compiler
+else ifneq ($(shell command -v i386-elf-gcc 2>/dev/null),)
+  # macOS with i386-elf-* cross-compiler
   AS      = i386-elf-as
   CC      = i386-elf-gcc
   LD      = i386-elf-ld
@@ -39,6 +33,23 @@ else
             -nostdinc -Iinclude -fno-stack-protector -fno-builtin \
             -ffreestanding
   LDFLAGS = -T kernel.ld -e startup_32
+else ifneq ($(shell command -v i686-elf-gcc 2>/dev/null),)
+  # macOS with Homebrew i686-elf-* cross-compiler
+  AS      = i686-elf-as
+  CC      = i686-elf-gcc
+  LD      = i686-elf-ld
+  OBJCOPY = i686-elf-objcopy
+  ASFLAGS =
+  CFLAGS  = -Wall -O0 -fstrength-reduce -fomit-frame-pointer \
+            -nostdinc -Iinclude -fno-stack-protector -fno-builtin \
+            -ffreestanding
+  LDFLAGS = -T kernel.ld -e startup_32
+else
+  # fallback: Docker
+  DOCKER_IMAGE = linux-0.01-builder
+  DOCKER = docker
+  BUILD_IN_DOCKER = $(DOCKER) run --rm -v $(PWD):/kernel -w /kernel \
+                     $(DOCKER_IMAGE) make
 endif
 
 OBJS = kernel/main.o kernel/sched.o kernel/process.o kernel/sys.o \
@@ -46,6 +57,7 @@ OBJS = kernel/main.o kernel/sched.o kernel/process.o kernel/sys.o \
        mm/memory.o mm/page.o \
        fs/minix.o fs/buffer.o fs/bitmap.o fs/inode.o fs/file_dev.o fs/namei.o \
        drivers/console.o drivers/keyboard.o drivers/hd.o drivers/tty_io.o \
+       drivers/serial.o \
        lib/string.o lib/ctype.o lib/malloc.o lib/close.o \
        init/shell.o
 
@@ -91,6 +103,15 @@ Image: boot/boot boot/setup kernel/system.bin tools/build
 # Bootable ISO (El Torito)
 iso: Image
 	@scripts/mkiso.sh Image kernel.iso
+
+# MINIX v1 test disk image (used with: qemu -hda minix.img)
+minix.img: tools/mkminix
+	tools/mkminix minix.img
+
+tools/mkminix: tools/mkminix.c
+	$(HOST_CC) -O2 -Wall -o $@ $<
+
+HOST_CC ?= gcc
 
 # Docker build
 docker-build:

@@ -23,5 +23,7 @@ void tty_init(void);
 void tty_read(struct tty_struct *tty, char *buf, int nr);
 void tty_write(struct tty_struct *tty, const char *buf, int nr);
 void kbd_interrupt_handler(int scancode);
+void serial_init(void);
+void serial_putc(char c);
 
 #endif

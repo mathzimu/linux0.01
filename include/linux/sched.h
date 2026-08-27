@@ -22,6 +22,8 @@
 #define __NR_getpid 7
 #define __NR_pause 8
 #define __NR_time 9
+#define __NR_kill 10
+#define __NR_sync 11
 
 #define NR_OPEN 64
 
@@ -89,8 +91,11 @@ long sys_write(unsigned int fd, const char *buf, unsigned long count);
 long sys_read(unsigned int fd, char *buf, unsigned long count);
 int sys_open(const char *filename, int flag);
 int sys_close(unsigned int fd);
+int sys_kill(int pid, int sig);
+int sys_sync(void);
 
 void do_timer(void);
+void do_signal(void);
 
 #endif
 #endif

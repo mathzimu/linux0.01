@@ -42,6 +42,54 @@ static void read_inode(struct m_inode *inode)
     brelse(bh);
 }
 
+static void write_inode(struct m_inode *inode)
+{
+    struct super_block *sb;
+    struct buffer_head *bh;
+    struct d_inode *di;
+    int block, offset, i;
+
+    if (!inode || !inode->i_dev || !inode->i_dirt)
+        return;
+
+    sb = get_super(inode->i_dev);
+    if (!sb) return;
+
+    block = 2 + sb->s_imap_blocks + sb->s_zmap_blocks +
+            (inode->i_num - 1) / (BLOCK_SIZE / sizeof(struct d_inode));
+
+    bh = bread(inode->i_dev, block);
+    if (!bh) return;
+
+    offset = (inode->i_num - 1) % (BLOCK_SIZE / sizeof(struct d_inode));
+    di = (struct d_inode *)bh->b_data + offset;
+
+    di->i_mode = inode->i_mode;
+    di->i_uid = inode->i_uid;
+    di->i_size = inode->i_size;
+    di->i_time = inode->i_mtime;
+    di->i_gid = inode->i_gid;
+    di->i_nlinks = inode->i_nlinks;
+    for (i = 0; i < 9; i++)
+        di->i_zone[i] = inode->i_zone[i];
+
+    bh->b_dirt = 1;
+    ll_rw_block(WRITE, bh);
+    brelse(bh);
+    inode->i_dirt = 0;
+}
+
+void sync_inodes(int dev)
+{
+    int i;
+
+    for (i = 0; i < NR_INODE; i++) {
+        struct m_inode *inode = &inode_table[i];
+        if (inode->i_dev == dev && inode->i_dirt)
+            write_inode(inode);
+    }
+}
+
 struct m_inode *iget(int dev, int nr)
 {
     struct m_inode *inode;

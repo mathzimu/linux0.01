@@ -63,6 +63,39 @@ int hd_read_sectors(unsigned int lba, unsigned int nsects, char *buf)
     return 0;
 }
 
+int hd_write_sectors(unsigned int lba, unsigned int nsects, char *buf)
+{
+    unsigned int cyl, head, sect;
+    int j;
+
+    cyl = lba / (16 * 63);
+    head = (lba / 63) % 16;
+    sect = (lba % 63) + 1;
+
+    if (hd_busy()) return -1;
+
+    hd_out(0, nsects, sect, head, cyl, HD_CMD_WRITE);
+
+    for (j = 0; j < nsects; j++) {
+        if (hd_wait_drq() < 0) return -1;
+        outsl(HD_DATA, buf + j * 512, 512 / 4);
+    }
+
+    /* wait for the drive to finish the command and report status */
+    {
+        int tries = 100000;
+        while (tries--) {
+            unsigned char status = inb(HD_STATUS);
+            if (!(status & HD_STATUS_BSY)) {
+                if (status & HD_STATUS_ERR)
+                    return -1;
+                return 0;
+            }
+        }
+    }
+    return -1;
+}
+
 int hd_request(void)
 {
     return 0;

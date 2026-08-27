@@ -15,6 +15,6 @@ void mem_init(unsigned long start_mem, unsigned long end_mem);
 unsigned long get_free_page(void);
 void free_page(unsigned long addr);
 int free_page_tables(unsigned long from, unsigned long size);
-void do_no_page(unsigned long error_code, unsigned long address);
+void do_no_page(unsigned long error_code, unsigned long eip, unsigned long address);
 
 #endif

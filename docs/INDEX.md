@@ -61,8 +61,12 @@
 1. **分页只映射 0–4MB**（head.s 仅填 PDE[0] + 一张页表）
 2. **段选择子**：`KERNEL_CS=0x08` `KERNEL_DS=0x10` `USER_CS=0x1B` `USER_DS=0x23`
 3. **Shell 运行在内核态**：`main()` 直接 `shell_main()`，**没有** `move_to_user_mode`
-4. **系统调用路径已实现**，但 Shell 多数直接调内核函数/printk，不全走 `int 0x80`
-5. **MINIX FS 以读为主**；Shell 的 `ls`/`cat` 仍提示未实现
+4. **系统调用路径已实现且可实测**：`include/unistd.h` 提供 `int 0x80` 包装宏；Shell 的
+   `sys`/`spawn`/`sig`/`ls`/`cat`/`wtest` 命令全部走系统调用，fork/调度/信号/文件读写可运行验证
+5. **MINIX FS 已打通读写**：挂 `minix.img`（`make minix.img`）后 `ls`/`cat` 可用，`wtest`+`sync` 演示写回
+6. **修复过的内核级 bug**（读源码时留意注释）：schedule 预改 current 导致 ljmp 被跳过；
+   `init_task.tss.cr3=0` 导致切回父进程 CR3 归零；exit 释放自身任务页的 use-after-free；
+   `sys_open` 从 fd 0 分配撞上 stdin；getblk 复用缓冲未摘旧哈希链的链环死循环
 
 ## 设计文档（背景，非源码权威）
 

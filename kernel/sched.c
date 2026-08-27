@@ -46,6 +46,10 @@ void sched_init(void)
 
     init_task.tss.ss0 = KERNEL_DS;
     init_task.tss.esp0 = (unsigned long)&_end + 0x1000;
+    /* CRITICAL: the CPU loads CR3 from tss.cr3 on every task switch.
+       Left at 0, switching back to the init task would zero CR3 and
+       crash on the next memory access. */
+    init_task.tss.cr3 = read_cr3();
 
     init_task.ldt[0].a = 0x0000FFFF;
     init_task.ldt[0].b = 0x00CFFA00;
@@ -116,7 +120,10 @@ void schedule(void)
         for (current_idx = 0; current_idx < NR_TASKS; current_idx++)
             if (task[current_idx] == current) break;
         if (next != current_idx) {
-            current = task[next];
+            /* NOTE: do NOT assign current = task[next] here.
+               switch_to() swaps it in via "xchgl %%ecx, current"
+               and its leading "cmpl %%ecx, current; je" guard would
+               see them equal and skip the ljmp entirely. */
             switch_to(next);
         }
     }
