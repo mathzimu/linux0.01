@@ -24,6 +24,12 @@
 #define __NR_time 9
 #define __NR_kill 10
 #define __NR_sync 11
+#define __NR_lseek 12
+#define __NR_dup 13
+#define __NR_dup2 14
+#define __NR_getppid 15
+#define __NR_mknod 16
+#define __NR_mkdir 17
 
 #define NR_OPEN 64
 
@@ -58,6 +64,7 @@ struct task_struct {
     struct file *filp[NR_OPEN];
     unsigned short uid;
     unsigned long pid;
+    unsigned long parent;      /* task[] index of the parent */
     unsigned long pgrp;
     unsigned long session;
     unsigned long leader;
@@ -93,6 +100,12 @@ int sys_open(const char *filename, int flag);
 int sys_close(unsigned int fd);
 int sys_kill(int pid, int sig);
 int sys_sync(void);
+int sys_lseek(unsigned int fd, long offset, int origin);
+int sys_dup(unsigned int fildes);
+int sys_dup2(unsigned int oldfd, unsigned int newfd);
+int sys_getppid(void);
+int sys_mknod(const char *filename, int mode);
+int sys_mkdir(const char *dirname, int mode);
 
 void do_timer(void);
 void do_signal(void);

@@ -28,60 +28,106 @@ static int num_to_str(char *str, unsigned long num, int base)
     return j;
 }
 
+/* Write a right-aligned number into *strp, honouring a minimum field
+   width (padded with spaces on the left). */
+static void write_num(char **strp, char *end, unsigned long num,
+                      int base, int width)
+{
+    char tmp[32];
+    char *str = *strp;
+    int len = num_to_str(tmp, num, base);   /* num_to_str does not NUL-terminate */
+    int pad = width > len ? width - len : 0;
+    int i;
+
+    while (pad-- && str < end)
+        *str++ = ' ';
+    for (i = 0; i < len && str < end; i++)
+        *str++ = tmp[i];
+    *strp = str;
+}
+
 static int vsprintf(char *buf, const char *fmt, va_list args)
 {
-    char *p, *str;
-    int num;
-    unsigned long unum;
-    char *end = buf + 1023;  // Leave space for null terminator
+    char *str, *end;
 
-    for (str = buf; *fmt && str < end; fmt++) {
+    str = buf;
+    end = buf + 1023;              /* leave space for null terminator */
+
+    while (*fmt && str < end) {
         if (*fmt != '%') {
-            *str++ = *fmt;
+            *str++ = *fmt++;
             continue;
         }
         fmt++;
 
-        switch (*fmt) {
-        case 'd':
-        case 'i':
-            num = va_arg(args, int);
-            if (num < 0) {
-                if (str < end) *str++ = '-';
-                unum = (unsigned long)(-(long)num);
-                if (str < end)
-                    str += num_to_str(str, unum, 10);
-            } else {
-                if (str < end)
-                    str += num_to_str(str, (unsigned long)num, 10);
+        /* minimum field width: %4d */
+        {
+            int width = 0;
+            while (*fmt >= '0' && *fmt <= '9')
+                width = width * 10 + (*fmt++ - '0');
+
+            /* length modifier: l (long; on i386 long == int width) */
+            if (*fmt == 'l')
+                fmt++;
+
+            switch (*fmt) {
+            case 'd':
+            case 'i': {
+                long val = va_arg(args, int);
+                if (val < 0) {
+                    if (str < end)
+                        *str++ = '-';
+                    write_num(&str, end, (unsigned long)(-val), 10, width);
+                } else {
+                    write_num(&str, end, (unsigned long)val, 10, width);
+                }
+                break;
             }
-            break;
-        case 'u':
-            unum = va_arg(args, unsigned int);
-            if (str < end)
-                str += num_to_str(str, unum, 10);
-            break;
-        case 'x':
-        case 'X':
-            unum = va_arg(args, unsigned int);
-            if (str < end)
-                str += num_to_str(str, unum, 16);
-            break;
-        case 's':
-            p = va_arg(args, char *);
-            while (*p && str < end)
-                *str++ = *p++;
-            break;
-        case 'c':
-            if (str < end)
-                *str++ = (char)va_arg(args, int);
-            break;
-        default:
-            if (str < end) *str++ = '%';
-            if (str < end) *str++ = *fmt;
-            break;
+            case 'u':
+                write_num(&str, end,
+                          (unsigned long)va_arg(args, unsigned int),
+                          10, width);
+                break;
+            case 'x':
+            case 'X':
+                write_num(&str, end,
+                          (unsigned long)va_arg(args, unsigned int),
+                          16, width);
+                break;
+            case 'o':
+                write_num(&str, end,
+                          (unsigned long)va_arg(args, unsigned int),
+                          8, width);
+                break;
+            case 'p':
+                if (str < end)
+                    *str++ = '0';
+                if (str < end)
+                    *str++ = 'x';
+                write_num(&str, end,
+                          (unsigned long)va_arg(args, void *), 16, 0);
+                break;
+            case 's': {
+                char *p = va_arg(args, char *);
+                while (*p && str < end)
+                    *str++ = *p++;
+                break;
+            }
+            case 'c':
+                if (str < end)
+                    *str++ = (char)va_arg(args, int);
+                break;
+            default:
+                if (str < end)
+                    *str++ = '%';
+                if (*fmt && str < end)
+                    *str++ = *fmt;
+                break;
+            }
         }
+        fmt++;
     }
+
     *str = '\0';
     return str - buf;
 }

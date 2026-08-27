@@ -40,6 +40,12 @@ int sys_fork(void)
 
     *p = *current;
 
+    /* remember the parent (task[] index) for sys_getppid */
+    for (i = 0; i < NR_TASKS; i++)
+        if (task[i] == current)
+            break;
+    p->parent = i;
+
     for (i = 0; i < NR_OPEN; i++) {
         if (p->filp[i])
             p->filp[i]->f_count++;
@@ -178,6 +184,12 @@ int sys_exit(int ret)
 int sys_getpid(void)
 {
     return current->pid;
+}
+
+int sys_getppid(void)
+{
+    struct task_struct *p = task[current->parent];
+    return p ? p->pid : 0;
 }
 
 int sys_pause(void)

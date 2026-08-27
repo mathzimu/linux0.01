@@ -3,6 +3,7 @@
 #include <linux/mm.h>
 #include <linux/fs.h>
 #include <linux/tty.h>
+#include <string.h>
 #include <asm/segment.h>
 
 int sys_time(unsigned long *tloc)
@@ -170,5 +171,206 @@ int sys_sync(void)
         if (super_block[i].s_dev)
             sync_dev(super_block[i].s_dev);
     }
+    return 0;
+}
+
+int sys_lseek(unsigned int fd, long offset, int origin)
+{
+    struct file *f;
+
+    if (fd >= NR_OPEN || !current->filp[fd])
+        return -1;
+    f = current->filp[fd];
+
+    switch (origin) {
+    case 0:                       /* SEEK_SET */
+        f->f_pos = offset;
+        break;
+    case 1:                       /* SEEK_CUR */
+        f->f_pos += offset;
+        break;
+    case 2:                       /* SEEK_END */
+        f->f_pos = f->f_inode->i_size + offset;
+        break;
+    default:
+        return -1;
+    }
+    return f->f_pos;
+}
+
+int sys_dup(unsigned int fildes)
+{
+    int fd;
+
+    if (fildes >= NR_OPEN || !current->filp[fildes])
+        return -1;
+
+    for (fd = 0; fd < NR_OPEN; fd++)
+        if (!current->filp[fd])
+            break;
+    if (fd >= NR_OPEN)
+        return -1;
+
+    current->filp[fd] = current->filp[fildes];
+    current->filp[fd]->f_count++;
+    return fd;
+}
+
+int sys_dup2(unsigned int oldfd, unsigned int newfd)
+{
+    struct file *f;
+
+    if (oldfd >= NR_OPEN || !current->filp[oldfd])
+        return -1;
+    if (newfd >= NR_OPEN)
+        return -1;
+    if (oldfd == newfd)
+        return newfd;
+
+    /* close the target slot first, then share the source */
+    if (current->filp[newfd]) {
+        f = current->filp[newfd];
+        f->f_count--;
+        if (f->f_count == 0)
+            iput(f->f_inode);
+    }
+    current->filp[newfd] = current->filp[oldfd];
+    current->filp[newfd]->f_count++;
+    return newfd;
+}
+
+/* Create a regular file (mode carries S_IFREG). */
+int sys_mknod(const char *filename, int mode)
+{
+    char dirpath[64], name[15];
+    struct m_inode *dir, *inode;
+    unsigned short ino;
+    int namelen;
+
+    if (split_path(filename, dirpath, name) < 0)
+        return -1;
+    namelen = (int)strlen(name);
+
+    dir = namei(dirpath);
+    if (!dir)
+        return -1;
+    if (!(dir->i_mode & S_IFDIR)) {
+        iput(dir);
+        return -1;
+    }
+    if (dir_lookup(dir, name, namelen) == 0) {
+        iput(dir);
+        return -1;              /* already exists */
+    }
+
+    inode = new_inode(dir->i_dev);
+    if (!inode) {
+        iput(dir);
+        return -1;
+    }
+    ino = inode->i_num;
+
+    if (dir_add_entry(dir, name, namelen, ino) < 0) {
+        free_inode(inode);
+        iput(inode);
+        iput(dir);
+        return -1;
+    }
+
+    inode->i_mode = mode;
+    inode->i_uid = 0;
+    inode->i_size = 0;
+    inode->i_mtime = 0;
+    inode->i_gid = 0;
+    inode->i_nlinks = 1;
+    inode->i_dirt = 1;
+
+    iput(dir);
+    iput(inode);
+    return 0;
+}
+
+/* Create a directory (mode carries S_IFDIR); gets a data zone with
+   '.' and '..' entries, like real minix. */
+int sys_mkdir(const char *dirname, int mode)
+{
+    char dirpath[64], name[15];
+    struct m_inode *dir, *inode;
+    struct buffer_head *bh;
+    struct minix_dir_entry *de;
+    unsigned short ino;
+    int namelen, block;
+
+    if (split_path(dirname, dirpath, name) < 0)
+        return -1;
+    namelen = (int)strlen(name);
+
+    dir = namei(dirpath);
+    if (!dir)
+        return -1;
+    if (!(dir->i_mode & S_IFDIR)) {
+        iput(dir);
+        return -1;
+    }
+    if (dir_lookup(dir, name, namelen) == 0) {
+        iput(dir);
+        return -1;
+    }
+
+    inode = new_inode(dir->i_dev);
+    if (!inode) {
+        iput(dir);
+        return -1;
+    }
+    ino = inode->i_num;
+
+    block = new_block(dir->i_dev);
+    if (!block) {
+        free_inode(inode);
+        iput(inode);
+        iput(dir);
+        return -1;
+    }
+
+    bh = bread(dir->i_dev, block);
+    if (!bh) {
+        free_block(dir->i_dev, block);
+        free_inode(inode);
+        iput(inode);
+        iput(dir);
+        return -1;
+    }
+    de = (struct minix_dir_entry *)bh->b_data;
+    de[0].inode = ino;                       /* "." -> self */
+    de[0].name[0] = '.';
+    de[0].name[1] = '\0';
+    de[1].inode = dir->i_num;                /* ".." -> parent */
+    de[1].name[0] = '.';
+    de[1].name[1] = '.';
+    de[1].name[2] = '\0';
+    bh->b_dirt = 1;
+    brelse(bh);
+
+    inode->i_zone[0] = block;
+    inode->i_mode = mode;
+    inode->i_uid = 0;
+    inode->i_size = 2 * sizeof(struct minix_dir_entry);
+    inode->i_mtime = 0;
+    inode->i_gid = 0;
+    inode->i_nlinks = 2;
+    inode->i_dirt = 1;
+
+    if (dir_add_entry(dir, name, namelen, ino) < 0) {
+        free_block(dir->i_dev, block);
+        free_inode(inode);
+        iput(inode);
+        iput(dir);
+        return -1;
+    }
+    dir->i_nlinks++;
+    dir->i_dirt = 1;
+
+    iput(dir);
+    iput(inode);
     return 0;
 }

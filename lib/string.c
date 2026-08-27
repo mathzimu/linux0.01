@@ -62,6 +62,16 @@ char *strchr(const char *s, int c)
     return NULL;
 }
 
+char *strrchr(const char *s, int c)
+{
+    const char *found = NULL;
+    while (*s) {
+        if (*s == (char)c) found = s;
+        s++;
+    }
+    return (char *)found;
+}
+
 void *memcpy(void *dest, const void *src, int n)
 {
     char *d = dest;

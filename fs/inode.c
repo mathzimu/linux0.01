@@ -106,6 +106,12 @@ struct m_inode *iget(int dev, int nr)
     for (i = 0; i < NR_INODE; i++) {
         inode = &inode_table[i];
         if (!inode->i_count) {
+            /* Reusing a slot whose inode is still dirty would silently
+               discard unsynced changes (observed: a fresh mkdir lost its
+               root-dir entry when iget() for the next inode took over
+               the root's slot).  Flush it first. */
+            if (inode->i_dirt)
+                write_inode(inode);
             inode->i_count = 1;
             inode->i_dev = dev;
             inode->i_num = nr;

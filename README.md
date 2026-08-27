@@ -15,9 +15,9 @@
 | **内存管理** | 4KB 分页、位图页帧分配器、恒等映射 0-4MB |
 | **中断处理** | IDT 256 门、时钟/键盘/硬盘/系统调用 (int 0x80) |
 | **设备驱动** | VGA 80×25 文本控制台、PS/2 键盘（含 Shift 处理）、IDE 硬盘 PIO 读写、COM1 串口镜像 |
-| **文件系统** | MINIX v1 读写、LRU 块缓冲（脏块回写）、inode 缓存、路径解析 |
-| **系统调用** | setup/exit/fork/read/write/open/close/getpid/pause/time/kill/sync |
-| **Shell** | echo / help / ps / clear / exit / pid / time / sys / spawn / sig / ls / cat / sync / wtest |
+| **文件系统** | MINIX v1 读写（含创建文件/目录）、LRU 块缓冲（脏块回写）、inode 缓存、路径解析 |
+| **系统调用** | setup/exit/fork/read/write/open/close/getpid/pause/time/kill/sync/lseek/dup/dup2/getppid/mknod/mkdir |
+| **Shell** | echo / help / ps / clear / exit / pid / time / sys / spawn / sig / ls / cat / sync / wtest / touch / mkdir / ppid / fdtest / seektest |
 
 ## 快速开始
 
@@ -168,6 +168,12 @@ BIOS POST
 | 9 | `sys_time`  | 获取系统时间（写 *tloc） |
 | 10 | `sys_kill`  | 发送信号（默认动作：SIGINT/SIGQUIT/SIGKILL 终止进程） |
 | 11 | `sys_sync`  | 将所有脏缓冲/inode 写回磁盘 |
+| 12 | `sys_lseek` | 文件偏移定位（SEEK_SET/CUR/END） |
+| 13 | `sys_dup`   | 复制文件描述符（共享 f_pos） |
+| 14 | `sys_dup2`  | 复制 fd 到指定槽位 |
+| 15 | `sys_getppid` | 获取父进程 PID |
+| 16 | `sys_mknod` | 创建文件（含父目录项 + inode 位图） |
+| 17 | `sys_mkdir` | 创建目录（含 . / .. 项） |
 
 Shell 通过 `include/unistd.h` 的 `int $0x80` 包装宏实际调用上述接口
 （`sys`/`spawn`/`sig`/`ls`/`cat`/`wtest` 等命令），系统调用路径可运行验证。
@@ -206,7 +212,26 @@ $ help
   ls      - list a directory (via open/read/close)
   cat     - print a file (via open/read/close)
   sync    - write back dirty buffers/inodes
-  wtest   - write /hello.txt through the write path
+  wtest   - write a file [path] through the write path
+  touch   - create a file (sys_mknod)
+  mkdir   - create a directory (sys_mkdir)
+  ppid    - getppid() demo
+  fdtest  - dup() demo: fds share the file offset
+  seektest- lseek() demo: SEEK_SET / SEEK_END
+
+$ mkdir /docs2
+mkdir: created /docs2
+$ touch /docs2/note2.txt
+touch: created /docs2/note2.txt
+$ ls /docs2
+7  .
+1  ..
+8  note2.txt
+$ wtest /docs2/note2.txt
+wtest: wrote 37 bytes to /docs2/note2.txt
+wtest: synced. 'cat /docs2/note2.txt' should show new text
+$ cat /docs2/note2.txt
+Minimal Linux 0.01 write path works!
 
 $ spawn
 [parent] fork #1 -> pid 1
@@ -214,10 +239,6 @@ $ spawn
 [parent] spawn done
 [child] getpid=2 time=10, exiting
 [child] getpid=1 time=10, exiting
-
-$ ps
-PID   STATE   COUNTER
-0     0       29
 ```
 
 ## MINIX 测试磁盘

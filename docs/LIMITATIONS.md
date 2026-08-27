@@ -37,9 +37,9 @@
 | 类型 | MINIX v1 |
 | `sys_setup` | 读超级块到 `super_block[0]`（无分区表解析，dev 硬编码 0x301） |
 | 写路径 | **已打通**：`file_write` → 脏缓冲 → `sync_dev`/`sys_sync` → `ll_rw_block(WRITE)` → `hd_write_sectors` 落盘；inode 同步经 `write_inode` |
-| 缓冲 | `getblk` 复用前回写脏块、并从旧哈希链摘除（避免链环死循环）；**无 writeback 定时器**（需显式 `sync`） |
+| 缓冲 | `getblk` 复用前回写脏块、并从旧哈希链摘除（避免链环死循环）；`iget` 复用脏 inode 槽前先写盘；**无 writeback 定时器**（需显式 `sync`） |
 | Shell ls/cat | **已实现**，走 open/read/close 系统调用；`wtest` 演示写路径 |
-| 文件创建 | 无 `mknod`/`mkdir`/O_CREAT（`new_inode`/`new_block` 已实现但无 syscall 暴露） |
+| 文件创建 | **已实现**：`sys_mknod`（touch）/ `sys_mkdir` 含 `.`/`..` 项、inode/zone 位图、父目录项（目录满/间接块扩容不支持）；`lseek`/`dup`/`dup2`/`getppid` 可用 |
 
 ## 5. 设备
 

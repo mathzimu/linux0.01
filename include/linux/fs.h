@@ -12,6 +12,20 @@
 #define WRITE 1
 #define READA 2
 
+/* minix v1 directory entry (16 bytes: inode + 14-char name) */
+struct minix_dir_entry {
+    unsigned short inode;
+    char name[14];
+};
+
+/* mode bits used by mknod/mkdir */
+#define S_IFMT  00170000
+#define S_IFREG 0100000
+#define S_IFDIR 0040000
+#define S_IRUSR 00400
+#define S_IWUSR 00200
+#define S_IXUSR 00100
+
 struct buffer_head {
     char *b_data;
     unsigned long b_blocknr;
@@ -84,6 +98,10 @@ struct m_inode *iget(int dev, int nr);
 void iput(struct m_inode *inode);
 struct m_inode *namei(const char *pathname);
 void sync_inodes(int dev);
+int dir_lookup(struct m_inode *dir, const char *name, int namelen);
+int dir_add_entry(struct m_inode *dir, const char *name, int namelen,
+                  unsigned short ino);
+int split_path(const char *path, char *dirpath, char *name);
 
 int file_read(struct m_inode *inode, struct file *filp, char *buf, int count);
 int file_write(struct m_inode *inode, struct file *filp, const char *buf, int count);

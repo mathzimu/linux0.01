@@ -20,6 +20,7 @@ static struct task_struct init_task = {
     {NULL,},      /* filp */
     0,            /* uid */
     0,            /* pid */
+    0,            /* parent */
     0,            /* pgrp */
     0,            /* session */
     0,            /* leader */

@@ -110,7 +110,12 @@ static void cmd_help(int argc, char **argv)
     printk("  ls      - list a directory (via open/read/close)\n");
     printk("  cat     - print a file (via open/read/close)\n");
     printk("  sync    - write back dirty buffers/inodes\n");
-    printk("  wtest   - write /hello.txt through the write path\n");
+    printk("  wtest   - write a file [path] through the write path\n");
+    printk("  touch   - create a file (sys_mknod)\n");
+    printk("  mkdir   - create a directory (sys_mkdir)\n");
+    printk("  ppid    - getppid() demo\n");
+    printk("  fdtest  - dup() demo: fds share the file offset\n");
+    printk("  seektest- lseek() demo: SEEK_SET / SEEK_END\n");
 }
 
 static void cmd_ps(int argc, char **argv)
@@ -276,19 +281,99 @@ static void cmd_sync(int argc, char **argv)
 
 static void cmd_writetest(int argc, char **argv)
 {
+    const char *path = (argc > 1) ? argv[1] : "/hello.txt";
     const char *msg = "Minimal Linux 0.01 write path works!\n";
     int fd, n;
 
-    fd = open("/hello.txt", 1);       /* O_WRONLY */
+    fd = open(path, 1);           /* O_WRONLY */
     if (fd < 0) {
-        printk("writetest: open(/hello.txt, write) failed\n");
+        printk("wtest: open(%s, write) failed\n", path);
         return;
     }
     n = write(fd, msg, strlen(msg));
-    printk("writetest: wrote %d bytes\n", n);
+    printk("wtest: wrote %d bytes to %s\n", n, path);
     close(fd);
     sync();
-    printk("writetest: synced. 'cat /hello.txt' should show new text\n");
+    printk("wtest: synced. 'cat %s' should show new text\n", path);
+}
+
+static void cmd_touch(int argc, char **argv)
+{
+    if (argc < 2) {
+        printk("touch: usage: touch <file>\n");
+        return;
+    }
+    if (mknod(argv[1], S_IFREG | 0644) == 0)
+        printk("touch: created %s\n", argv[1]);
+    else
+        printk("touch: failed (exists / bad path?)\n");
+}
+
+static void cmd_mkdir(int argc, char **argv)
+{
+    if (argc < 2) {
+        printk("mkdir: usage: mkdir <dir>\n");
+        return;
+    }
+    if (mkdir(argv[1], S_IFDIR | 0755) == 0)
+        printk("mkdir: created %s\n", argv[1]);
+    else
+        printk("mkdir: failed (exists / bad path?)\n");
+}
+
+static void cmd_ppid(int argc, char **argv)
+{
+    printk("getpid()=%d getppid()=%d\n", getpid(), getppid());
+}
+
+static void cmd_fdtest(int argc, char **argv)
+{
+    int fd, d;
+
+    fd = open("/readme.txt", 0);
+    if (fd < 0) {
+        printk("fdtest: open failed\n");
+        return;
+    }
+    d = dup(fd);
+    printk("fdtest: open=%d dup=%d\n", fd, d);
+
+    if (lseek(fd, 20, SEEK_SET) != 20)
+        printk("fdtest: lseek failed\n");
+    else
+        printk("fdtest: lseek(fd,20) -> dup's offset = %d (shared f_pos)\n",
+               lseek(d, 0, SEEK_CUR));
+
+    close(d);
+    close(fd);
+}
+
+static void cmd_seektest(int argc, char **argv)
+{
+    int fd, n;
+    char buf[17];
+
+    fd = open("/hello.txt", 0);
+    if (fd < 0) {
+        printk("seektest: open failed\n");
+        return;
+    }
+    n = lseek(fd, 4, SEEK_SET);           /* skip "Hell" */
+    if (n != 4) {
+        printk("seektest: lseek failed (%d)\n", n);
+        close(fd);
+        return;
+    }
+    n = read(fd, buf, 10);
+    buf[n] = '\0';
+    printk("seektest: @4 read %d: \"%s\"\n", n, buf);
+
+    n = lseek(fd, -4, SEEK_END);          /* last 4 bytes */
+    n = read(fd, buf, 10);
+    buf[n] = '\0';
+    printk("seektest: @end-4: \"%s\"\n", buf);
+
+    close(fd);
 }
 
 void shell_main(void)
@@ -335,6 +420,16 @@ void shell_main(void)
             cmd_sync(argc, argv);
         } else if (strcmp(argv[0], "wtest") == 0) {
             cmd_writetest(argc, argv);
+        } else if (strcmp(argv[0], "touch") == 0) {
+            cmd_touch(argc, argv);
+        } else if (strcmp(argv[0], "mkdir") == 0) {
+            cmd_mkdir(argc, argv);
+        } else if (strcmp(argv[0], "ppid") == 0) {
+            cmd_ppid(argc, argv);
+        } else if (strcmp(argv[0], "fdtest") == 0) {
+            cmd_fdtest(argc, argv);
+        } else if (strcmp(argv[0], "seektest") == 0) {
+            cmd_seektest(argc, argv);
         } else if (strcmp(argv[0], "exit") == 0) {
             printk("Goodbye.\n");
             exit(0);

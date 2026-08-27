@@ -1,12 +1,8 @@
 #include <linux/kernel.h>
 #include <linux/sched.h>
 #include <linux/fs.h>
+#include <string.h>
 #include <asm/segment.h>
-
-struct minix_dir_entry {
-    unsigned short inode;
-    char name[14];
-};
 
 static int next_entry(struct m_inode *dir, int i,
                       struct buffer_head **bh_out, struct minix_dir_entry **de_out)
@@ -123,4 +119,87 @@ struct m_inode *namei(const char *pathname)
     }
 
     return inode;
+}
+
+/* --- public helpers for file/dir creation (sys_mknod / sys_mkdir) --- */
+
+/* Look up name in dir: 0 if present, -1 if absent. */
+int dir_lookup(struct m_inode *dir, const char *name, int namelen)
+{
+    unsigned short ino;
+    return find_entry(dir, name, namelen, &ino);
+}
+
+/* Add an entry (ino, name) to dir: reuse a free slot or append one.
+   Returns 0 on success, -1 if the directory's zones are exhausted. */
+int dir_add_entry(struct m_inode *dir, const char *name, int namelen,
+                  unsigned short ino)
+{
+    struct buffer_head *bh;
+    struct minix_dir_entry *de;
+    int i, entries, k;
+
+    if (!dir || namelen > 14)
+        return -1;
+
+    entries = dir->i_size / sizeof(struct minix_dir_entry);
+
+    /* 1) reuse a free slot */
+    for (i = 0; i < entries; i++) {
+        if (next_entry(dir, i, &bh, &de))
+            continue;
+        if (de->inode == 0)
+            goto found;
+        brelse(bh);
+    }
+    /* 2) append one (only while the current zone still has room) */
+    i = entries;
+    if (next_entry(dir, i, &bh, &de))
+        return -1;              /* zone exhausted / indirect — unsupported */
+
+found:
+    de->inode = ino;
+    for (k = 0; k < 14; k++)
+        de->name[k] = (k < namelen) ? name[k] : 0;
+    bh->b_dirt = 1;
+    brelse(bh);
+
+    if (i >= entries) {
+        dir->i_size += sizeof(struct minix_dir_entry);
+        dir->i_dirt = 1;
+    }
+    return 0;
+}
+
+/* Split "a/b/c" into dirpath="a/b" and name="c" (name ≤ 14 chars).
+   A bare name resolves against "/".  Returns 0 or -1. */
+int split_path(const char *path, char *dirpath, char *name)
+{
+    const char *slash;
+    int len;
+
+    if (!path || !*path)
+        return -1;
+
+    slash = strrchr(path, '/');
+    if (!slash) {
+        strcpy(dirpath, "/");
+        len = (int)strlen(path);
+        if (len == 0 || len > 14)
+            return -1;
+        strcpy(name, path);
+        return 0;
+    }
+
+    if (slash == path) {
+        strcpy(dirpath, "/");
+    } else {
+        memcpy(dirpath, path, (unsigned long)(slash - path));
+        dirpath[slash - path] = '\0';
+    }
+    len = (int)strlen(slash + 1);
+    if (len == 0 || len > 14)
+        return -1;
+    strcpy(name, slash + 1);
+    return 0;
 }

@@ -23,6 +23,17 @@
 #define __NR_time 9
 #define __NR_kill 10
 #define __NR_sync 11
+#define __NR_lseek 12
+#define __NR_dup 13
+#define __NR_dup2 14
+#define __NR_getppid 15
+#define __NR_mknod 16
+#define __NR_mkdir 17
+
+/* lseek origins */
+#define SEEK_SET 0
+#define SEEK_CUR 1
+#define SEEK_END 2
 
 #define _syscall0(type, name) \
 type name(void) \
@@ -81,5 +92,11 @@ _syscall0(int, pause)
 _syscall1(int, time, unsigned long *, tloc)
 _syscall2(int, kill, int, pid, int, sig)
 _syscall0(int, sync)
+_syscall3(long, lseek, unsigned int, fd, long, offset, int, origin)
+_syscall1(int, dup, unsigned int, fd)
+_syscall2(int, dup2, unsigned int, oldfd, unsigned int, newfd)
+_syscall0(int, getppid)
+_syscall2(int, mknod, const char *, filename, int, mode)
+_syscall2(int, mkdir, const char *, dirname, int, mode)
 
 #endif

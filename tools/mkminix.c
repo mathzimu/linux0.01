@@ -120,7 +120,9 @@ static void put_inode(int num, unsigned short mode, unsigned long size,
     for (i = 0; i < nzones && i < 9; i++)
         di->i_zone[i] = zones[i];
 
-    imap[num / 8] |= (1 << (num % 8));       /* bit 0 unused, inode 1 = bit 1 */
+    /* Kernel convention: imap bit j <-> inode (j+1), i.e. 0-based.
+       (new_inode() scans for a clear bit j and returns inode j+1.) */
+    imap[(num - 1) / 8] |= (1 << ((num - 1) % 8));
 }
 
 static void add_dir_entry(int dir_zone, int ino, const char *name)
