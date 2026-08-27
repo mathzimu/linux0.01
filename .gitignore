@@ -26,3 +26,6 @@ tools/mkminix
 user/user.bin
 user/user.elf
 user/user_data.c
+
+# Auto-generated header deps (-MMD)
+*.d

@@ -32,6 +32,7 @@
 #define __NR_mkdir 17
 #define __NR_unlink 18
 #define __NR_rmdir 19
+#define __NR_waitpid 20
 
 #define NR_OPEN 64
 
@@ -62,6 +63,7 @@ struct task_struct {
     long counter;
     long priority;
     long signal;
+    long exit_code;          /* set on exit; reaped by waitpid() */
     struct tss_struct tss;
     struct file *filp[NR_OPEN];
     unsigned short uid;
@@ -110,6 +112,7 @@ int sys_mknod(const char *filename, int mode);
 int sys_mkdir(const char *dirname, int mode);
 int sys_unlink(const char *filename);
 int sys_rmdir(const char *dirname);
+int sys_waitpid(int pid, unsigned long *stat_addr, int options);
 
 void do_timer(void);
 void do_signal(void);

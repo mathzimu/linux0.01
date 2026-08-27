@@ -4,6 +4,7 @@
 #include <linux/fs.h>
 #include <linux/head.h>
 #include <asm/system.h>
+#include <asm/segment.h>
 #include <string.h>
 
 extern long syscall_esp;
@@ -187,24 +188,27 @@ int sys_exit(int ret)
             schedule();
     }
 
-    for (i = 0; i < NR_TASKS; i++) {
-        if (task[i] == current) {
-            task[i] = NULL;
-            break;
+    /* Become a zombie: keep the task[] slot AND the task page so the
+       parent's waitpid() can reap us (read exit_code, then free the
+       page).  Freeing here would be a use-after-free — the exiting
+       task is still running on this page and the CPU writes its state
+       back into this TSS on the next switch. */
+    current->exit_code = ret;
+    current->state = TASK_ZOMBIE;
+
+    /* notify the parent (SIGCHLD bit + wake if it is waiting in
+       waitpid / sys_pause) */
+    {
+        struct task_struct *parent = task[current->parent];
+        if (parent) {
+            parent->signal |= (1 << 17);   /* SIGCHLD */
+            if (parent->state == TASK_INTERRUPTIBLE)
+                parent->state = TASK_RUNNING;
         }
     }
 
-    current->state = TASK_UNINTERRUPTIBLE;
-    /* Do NOT free_page(current) here: the exiting task is still running
-       on this page (its TSS + kernel stack), and the CPU will write the
-       task state back into this TSS when it switches away.  Freeing it
-       lets a later fork() reuse the page and corrupt that write-back
-       (observed as CR3->0 and a triple fault).  With no wait/zombie
-       reaper, we leak one 4KB page per exit instead — acceptable for
-       a teaching kernel. */
-    /* We are no longer in task[]; schedule() will never switch back to
-       us, so loop on it until the machine switches away for good.
-       (Must NOT cli+hlt here: that would starve every other task.) */
+    /* schedule() never selects a zombie, so this loop runs until the
+       parent reaps us or the machine idles. */
     for (;;)
         schedule();
     cli();
@@ -220,6 +224,56 @@ int sys_getppid(void)
 {
     struct task_struct *p = task[current->parent];
     return p ? p->pid : 0;
+}
+
+/* Wait for a child to become a zombie and reap it: hand out the exit
+   code via *stat_addr and free the child's task page.
+   pid > 0  : wait for that specific child (pid)
+   pid <= 0 : wait for any child
+   options & 1 (WNOHANG): return 0 immediately if no zombie yet.
+   Returns the child pid, 0 (WNOHANG), or -1 (no such child). */
+int sys_waitpid(int pid, unsigned long *stat_addr, int options)
+{
+    int i, current_idx;
+    struct task_struct *p;
+    int found_any;
+
+    for (current_idx = 0; current_idx < NR_TASKS; current_idx++)
+        if (task[current_idx] == current)
+            break;
+
+    while (1) {
+        found_any = 0;
+        for (i = 1; i < NR_TASKS; i++) {       /* children are never slot 0 */
+            p = task[i];
+            if (!p)
+                continue;
+            if (p->parent != current_idx)
+                continue;
+            found_any = 1;
+            if (pid > 0 && p->pid != (unsigned long)pid)
+                continue;
+
+            if (p->state == TASK_ZOMBIE) {
+                /* reap: hand out the exit code, free the task page */
+                if (stat_addr)
+                    put_fs_long(p->exit_code, stat_addr);
+                task[i] = NULL;
+                free_page((unsigned long)p);
+                return p->pid;
+            }
+        }
+
+        if (!found_any)
+            return -1;                          /* no such child */
+        if (options & 1)                        /* WNOHANG */
+            return 0;
+
+        /* sleep until a child exits; sys_exit's SIGCHLD wakes us */
+        current->state = TASK_INTERRUPTIBLE;
+        schedule();
+        current->state = TASK_RUNNING;
+    }
 }
 
 int sys_pause(void)

@@ -10,15 +10,15 @@
 | 模块 | 能力 |
 |------|------|
 | **引导** | BIOS → 实模式引导扇区 → setup（A20/PIC/GDT）→ 保护模式 → head（分页/IDT）→ main |
-| **进程管理** | task_struct 控制块、TSS 硬件上下文切换、最多 64 进程 |
+| **进程管理** | task_struct 控制块、TSS 硬件上下文切换、最多 64 进程、**zombie + waitpid 回收**（退出码传递、任务页释放） |
 | **用户态** | `move_to_user_mode`（iret 切 Ring3）+ 嵌入的用户程序：从 Ring3 经 int 0x80 调用 write/getpid/fork/time/exit——**fork 支持双模式**（system_call 检测调用者 CPL） |
 | **任务调度** | 100Hz 时钟中断、O(N) 优先级轮转、抢占式 |
 | **内存管理** | 4KB 分页、位图页帧分配器、恒等映射 0-4MB |
 | **中断处理** | IDT 256 门、时钟/键盘/硬盘/系统调用 (int 0x80) |
 | **设备驱动** | VGA 80×25 文本控制台、PS/2 键盘（含 Shift 处理）、IDE 硬盘 PIO 读写、COM1 串口镜像 |
 | **文件系统** | MINIX v1 读写（含创建/删除文件与目录）、LRU 块缓冲（脏块回写）、inode 缓存、路径解析 |
-| **系统调用** | setup/exit/fork/read/write/open/close/getpid/pause/time/kill/sync/lseek/dup/dup2/getppid/mknod/mkdir/unlink/rmdir |
-| **Shell** | echo / help / ps / clear / exit / pid / time / sys / spawn / sig / ls / cat / sync / wtest / touch / mkdir / rm / rmdir / ppid / fdtest / seektest |
+| **系统调用** | setup/exit/fork/read/write/open/close/getpid/pause/time/kill/sync/lseek/dup/dup2/getppid/mknod/mkdir/unlink/rmdir/waitpid |
+| **Shell** | echo / help / ps / clear / exit / pid / time / sys / spawn / sig / ls / cat / sync / wtest / touch / mkdir / rm / rmdir / ppid / fdtest / seektest / wait / user |
 
 ## 快速开始
 
@@ -178,6 +178,7 @@ BIOS POST
 | 17 | `sys_mkdir` | 创建目录（含 . / .. 项） |
 | 18 | `sys_unlink` | 删除文件（目录项清除 + inode/zone 位图回收） |
 | 19 | `sys_rmdir`  | 删除空目录（. / .. 校验 + 父目录 nlinks 递减） |
+| 20 | `sys_waitpid` | 等待子进程并回收僵尸（退出码传递 + 任务页释放） |
 
 Shell 通过 `include/unistd.h` 的 `int $0x80` 包装宏实际调用上述接口
 （`sys`/`spawn`/`sig`/`ls`/`cat`/`wtest` 等命令），系统调用路径可运行验证。

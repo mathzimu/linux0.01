@@ -28,7 +28,7 @@
 |------|------|
 | 调度 | O(N) counter + priority，硬件 `ljmp` TSS 切换（`schedule()` 不预改 current，由 `switch_to` 内 `xchg`） |
 | fork | 复制 task_struct + 内核栈帧；`f_count++`；pid == task[] 槽位 |
-| exit | 摘掉 task 槽；**不释放任务页**（无 wait/zombie 回收，泄漏 4KB/进程，避免 use-after-free） |
+| exit | 转为 **TASK_ZOMBIE**（保留 task[] 槽与任务页，发 SIGCHLD 唤醒父）；由父 `waitpid` 回收（退出码经 `*stat_addr` 传出 + 释放任务页）；init(task[0]) 保持空闲锚点不退出 |
 | 信号 | **最小投递已实现**：`sys_kill` 置位 + 唤醒 TASK_INTERRUPTIBLE；`ret_from_sys_call` 调用 `do_signal`；默认动作 SIGINT/SIGQUIT/SIGKILL → exit(128+sig)，其余忽略 |
 | 用户态 | 无 `move_to_user_mode`，Shell 在内核态直接调用；**无自定义信号处理器投递**（仅默认动作） |
 

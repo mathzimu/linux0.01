@@ -154,6 +154,7 @@ static void cmd_help(int argc, char **argv)
     printk("  ppid    - getppid() demo\n");
     printk("  fdtest  - dup() demo: fds share the file offset\n");
     printk("  seektest- lseek() demo: SEEK_SET / SEEK_END\n");
+    printk("  wait    - fork + waitpid demo: child exit(42)\n");
     printk("  user    - run the embedded Ring3 user program\n");
 }
 
@@ -206,7 +207,7 @@ static void cmd_sys(int argc, char **argv)
 
 static void cmd_spawn(int argc, char **argv)
 {
-    int i;
+    int pids[2], n = 0, i;
 
     for (i = 0; i < 2; i++) {
         int pid = fork();
@@ -220,7 +221,16 @@ static void cmd_spawn(int argc, char **argv)
                    getpid(), time(NULL));
             exit(0);
         }
+        pids[n++] = pid;
         printk("[parent] fork #%d -> pid %d\n", i + 1, pid);
+    }
+
+    /* reap every child so no zombies pile up */
+    for (i = 0; i < n; i++) {
+        unsigned long code = 0;
+        int r = waitpid(pids[i], &code, 0);
+        printk("[parent] waitpid(%d) = %d, exit_code=%d\n",
+               pids[i], r, code);
     }
     printk("[parent] spawn done\n");
 }
@@ -246,7 +256,33 @@ static void cmd_sig(int argc, char **argv)
         printk("[parent] kill() ok\n");
     else
         printk("[parent] kill() failed\n");
+
+    /* reap the child: SIGINT kills it via do_signal -> exit(130) */
+    {
+        unsigned long code = 0;
+        int r = waitpid(pid, &code, 0);
+        printk("[parent] waitpid=%d exit_code=%d (128+2)\n", r, code);
+    }
     printk("[parent] sig done\n");
+}
+
+static void cmd_wait(int argc, char **argv)
+{
+    int pid = fork();
+    unsigned long code = 0;
+    int r;
+
+    if (pid < 0) {
+        printk("wait: fork() failed\n");
+        return;
+    }
+    if (pid == 0) {
+        printk("[child] pid=%d exiting with 42\n", getpid());
+        exit(42);
+    }
+    printk("[parent] child pid=%d, waiting...\n", pid);
+    r = waitpid(pid, &code, 0);
+    printk("[parent] waitpid(%d) = %d, exit_code=%d\n", pid, r, code);
 }
 
 /* --- filesystem commands (open/read/close go through int 0x80) --- */
@@ -497,6 +533,8 @@ void shell_main(void)
             cmd_fdtest(argc, argv);
         } else if (strcmp(argv[0], "seektest") == 0) {
             cmd_seektest(argc, argv);
+        } else if (strcmp(argv[0], "wait") == 0) {
+            cmd_wait(argc, argv);
         } else if (strcmp(argv[0], "user") == 0) {
             cmd_user(argc, argv);
         } else if (strcmp(argv[0], "exit") == 0) {

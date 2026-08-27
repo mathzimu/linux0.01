@@ -16,6 +16,7 @@ static struct task_struct init_task = {
     15,           /* counter */
     15,           /* priority */
     0,            /* signal */
+    0,            /* exit_code */
     {0},          /* tss */
     {NULL,},      /* filp */
     0,            /* uid */

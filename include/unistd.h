@@ -31,6 +31,10 @@
 #define __NR_mkdir 17
 #define __NR_unlink 18
 #define __NR_rmdir 19
+#define __NR_waitpid 20
+
+/* waitpid options */
+#define WNOHANG 1
 
 /* lseek origins */
 #define SEEK_SET 0
@@ -102,5 +106,6 @@ _syscall2(int, mknod, const char *, filename, int, mode)
 _syscall2(int, mkdir, const char *, dirname, int, mode)
 _syscall1(int, unlink, const char *, filename)
 _syscall1(int, rmdir, const char *, dirname)
+_syscall3(int, waitpid, int, pid, unsigned long *, stat_addr, int, options)
 
 #endif

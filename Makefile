@@ -31,7 +31,7 @@ else ifneq ($(shell command -v i386-elf-gcc 2>/dev/null),)
   ASFLAGS =
   CFLAGS  = -Wall -O0 -fstrength-reduce -fomit-frame-pointer \
             -nostdinc -Iinclude -fno-stack-protector -fno-builtin \
-            -ffreestanding
+            -ffreestanding -MMD -MP
   LDFLAGS = -T kernel.ld -e startup_32
 else ifneq ($(shell command -v i686-elf-gcc 2>/dev/null),)
   # macOS with Homebrew i686-elf-* cross-compiler
@@ -42,7 +42,7 @@ else ifneq ($(shell command -v i686-elf-gcc 2>/dev/null),)
   ASFLAGS =
   CFLAGS  = -Wall -O0 -fstrength-reduce -fomit-frame-pointer \
             -nostdinc -Iinclude -fno-stack-protector -fno-builtin \
-            -ffreestanding
+            -ffreestanding -MMD -MP
   LDFLAGS = -T kernel.ld -e startup_32
 else
   # fallback: Docker
@@ -143,7 +143,11 @@ docker-build:
 	$(DOCKER) run --rm -v $(PWD):/kernel -w /kernel $(DOCKER_IMAGE) \
 	    make clean all
 
+# auto header dependencies (-MMD)
+-include $(OBJS:.o=.d) $(HEAD_OBJ:.o=.d) $(SETUP_OBJ:.o=.d) $(BOOT_OBJ:.o=.d)
+
 clean:
+	rm -f *.d */*.d
 	rm -f Image kernel.iso kernel/system kernel/system.bin
 	rm -f boot/boot boot/setup
 	rm -f $(OBJS) $(HEAD_OBJ) $(SETUP_OBJ) $(BOOT_OBJ)
