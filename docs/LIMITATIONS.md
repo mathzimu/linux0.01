@@ -7,9 +7,11 @@
 | 项目 | 事实 |
 |------|------|
 | Shell | `main()` → `shell_main()`，始终在 **Ring 0** |
-| `move_to_user_mode` | **源码中不存在** |
-| USER_CS / USER_DS | GDT 中有定义（`0x1B` / `0x23`），system_call 会把 FS 设为 USER_DS |
-| 真实用户进程 | 未做完整 Ring3 落地（无独立用户栈切换进 shell） |
+| `move_to_user_mode` | **已实现**（`run_user_program`）：iret 切到 Ring3 运行嵌入的用户程序（`user` 命令） |
+| USER_CS / USER_DS | GDT 中定义（`0x1B` / `0x23`）；system_call 会把 FS 设为 USER_DS |
+| 用户程序 | 链接到 0x200000（内核复制后运行）、用户栈 0x3FF000；经 int 0x80 调 write/getpid/time 后 exit；**无 execve**（程序内嵌，不从文件系统加载） |
+| 用户态 fork | **未实现**：fork 的栈帧恢复（`syscall_esp` 偏移）基于 Ring0 调用，用户态调用会错 |
+| 内存隔离 | 页表 U/S=1，用户可访问全部 0–4MB（教学内核刻意不隔离） |
 
 ## 2. 内存
 

@@ -10,6 +10,42 @@
 
 extern int sys_exit(int ret);
 
+#define USER_PROG_ADDR 0x200000
+#define USER_STACK_TOP 0x3FF000
+
+/* Copy the embedded user program to USER_PROG_ADDR and iret into Ring3.
+   The user program runs with cs=USER_CS (0x1B), ss/ds/es/fs/gs=USER_DS
+   (0x23) and its own stack at USER_STACK_TOP; int 0x80 automatically
+   switches to the kernel stack via TSS.esp0 and iret returns to Ring3.
+   This never returns (the user program ends with exit()). */
+void run_user_program(void)
+{
+    extern const unsigned char user_prog[];
+    extern const unsigned long user_prog_len;
+    unsigned long size = user_prog_len;
+
+    memcpy((void *)USER_PROG_ADDR, user_prog, size);
+
+    __asm__ volatile(
+        "movl %0, %%eax\n\t"      /* user stack top */
+        "pushl $0x23\n\t"         /* ss = USER_DS */
+        "pushl %%eax\n\t"         /* user esp */
+        "pushfl\n\t"              /* eflags */
+        "pushl $0x1b\n\t"         /* cs = USER_CS */
+        "pushl %1\n\t"            /* eip = user program */
+        "iret\n\t"
+        :
+        : "r"((unsigned long)USER_STACK_TOP), "r"((unsigned long)USER_PROG_ADDR)
+        : "eax");
+}
+
+static void cmd_user(int argc, char **argv)
+{
+    printk("user: switching to Ring3...\n");
+    run_user_program();
+    printk("user: returned to kernel (unexpected)\n");
+}
+
 #define SHELL_BUF_SIZE 256
 #define MAX_ARGS 16
 
@@ -118,6 +154,7 @@ static void cmd_help(int argc, char **argv)
     printk("  ppid    - getppid() demo\n");
     printk("  fdtest  - dup() demo: fds share the file offset\n");
     printk("  seektest- lseek() demo: SEEK_SET / SEEK_END\n");
+    printk("  user    - run the embedded Ring3 user program\n");
 }
 
 static void cmd_ps(int argc, char **argv)
@@ -460,6 +497,8 @@ void shell_main(void)
             cmd_fdtest(argc, argv);
         } else if (strcmp(argv[0], "seektest") == 0) {
             cmd_seektest(argc, argv);
+        } else if (strcmp(argv[0], "user") == 0) {
+            cmd_user(argc, argv);
         } else if (strcmp(argv[0], "exit") == 0) {
             printk("Goodbye.\n");
             exit(0);

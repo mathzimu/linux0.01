@@ -59,7 +59,8 @@ OBJS = kernel/main.o kernel/sched.o kernel/process.o kernel/sys.o \
        drivers/console.o drivers/keyboard.o drivers/hd.o drivers/tty_io.o \
        drivers/serial.o \
        lib/string.o lib/ctype.o lib/malloc.o lib/close.o \
-       init/shell.o
+       init/shell.o \
+       user/user_data.o
 
 HEAD_OBJ = boot/head.o
 SETUP_OBJ = boot/setup.o
@@ -84,8 +85,31 @@ boot/setup: $(SETUP_OBJ)
 	$(OBJCOPY) -O binary $(SETUP_OBJ) boot/setup
 
 # Link kernel ELF
-kernel/system: $(HEAD_OBJ) $(OBJS)
+kernel/system: $(HEAD_OBJ) $(OBJS) user/user.bin
 	$(LD) $(LDFLAGS) -o kernel/system $(HEAD_OBJ) $(OBJS)
+
+# User-mode program: linked at 0x200000, embedded into the kernel and
+# copied there at runtime by run_user_program().
+user/user.bin: user/user.o
+	$(LD) -m elf_i386 -Ttext 0x200000 -o user/user.elf user/user.o 2>/dev/null \
+	    || $(LD) -Ttext 0x200000 -o user/user.elf user/user.o
+	$(OBJCOPY) -O binary user/user.elf user/user.bin
+
+user/user.o: user/user.s
+	$(AS) $(ASFLAGS) -o $@ $<
+
+# user_data.c embeds user.bin as a C array (avoids objcopy's NOBITS
+# section-layout quirks); rebuild it whenever the user program changes
+user/user_data.c: user/user.bin
+	python3 -c "\
+d = open('user/user.bin','rb').read(); f = open('user/user_data.c','w'); \
+f.write('/* Auto-generated */\\n#include <linux/kernel.h>\\n'); \
+f.write('const unsigned char user_prog[] = {\\n'); \
+[ f.write('    ' + ','.join('0x%02x'%b for b in d[i:i+12]) + ',\\n') for i in range(0,len(d),12) ]; \
+f.write('};\\nconst unsigned long user_prog_len = %d;\\n' % len(d)); f.close()"
+
+user/user_data.o: user/user_data.c
+	$(CC) $(CFLAGS) -c -o $@ $<
 
 # Convert kernel to raw binary
 kernel/system.bin: kernel/system

@@ -21,3 +21,8 @@ core
 # MINIX test disk (generated)
 minix.img
 tools/mkminix
+
+# User program build outputs
+user/user.bin
+user/user.elf
+user/user_data.c

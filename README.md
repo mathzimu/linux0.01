@@ -11,6 +11,7 @@
 |------|------|
 | **引导** | BIOS → 实模式引导扇区 → setup（A20/PIC/GDT）→ 保护模式 → head（分页/IDT）→ main |
 | **进程管理** | task_struct 控制块、TSS 硬件上下文切换、最多 64 进程 |
+| **用户态** | `move_to_user_mode`（iret 切 Ring3）+ 嵌入的用户程序：从 Ring3 经 int 0x80 调用 write/getpid/time/exit |
 | **任务调度** | 100Hz 时钟中断、O(N) 优先级轮转、抢占式 |
 | **内存管理** | 4KB 分页、位图页帧分配器、恒等映射 0-4MB |
 | **中断处理** | IDT 256 门、时钟/键盘/硬盘/系统调用 (int 0x80) |
@@ -96,7 +97,8 @@ linux0.01/
 │   ├── serial.c   # COM1 串口（控制台镜像，供无头测试）
 │   └── tty_io.c   # TTY 层
 ├── init/          # 用户态初始化
-│   └── shell.c    # Shell（含系统调用/文件系统演示命令）
+│   └── shell.c    # Shell（含系统调用/文件系统演示命令 + run_user_program）
+├── user/          # 嵌入的用户态程序（user.s → user.bin → C 数组）
 ├── lib/           # C 标准库子集
 ├── include/       # 头文件（含 unistd.h：int 0x80 系统调用包装宏）
 ├── tools/         # 构建工具
@@ -124,8 +126,8 @@ linux0.01/
 4. [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md)：当前实现边界  
 5. [`docs/TUTORIAL.md`](docs/TUTORIAL.md) + `docs/tutorial/`：按文件读源码  
 
-**关键事实：** Shell 在 **内核态** 运行（`main` 直接 `shell_main`）；分页恒等映射 **0–4MB**；无 `move_to_user_mode`；
-fork/调度/信号/文件读写路径均可通过 Shell 命令实测（`spawn`/`sig`/`ls`/`cat`/`wtest`）。
+**关键事实：** Shell 在 **内核态** 运行（`main` 直接 `shell_main`）；`user` 命令通过 `iret` 切换到 **Ring3** 运行嵌入的用户程序（链接地址 0x200000，用户栈 0x3FF000），用户程序经 `int 0x80` 调系统调用后 `exit`；
+分页恒等映射 **0–4MB**（页表 U/S=1，教学内核无隔离）；fork/调度/信号/文件读写路径均可通过 Shell 命令实测（`spawn`/`sig`/`ls`/`cat`/`wtest`）。
 
 ## 启动流程
 
