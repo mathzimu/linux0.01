@@ -9,3 +9,7 @@
 int printf(const char *fmt, ...);
 
 #endif
+
+/* user-mode heap allocator (first-fit free list + bump) */
+void *malloc(unsigned long size);
+void free(void *p);

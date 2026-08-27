@@ -1,6 +1,10 @@
-/* 用户态 printf：freestanding 实现，输出到 fd 1（write 系统调用）。 */
+/* 用户态 printf + malloc/free：freestanding 实现，输出到 fd 1。 */
 
 #include "lib.h"
+
+#ifndef NULL
+#define NULL ((void *)0)
+#endif
 
 typedef __builtin_va_list va_list;
 #define va_start(v, l) __builtin_va_start(v, l)
@@ -117,4 +121,59 @@ int printf(const char *fmt, ...)
     }
     va_end(args);
     return n;
+}
+
+/* --- user-mode heap ---------------------------------------------------
+   Region: [0x310000, 0x3FE000) — above the kernel buffer cache and
+   below the user stack (top 0x3FF000).  Free chunks form a singly
+   linked list; allocation is first-fit, then bump from the top. */
+
+#define HEAP_START 0x310000UL
+#define HEAP_END   0x3FE000UL
+
+typedef struct chunk {
+    unsigned long size;          /* usable data size */
+    struct chunk *next;          /* free-list link */
+} chunk_t;                       /* 8-byte header */
+
+static chunk_t *free_list = NULL;
+static unsigned long heap_top = HEAP_START;
+
+void *malloc(unsigned long size)
+{
+    chunk_t *c, *prev = NULL;
+
+    size = (size + 7) & ~7UL;
+    if (size == 0)
+        size = 8;
+
+    /* first-fit over the free list */
+    for (c = free_list; c; prev = c, c = c->next) {
+        if (c->size >= size) {
+            if (prev)
+                prev->next = c->next;
+            else
+                free_list = c->next;
+            return (void *)(c + 1);
+        }
+    }
+
+    /* no reusable chunk: bump */
+    if (heap_top + sizeof(chunk_t) + size > HEAP_END)
+        return NULL;
+    c = (chunk_t *)heap_top;
+    heap_top += sizeof(chunk_t) + size;
+    c->size = size;
+    return (void *)(c + 1);
+}
+
+void free(void *p)
+{
+    chunk_t *c;
+
+    if (!p)
+        return;
+    c = (chunk_t *)p - 1;
+    c->next = free_list;
+    free_list = c;
 }
