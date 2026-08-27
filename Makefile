@@ -98,12 +98,6 @@ user/user.bin: user/user.o
 user/user.o: user/user.s
 	$(AS) $(ASFLAGS) -o $@ $<
 
-# User ELF program loaded by execve() from the MINIX filesystem
-user/hello.elf: user/prog.c user/crt.s
-	$(CC) $(CFLAGS) -c -o user/prog.o user/prog.c
-	$(AS) $(ASFLAGS) -o user/crt.o user/crt.s
-	$(LD) -Ttext 0x200000 -o $@ user/crt.o user/prog.o
-
 # user_data.c embeds user.bin as a C array (avoids objcopy's NOBITS
 # section-layout quirks); rebuild it whenever the user program changes
 user/user_data.c: user/user.bin
@@ -133,6 +127,24 @@ Image: boot/boot boot/setup kernel/system.bin tools/build
 # Bootable ISO (El Torito)
 iso: Image
 	@scripts/mkiso.sh Image kernel.iso
+
+# --- user programs (execve): make prog NAME=hello -------------------
+# user/NAME.c + crt.o + lib.o -> user/NAME.elf -> injected into minix.img
+user/crt.o: user/crt.s
+	$(AS) $(ASFLAGS) -o $@ $<
+
+user/lib.o: user/lib.c user/lib.h
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+user/%.o: user/%.c user/lib.h
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+user/%.elf: user/crt.o user/%.o user/lib.o
+	$(LD) -m elf_i386 -Ttext 0x200000 -o $@ user/crt.o user/$*.o user/lib.o 2>/dev/null \
+	    || $(LD) -Ttext 0x200000 -o $@ user/crt.o user/$*.o user/lib.o
+
+prog: tools/mkminix user/$(NAME).elf
+	tools/mkminix minix.img user/$(NAME).elf:$(NAME)
 
 # MINIX v1 test disk image (used with: qemu -hda minix.img)
 minix.img: tools/mkminix user/hello.elf

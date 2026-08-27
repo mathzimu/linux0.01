@@ -143,6 +143,77 @@ static void fill(int zone, const char *text, int len)
         p[i] = text[i % len];
 }
 
+static int next_inode = 7;      /* inodes 1-6 are used by the base fs */
+
+/* Inject an ELF file as a root-dir file: spec = "path:name". */
+static int inject_elf(const char *spec, int root_zone)
+{
+    static unsigned char buf[512 * 1024];
+    char path[160], name[15];
+    const char *colon;
+    FILE *ef;
+    int elen, nz, i;
+    unsigned short zones[9] = {0};
+    unsigned short data_zones[520];
+
+    colon = strrchr(spec, ':');
+    if (!colon || colon == spec) {
+        fprintf(stderr, "mkminix: bad inject spec '%s' (want path:name)\n", spec);
+        return -1;
+    }
+    if (colon - spec >= (int)sizeof(path)) return -1;
+    memcpy(path, spec, (size_t)(colon - spec));
+    path[colon - spec] = '\0';
+    if ((int)strlen(colon + 1) > 14) {
+        fprintf(stderr, "mkminix: name too long in '%s'\n", spec);
+        return -1;
+    }
+    strcpy(name, colon + 1);
+
+    ef = fopen(path, "rb");
+    if (!ef) {
+        fprintf(stderr, "mkminix: cannot open %s\n", path);
+        return -1;
+    }
+    elen = (int)fread(buf, 1, sizeof(buf), ef);
+    fclose(ef);
+
+    nz = (elen + BLOCK - 1) / BLOCK;
+    if (nz > 512 + 7 || next_inode > NINODES) {
+        fprintf(stderr, "mkminix: %s too big / no inodes left\n", path);
+        return -1;
+    }
+    for (i = 0; i < nz; i++) {
+        int len = elen - i * BLOCK;
+        data_zones[i] = alloc_zone();
+        if (len > BLOCK)
+            len = BLOCK;
+        memset(img + data_zones[i] * BLOCK, 0, BLOCK);
+        memcpy(img + data_zones[i] * BLOCK, buf + i * BLOCK, len);
+    }
+    if (nz <= 7) {
+        for (i = 0; i < nz; i++)
+            zones[i] = data_zones[i];
+        put_inode(next_inode, MODE_REG, (unsigned long)elen, 1, zones, nz);
+    } else {
+        /* 7 direct + single indirect */
+        int ind = alloc_zone();
+        unsigned short *indp = (unsigned short *)(img + ind * BLOCK);
+        memset(img + ind * BLOCK, 0, BLOCK);
+        for (i = 0; i < nz - 7; i++)
+            indp[i] = data_zones[7 + i];
+        for (i = 0; i < 7; i++)
+            zones[i] = data_zones[i];
+        zones[7] = (unsigned short)ind;
+        put_inode(next_inode, MODE_REG, (unsigned long)elen, 1, zones, 8);
+    }
+    add_dir_entry(root_zone, next_inode, name);
+    printf("mkminix: injected %s as /%s (inode %d, %d bytes, %d zones)\n",
+           path, name, next_inode, elen, nz);
+    next_inode++;
+    return 0;
+}
+
 int main(int argc, char *argv[])
 {
     const char *out = argc > 1 ? argv[1] : "minix.img";
@@ -155,16 +226,14 @@ int main(int argc, char *argv[])
 
     put_super();
 
-    /* --- root dir (inode 1): hello.txt, readme.txt, big.txt, docs,
-       hello (ELF for execve) --- */
+    /* --- root dir (inode 1): base files + injected programs --- */
     root_zone = alloc_zone();
-    put_inode(1, MODE_DIR, 5 * sizeof(struct dir_entry), 2,
+    put_inode(1, MODE_DIR, 4 * sizeof(struct dir_entry), 2,
               (unsigned short[]){root_zone}, 1);
     add_dir_entry(root_zone, 2, "hello.txt");
     add_dir_entry(root_zone, 3, "readme.txt");
     add_dir_entry(root_zone, 4, "big.txt");
     add_dir_entry(root_zone, 5, "docs");
-    add_dir_entry(root_zone, 7, "hello");
 
     /* --- hello.txt (inode 3) --- */
     {
@@ -223,38 +292,23 @@ int main(int argc, char *argv[])
                   (unsigned short[]){zone}, 1);
     }
 
-    /* --- /hello (inode 7): the execve demo ELF, read from file --- */
+    /* --- injected programs: always the default user/hello.elf:hello
+       (if it exists), plus any "path:name" arguments --- */
     {
-        static unsigned char elf_buf[64 * 1024];
-        FILE *ef = fopen("user/hello.elf", "rb");
-        int elen, nz, i;
-
-        if (!ef) {
-            fprintf(stderr, "mkminix: cannot open user/hello.elf\n");
-            return 1;
+        int inj = 0;
+        FILE *hf = fopen("user/hello.elf", "rb");
+        if (hf) {
+            fclose(hf);
+            inject_elf("user/hello.elf:hello", root_zone);
         }
-        elen = (int)fread(elf_buf, 1, sizeof(elf_buf), ef);
-        fclose(ef);
-
-        nz = (elen + BLOCK - 1) / BLOCK;
-        if (nz > 7) {
-            fprintf(stderr, "mkminix: hello.elf too big (%d zones)\n", nz);
-            return 1;
-        }
-        {
-            unsigned short zones[9] = {0};
-            for (i = 0; i < nz; i++) {
-                int len = elen - i * BLOCK;
-                zones[i] = alloc_zone();
-                if (len > BLOCK)
-                    len = BLOCK;
-                memset(img + zones[i] * BLOCK, 0, BLOCK);
-                memcpy(img + zones[i] * BLOCK, elf_buf + i * BLOCK, len);
-            }
-            put_inode(7, MODE_REG, (unsigned long)elen, 1, zones, nz);
-        }
-        printf("mkminix: embedded hello.elf (%d bytes, %d zones)\n",
-               elen, nz);
+        for (i = 2; i < argc; i++)
+            if (inject_elf(argv[i], root_zone) == 0)
+                inj++;
+        (void)inj;
+        /* refresh root dir size (4 base entries + injected) */
+        put_inode(1, MODE_DIR,
+                  (4UL + (unsigned long)(next_inode - 7)) * sizeof(struct dir_entry),
+                  2, (unsigned short[]){root_zone}, 1);
     }
 
 

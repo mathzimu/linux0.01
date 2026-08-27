@@ -29,4 +29,4 @@ user/user_data.c
 
 # Auto-generated header deps (-MMD)
 *.d
-user/hello.elf
+user/*.elf

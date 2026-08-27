@@ -43,7 +43,7 @@
 #define SEEK_END 2
 
 #define _syscall0(type, name) \
-type name(void) \
+static inline type name(void) \
 { \
     long __res; \
     __asm__ volatile("int $0x80" \
@@ -54,7 +54,7 @@ type name(void) \
 }
 
 #define _syscall1(type, name, atype, a) \
-type name(atype a) \
+static inline type name(atype a) \
 { \
     long __res; \
     __asm__ volatile("int $0x80" \
@@ -65,7 +65,7 @@ type name(atype a) \
 }
 
 #define _syscall2(type, name, atype, a, btype, b) \
-type name(atype a, btype b) \
+static inline type name(atype a, btype b) \
 { \
     long __res; \
     __asm__ volatile("int $0x80" \
@@ -76,7 +76,7 @@ type name(atype a, btype b) \
 }
 
 #define _syscall3(type, name, atype, a, btype, b, ctype, c) \
-type name(atype a, btype b, ctype c) \
+static inline type name(atype a, btype b, ctype c) \
 { \
     long __res; \
     __asm__ volatile("int $0x80" \

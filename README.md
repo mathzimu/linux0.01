@@ -247,6 +247,28 @@ $ spawn
 [child] getpid=1 time=10, exiting
 ```
 
+## 编写并运行你自己的程序
+
+```c
+// user/myprog.c —— 写一个 main() 即可
+#include "lib.h"
+int main(int argc, char *argv[]) {
+    printf("hi, %s! argc=%d\n", argv[1], argc);
+    return 7;
+}
+```
+```bash
+make prog NAME=myprog        # 编译 + 注入 minix.img（保留已有程序）
+# QEMU 里：
+$ exec /myprog world
+hi, world! argc=2
+exec: child 1 exit_code=7
+```
+
+用户态库 `user/lib.h` 提供：`printf`（%d %u %x %s %c %p）、
+`unistd.h` 的全部系统调用包装（open/read/write/close/fork/waitpid/execve/mkdir/rm...）、
+`include/string.h` 字符串函数。已内置示例：`hello.c`（printf + argv）、`catfile.c`（读文件）。
+
 ## MINIX 测试磁盘
 
 ```bash
