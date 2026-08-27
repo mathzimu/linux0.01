@@ -11,7 +11,7 @@
 |------|------|
 | **引导** | BIOS → 实模式引导扇区 → setup（A20/PIC/GDT）→ 保护模式 → head（分页/IDT）→ main |
 | **进程管理** | task_struct 控制块、TSS 硬件上下文切换、最多 64 进程 |
-| **用户态** | `move_to_user_mode`（iret 切 Ring3）+ 嵌入的用户程序：从 Ring3 经 int 0x80 调用 write/getpid/time/exit |
+| **用户态** | `move_to_user_mode`（iret 切 Ring3）+ 嵌入的用户程序：从 Ring3 经 int 0x80 调用 write/getpid/fork/time/exit——**fork 支持双模式**（system_call 检测调用者 CPL） |
 | **任务调度** | 100Hz 时钟中断、O(N) 优先级轮转、抢占式 |
 | **内存管理** | 4KB 分页、位图页帧分配器、恒等映射 0-4MB |
 | **中断处理** | IDT 256 门、时钟/键盘/硬盘/系统调用 (int 0x80) |

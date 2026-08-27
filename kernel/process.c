@@ -7,7 +7,12 @@
 #include <string.h>
 
 extern long syscall_esp;
+extern int syscall_cpl;
 extern void ret_from_sys_call(void);
+
+/* user stack area (matches init/shell.c run_user_program) */
+#define USER_STACK_TOP      0x3FF000UL
+#define CHILD_USER_STACK_TOP 0x3E0000UL
 
 int sys_fork(void)
 {
@@ -60,38 +65,63 @@ int sys_fork(void)
      * contract with boot/head.s `system_call`; do not change one side
      * without the other.
      *
-     * At `int $0x80` entry (ring0), the CPU pushes eip/cs/eflags and
-     * head.s records `syscall_esp` = that esp, then pushes
+     * At `int $0x80` entry the CPU pushes the exception frame onto the
+     * kernel stack (via TSS.esp0 for a ring3 caller) and head.s records
+     * `syscall_esp` = that esp, then pushes
      *   ds es fs gs eax ebp edi esi edx ecx ebx   (11 longs, downward)
      * so the full frame, low -> high, is:
-     *   ebx ecx edx esi edi ebp eax gs fs es ds | eip cs eflags
-     * (slot -11) ...                        (slot -1)  (slot 0..+2)
-     * ret_from_sys_call pops ebx..ebp, eax, gs..ds (11) then iret
-     * pops eip/cs/eflags (3) = 14 longs total.
+     *   ebx ecx edx esi edi ebp eax gs fs es ds | eip cs eflags [esp ss]
+     * (slot -11) ...                        (slot -1)  (slot 0..+2 [+3 +4])
+     * The trailing esp/ss are present only for a ring3 caller
+     * (syscall_cpl == 3), so the frame is 14 longs (ring0) or 16
+     * (ring3); ret_from_sys_call pops ebx..ebp, eax, gs..ds (11) and
+     * iret pops 3 or 5 longs accordingly.
      *
-     * - parent_sp   = syscall_esp + 12 : first free slot ABOVE the
-     *   int-frame; everything above it is the caller's live C frames
-     *   (cmd_*, shell_main, ...).  We copy [parent_sp, esp0) wholesale
-     *   so the child "returns into" a faithful copy of those frames.
-     * - child_frame = child_sp - 14*4 : the 14-long syscall-return
-     *   frame the child will consume at ret_from_sys_call, copied from
+     * - parent_sp   = syscall_esp + (12 ring0 / 20 ring3) : first free
+     *   slot ABOVE the int-frame; everything above it is the caller's
+     *   live C frames.  We copy [parent_sp, esp0) wholesale so the
+     *   child "returns into" a faithful copy of those frames.
+     * - child_frame = child_sp - words*4 : the syscall-return frame
+     *   the child consumes at ret_from_sys_call, copied from
      *   parent_frame = syscall_esp - 11*4 (the ebx slot).
      * ------------------------------------------------------------------ */
     parent_top = current->tss.esp0;              /* parent's kernel stack top */
-    parent_sp  = syscall_esp + 12;               /* parent's esp on fork return */
-    size = parent_top - parent_sp;
+    child_top = (long)p + PAGE_SIZE;             /* child's kernel stack top */
+    if (syscall_cpl == 3) {
+        /* ring3 caller: 16-word frame, and copy the user stack so the
+           child resumes with its own copy (iret pops user esp/ss) */
+        int words = 16;
+        long user_esp, user_size, child_user_esp;
 
-    child_top = (long)p + PAGE_SIZE;
-    child_sp  = child_top - size;
+        parent_sp = syscall_esp + 20;            /* above ss */
+        size = parent_top - parent_sp;
+        child_sp = child_top - size;
+        memcpy((void *)child_sp, (void *)parent_sp, size);
 
-    /* copy the parent's live stack frames (locals, return addresses) */
-    memcpy((void *)child_sp, (void *)parent_sp, size);
+        child_frame  = (long *)(child_sp - words * sizeof(long));
+        parent_frame = (long *)(syscall_esp - 11 * sizeof(long));
+        for (i = 0; i < words; i++)
+            child_frame[i] = parent_frame[i];
 
-    /* build the syscall-return frame just below the copied stack */
-    child_frame  = (long *)(child_sp - 14 * sizeof(long));
-    parent_frame = (long *)(syscall_esp - 11 * sizeof(long)); /* ebx slot */
-    for (i = 0; i < 14; i++)
-        child_frame[i] = parent_frame[i];
+        /* user stack: [user_esp, 0x3FF000) -> child area below 0x3E0000 */
+        user_esp = *(long *)(syscall_esp + 12);
+        user_size = USER_STACK_TOP - user_esp;
+        child_user_esp = CHILD_USER_STACK_TOP - user_size;
+        if (user_size < 0x10000)
+            memcpy((void *)child_user_esp, (void *)user_esp, user_size);
+        child_frame[14] = child_user_esp;        /* esp slot */
+        /* child_frame[15] (ss) stays USER_DS from the parent copy */
+    } else {
+        /* ring0 caller: 14-word frame (spawn / kernel-side fork) */
+        parent_sp  = syscall_esp + 12;
+        size = parent_top - parent_sp;
+        child_sp  = child_top - size;
+        memcpy((void *)child_sp, (void *)parent_sp, size);
+        child_frame  = (long *)(child_sp - 14 * sizeof(long));
+        parent_frame = (long *)(syscall_esp - 11 * sizeof(long));
+        for (i = 0; i < 14; i++)
+            child_frame[i] = parent_frame[i];
+    }
 
     p->tss.back_link = 0;
     p->tss.esp0 = (long)p + PAGE_SIZE;

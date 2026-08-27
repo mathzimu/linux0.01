@@ -146,9 +146,14 @@ system_call:
     push %es
     push %fs
     push %gs
-
     /* save syscall number in a scratch slot below the arg regs */
     push %eax
+    /* detect the caller's privilege: the saved cs (at syscall_esp+4,
+       i.e. 24(%esp) after the 5 pushes above) carries the RPL; note
+       this must run AFTER push %eax so eax keeps the syscall number */
+    movl 24(%esp), %eax
+    andl $3, %eax
+    movl %eax, syscall_cpl
 
     /* push args in reverse so the lowest-address arg is %ebx (arg0) */
     push %ebp                /* [arg5] */
@@ -254,9 +259,12 @@ hd_interrupt:
 
 .data
 .globl _gdt, _idt, gdt_descr, idt_descr
-.globl syscall_esp
+.globl syscall_esp, syscall_cpl
 
 syscall_esp:
+    .long 0
+
+syscall_cpl:
     .long 0
 
 divide_msg:
