@@ -223,10 +223,6 @@ int main(int argc, char *argv[])
                   (unsigned short[]){zone}, 1);
     }
 
-    /* --- assemble: super/imaps at their fixed blocks --- */
-    memcpy(img + 2 * BLOCK, imap, BLOCK);
-    memcpy(img + (2 + IMAP_BLOCKS) * BLOCK, zmap, BLOCK);
-
     /* --- /hello (inode 7): the execve demo ELF, read from file --- */
     {
         static unsigned char elf_buf[64 * 1024];
@@ -260,6 +256,11 @@ int main(int argc, char *argv[])
         printf("mkminix: embedded hello.elf (%d bytes, %d zones)\n",
                elen, nz);
     }
+
+
+    /* --- assemble: super/imaps at their fixed blocks --- */
+    memcpy(img + 2 * BLOCK, imap, BLOCK);
+    memcpy(img + (2 + IMAP_BLOCKS) * BLOCK, zmap, BLOCK);
 
     {
         FILE *f = fopen(out, "wb");

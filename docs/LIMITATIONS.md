@@ -10,7 +10,7 @@
 | `move_to_user_mode` | **已实现**（`run_user_program`）：iret 切到 Ring3 运行嵌入的用户程序（`user` 命令） |
 | USER_CS / USER_DS | GDT 中定义（`0x1B` / `0x23`）；system_call 会把 FS 设为 USER_DS |
 | 用户程序 | **`sys_execve` 从 MINIX 加载 ELF32**（/hello，链接 0x200000）：LOAD 段加载到 vaddr、BSS 清零、argc/argv 放用户栈顶之上（0x3FF004+，避开向下生长的用户栈）、iret 到入口；内嵌程序（user 命令）保留 |
-| inode 缓存 | **已知缺陷**：inode 分配（mkdir/mknod）后，iget 缓存可能返回过期的 inode 内容（槽复用与 write_inode 交互），导致随后 exec 等依赖重新读取的路径失败（重启或重新 open 可恢复） |
+| inode 缓存 | 正常（曾误判为缺陷：实为 mkminix 的 imap 写入顺序错误——/hello 的 inode 位在 memcpy 后才设置，导致 new_inode 复用其编号；已修复） |
 | 用户态 fork | **已实现**：`system_call` 检测调用者 CPL（`syscall_cpl`）；Ring3 调用时 `sys_fork` 构造 16 项恢复帧（含用户 esp/ss）并把用户栈复制到子进程区域（0x3E0000 下），子进程 iret 回 Ring3 运行 |
 | 内存隔离 | 页表 U/S=1，用户可访问全部 0–4MB（教学内核刻意不隔离） |
 
