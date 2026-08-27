@@ -174,7 +174,7 @@ system_call:
     /* reload saved syscall number for dispatch */
     mov 24(%esp), %eax
 
-    cmpl $21, %eax
+    cmpl $22, %eax
     jb 1f
     movl $-1, %eax
     jmp 2f
@@ -311,3 +311,4 @@ sys_call_table:
     .long sys_unlink
     .long sys_rmdir
     .long sys_waitpid
+    .long sys_execve

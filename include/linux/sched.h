@@ -33,6 +33,7 @@
 #define __NR_unlink 18
 #define __NR_rmdir 19
 #define __NR_waitpid 20
+#define __NR_execve 21
 
 #define NR_OPEN 64
 
@@ -113,6 +114,7 @@ int sys_mkdir(const char *dirname, int mode);
 int sys_unlink(const char *filename);
 int sys_rmdir(const char *dirname);
 int sys_waitpid(int pid, unsigned long *stat_addr, int options);
+int sys_execve(const char *filename, char **argv, char **envp);
 
 void do_timer(void);
 void do_signal(void);

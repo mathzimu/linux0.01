@@ -155,14 +155,16 @@ int main(int argc, char *argv[])
 
     put_super();
 
-    /* --- root dir (inode 2): hello.txt, readme.txt, big.txt, docs --- */
+    /* --- root dir (inode 1): hello.txt, readme.txt, big.txt, docs,
+       hello (ELF for execve) --- */
     root_zone = alloc_zone();
-    put_inode(1, MODE_DIR, 4 * sizeof(struct dir_entry), 2,
+    put_inode(1, MODE_DIR, 5 * sizeof(struct dir_entry), 2,
               (unsigned short[]){root_zone}, 1);
     add_dir_entry(root_zone, 2, "hello.txt");
     add_dir_entry(root_zone, 3, "readme.txt");
     add_dir_entry(root_zone, 4, "big.txt");
     add_dir_entry(root_zone, 5, "docs");
+    add_dir_entry(root_zone, 7, "hello");
 
     /* --- hello.txt (inode 3) --- */
     {
@@ -224,6 +226,40 @@ int main(int argc, char *argv[])
     /* --- assemble: super/imaps at their fixed blocks --- */
     memcpy(img + 2 * BLOCK, imap, BLOCK);
     memcpy(img + (2 + IMAP_BLOCKS) * BLOCK, zmap, BLOCK);
+
+    /* --- /hello (inode 7): the execve demo ELF, read from file --- */
+    {
+        static unsigned char elf_buf[64 * 1024];
+        FILE *ef = fopen("user/hello.elf", "rb");
+        int elen, nz, i;
+
+        if (!ef) {
+            fprintf(stderr, "mkminix: cannot open user/hello.elf\n");
+            return 1;
+        }
+        elen = (int)fread(elf_buf, 1, sizeof(elf_buf), ef);
+        fclose(ef);
+
+        nz = (elen + BLOCK - 1) / BLOCK;
+        if (nz > 7) {
+            fprintf(stderr, "mkminix: hello.elf too big (%d zones)\n", nz);
+            return 1;
+        }
+        {
+            unsigned short zones[9] = {0};
+            for (i = 0; i < nz; i++) {
+                int len = elen - i * BLOCK;
+                zones[i] = alloc_zone();
+                if (len > BLOCK)
+                    len = BLOCK;
+                memset(img + zones[i] * BLOCK, 0, BLOCK);
+                memcpy(img + zones[i] * BLOCK, elf_buf + i * BLOCK, len);
+            }
+            put_inode(7, MODE_REG, (unsigned long)elen, 1, zones, nz);
+        }
+        printf("mkminix: embedded hello.elf (%d bytes, %d zones)\n",
+               elen, nz);
+    }
 
     {
         FILE *f = fopen(out, "wb");

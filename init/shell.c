@@ -155,6 +155,7 @@ static void cmd_help(int argc, char **argv)
     printk("  fdtest  - dup() demo: fds share the file offset\n");
     printk("  seektest- lseek() demo: SEEK_SET / SEEK_END\n");
     printk("  wait    - fork + waitpid demo: child exit(42)\n");
+    printk("  exec    - fork+execve: run an ELF from the MINIX fs\n");
     printk("  user    - run the embedded Ring3 user program\n");
 }
 
@@ -283,6 +284,31 @@ static void cmd_wait(int argc, char **argv)
     printk("[parent] child pid=%d, waiting...\n", pid);
     r = waitpid(pid, &code, 0);
     printk("[parent] waitpid(%d) = %d, exit_code=%d\n", pid, r, code);
+}
+
+/* fork + execve + waitpid: load an ELF program from the MINIX fs and
+   run it in a child process, then reap it. */
+static void cmd_exec(int argc, char **argv)
+{
+    int pid;
+    unsigned long code = 0;
+
+    if (argc < 2) {
+        printk("exec: usage: exec <file> [args...]\n");
+        return;
+    }
+    pid = fork();
+    if (pid < 0) {
+        printk("exec: fork() failed\n");
+        return;
+    }
+    if (pid == 0) {
+        execve(argv[1], &argv[1], NULL);
+        printk("exec: execve(%s) failed\n", argv[1]);
+        exit(-1);
+    }
+    waitpid(pid, &code, 0);
+    printk("exec: child %d exit_code=%d\n", pid, code);
 }
 
 /* --- filesystem commands (open/read/close go through int 0x80) --- */
@@ -535,6 +561,8 @@ void shell_main(void)
             cmd_seektest(argc, argv);
         } else if (strcmp(argv[0], "wait") == 0) {
             cmd_wait(argc, argv);
+        } else if (strcmp(argv[0], "exec") == 0) {
+            cmd_exec(argc, argv);
         } else if (strcmp(argv[0], "user") == 0) {
             cmd_user(argc, argv);
         } else if (strcmp(argv[0], "exit") == 0) {

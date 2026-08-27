@@ -493,3 +493,155 @@ int sys_rmdir(const char *dirname)
     iput(dir);
     return 0;
 }
+
+/* ------------------------------------------------------------------
+ * execve: load a 32-bit ELF from the MINIX filesystem and run it in
+ * Ring3.  LOAD segments are copied to their vaddr (the teaching kernel
+ * uses identity paging with U/S=1, so user code lives at its link
+ * address); BSS (memsz - filesz) is zeroed; argv is placed on a user
+ * stack at 0x3FF000; then iret jumps to the ELF entry point.
+ * ------------------------------------------------------------------ */
+static unsigned long rd32(const unsigned char *b)
+{
+    return (unsigned long)b[0] | ((unsigned long)b[1] << 8) |
+           ((unsigned long)b[2] << 16) | ((unsigned long)b[3] << 24);
+}
+
+static unsigned short rd16(const unsigned char *b)
+{
+    return (unsigned short)b[0] | ((unsigned short)b[1] << 8);
+}
+
+#define USER_STACK_TOP 0x3FF000UL
+#define ELF_MAGIC 0x464C457F   /* \x7fELF */
+#define PT_LOAD 1
+
+int sys_execve(const char *filename, char **argv, char **envp)
+{
+    unsigned char eh[64], ph[32];
+    unsigned long entry, phoff, phnum, phentsize;
+    char argv_buf[16][64];
+    unsigned long argv_ptr[16];
+    int fd, argc = 0, i;
+
+    (void)envp;
+
+    fd = sys_open(filename, 0);
+    if (fd < 0) {
+        return -1;
+    }
+
+    {
+        long rr = sys_read(fd, (char *)eh, 52);
+        if (rr != 52) {
+            goto fail;
+        }
+    }
+    if (rd32(eh) != ELF_MAGIC || rd16(eh + 18) != 3) {  /* EM_386 */
+        goto fail;
+    }
+
+    entry = rd32(eh + 24);
+    phoff = rd32(eh + 28);
+    phentsize = rd16(eh + 42);
+    phnum = rd16(eh + 44);
+
+    for (i = 0; i < phnum && i < 16; i++) {
+        unsigned long p_type, p_offset, p_vaddr, p_filesz, p_memsz;
+
+        if (sys_lseek(fd, (long)(phoff + i * phentsize), 0) < 0)
+            goto fail;
+        if (sys_read(fd, (char *)ph, 32) != 32)
+            goto fail;
+
+        p_type = rd32(ph);
+        if (p_type != PT_LOAD)
+            continue;
+        p_offset = rd32(ph + 4);
+        p_vaddr = rd32(ph + 8);
+        p_filesz = rd32(ph + 16);
+        p_memsz = rd32(ph + 20);
+
+        if (p_filesz) {
+            if (sys_lseek(fd, (long)p_offset, 0) < 0)
+                goto fail;
+            if (sys_read(fd, (char *)p_vaddr, p_filesz) != (long)p_filesz)
+                goto fail;
+        }
+        if (p_memsz > p_filesz)
+            memset((void *)(p_vaddr + p_filesz), 0, p_memsz - p_filesz);
+    }
+    sys_close(fd);
+
+    /* --- collect argv (user pointers) --- */
+    for (i = 0; i < 15; i++) {
+        unsigned long p = get_fs_long((unsigned long *)argv + i);
+        if (!p)
+            break;
+        argv_ptr[i] = p;
+        argc++;
+    }
+
+    /* --- copy each argument string into kernel buffers --- */
+    for (i = 0; i < argc; i++) {
+        unsigned long p = argv_ptr[i];
+        int k = 0;
+        while (k < 63) {
+            char c = get_fs_byte((char *)(p + k));
+            argv_buf[i][k] = c;
+            if (!c)
+                break;
+            k++;
+        }
+        argv_buf[i][k] = '\0';
+    }
+
+    /* --- build the user stack area ABOVE 0x3FF000 (the user stack
+       grows DOWN from 0x3FF000, so nothing here gets clobbered by the
+       program's own call frames):
+         0x3FF004 argc, 0x3FF008 argv-array pointer, 0x3FF00C+ argv[]
+         strings packed down from 0x400000 --- */
+    {
+        char *sp = (char *)(0x400000 - 1);
+        unsigned long *uargv = (unsigned long *)(USER_STACK_TOP + 0xC);
+
+        for (i = argc - 1; i >= 0; i--) {
+            int len = 0;
+            while (argv_buf[i][len])
+                len++;
+            sp -= len + 1;
+            memcpy(sp, argv_buf[i], len + 1);
+            argv_ptr[i] = (unsigned long)sp;
+        }
+        for (i = 0; i < argc; i++)
+            uargv[i] = argv_ptr[i];
+        uargv[argc] = 0;
+
+        *(unsigned long *)(USER_STACK_TOP + 4) = (unsigned long)argc;
+        *(unsigned long *)(USER_STACK_TOP + 8) = (unsigned long)uargv;
+
+        /* --- iret into Ring3 at the ELF entry point --- */
+        {
+            unsigned long stack = (unsigned long)USER_STACK_TOP;
+            unsigned long ss_sel = 0x23;
+            unsigned long cs_sel = 0x1b;
+            __asm__ volatile(
+                "pushl %2\n\t"          /* ss = USER_DS */
+                "pushl %0\n\t"          /* user esp */
+                "pushfl\n\t"
+                "pushl %3\n\t"          /* cs = USER_CS */
+                "pushl %1\n\t"          /* eip = ELF entry */
+                "iret\n\t"
+                :
+                : "r"(stack), "r"(entry), "r"(ss_sel), "r"(cs_sel)
+                : "memory");
+        }
+    }
+
+    /* never reached */
+    return 0;
+
+fail:
+    sys_close(fd);
+    return -1;
+}
