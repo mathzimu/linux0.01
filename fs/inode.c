@@ -90,6 +90,40 @@ void sync_inodes(int dev)
     }
 }
 
+/* Release every data zone referenced by inode (7 direct + 1 single
+   indirect); used when an inode's link count reaches zero. */
+void truncate_inode(struct m_inode *inode)
+{
+    int i;
+
+    if (!inode)
+        return;
+
+    for (i = 0; i < 7; i++) {
+        if (inode->i_zone[i]) {
+            free_block(inode->i_dev, inode->i_zone[i]);
+            inode->i_zone[i] = 0;
+        }
+    }
+
+    if (inode->i_zone[7]) {
+        struct buffer_head *bh = bread(inode->i_dev, inode->i_zone[7]);
+        if (bh) {
+            unsigned short *ind = (unsigned short *)bh->b_data;
+            for (i = 0; i < BLOCK_SIZE / 2; i++) {
+                if (ind[i])
+                    free_block(inode->i_dev, ind[i]);
+            }
+            brelse(bh);
+        }
+        free_block(inode->i_dev, inode->i_zone[7]);
+        inode->i_zone[7] = 0;
+    }
+
+    inode->i_size = 0;
+    inode->i_dirt = 1;
+}
+
 struct m_inode *iget(int dev, int nr)
 {
     struct m_inode *inode;

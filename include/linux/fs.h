@@ -98,10 +98,14 @@ struct m_inode *iget(int dev, int nr);
 void iput(struct m_inode *inode);
 struct m_inode *namei(const char *pathname);
 void sync_inodes(int dev);
-int dir_lookup(struct m_inode *dir, const char *name, int namelen);
+int dir_lookup(struct m_inode *dir, const char *name, int namelen,
+               unsigned short *ino_out);
 int dir_add_entry(struct m_inode *dir, const char *name, int namelen,
                   unsigned short ino);
+int dir_remove_entry(struct m_inode *dir, const char *name, int namelen);
+int dir_is_empty(struct m_inode *dir);
 int split_path(const char *path, char *dirpath, char *name);
+void truncate_inode(struct m_inode *inode);
 
 int file_read(struct m_inode *inode, struct file *filp, char *buf, int count);
 int file_write(struct m_inode *inode, struct file *filp, const char *buf, int count);

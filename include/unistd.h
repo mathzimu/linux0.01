@@ -29,6 +29,8 @@
 #define __NR_getppid 15
 #define __NR_mknod 16
 #define __NR_mkdir 17
+#define __NR_unlink 18
+#define __NR_rmdir 19
 
 /* lseek origins */
 #define SEEK_SET 0
@@ -98,5 +100,7 @@ _syscall2(int, dup2, unsigned int, oldfd, unsigned int, newfd)
 _syscall0(int, getppid)
 _syscall2(int, mknod, const char *, filename, int, mode)
 _syscall2(int, mkdir, const char *, dirname, int, mode)
+_syscall1(int, unlink, const char *, filename)
+_syscall1(int, rmdir, const char *, dirname)
 
 #endif

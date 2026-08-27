@@ -123,11 +123,16 @@ struct m_inode *namei(const char *pathname)
 
 /* --- public helpers for file/dir creation (sys_mknod / sys_mkdir) --- */
 
-/* Look up name in dir: 0 if present, -1 if absent. */
-int dir_lookup(struct m_inode *dir, const char *name, int namelen)
+/* Look up name in dir: 0 if present (ino_out gets its inode number),
+   -1 if absent. */
+int dir_lookup(struct m_inode *dir, const char *name, int namelen,
+               unsigned short *ino_out)
 {
     unsigned short ino;
-    return find_entry(dir, name, namelen, &ino);
+    int r = find_entry(dir, name, namelen, &ino);
+    if (r == 0 && ino_out)
+        *ino_out = ino;
+    return r;
 }
 
 /* Add an entry (ino, name) to dir: reuse a free slot or append one.
@@ -169,6 +174,48 @@ found:
         dir->i_dirt = 1;
     }
     return 0;
+}
+
+/* Clear the entry for (name) in dir.  Returns 0 or -1. */
+int dir_remove_entry(struct m_inode *dir, const char *name, int namelen)
+{
+    struct buffer_head *bh;
+    struct minix_dir_entry *de;
+    int i, entries;
+
+    entries = dir->i_size / sizeof(struct minix_dir_entry);
+    for (i = 0; i < entries; i++) {
+        if (next_entry(dir, i, &bh, &de))
+            continue;
+        if (de->inode && name_eq(de->name, name, namelen)) {
+            de->inode = 0;
+            bh->b_dirt = 1;
+            brelse(bh);
+            return 0;
+        }
+        brelse(bh);
+    }
+    return -1;
+}
+
+/* 1 if dir contains nothing but '.' and '..'. */
+int dir_is_empty(struct m_inode *dir)
+{
+    struct buffer_head *bh;
+    struct minix_dir_entry *de;
+    int i, entries;
+
+    entries = dir->i_size / sizeof(struct minix_dir_entry);
+    for (i = 2; i < entries; i++) {          /* skip '.' and '..' */
+        if (next_entry(dir, i, &bh, &de))
+            continue;
+        if (de->inode) {
+            brelse(bh);
+            return 0;
+        }
+        brelse(bh);
+    }
+    return 1;
 }
 
 /* Split "a/b/c" into dirpath="a/b" and name="c" (name ≤ 14 chars).

@@ -30,6 +30,8 @@
 #define __NR_getppid 15
 #define __NR_mknod 16
 #define __NR_mkdir 17
+#define __NR_unlink 18
+#define __NR_rmdir 19
 
 #define NR_OPEN 64
 
@@ -106,6 +108,8 @@ int sys_dup2(unsigned int oldfd, unsigned int newfd);
 int sys_getppid(void);
 int sys_mknod(const char *filename, int mode);
 int sys_mkdir(const char *dirname, int mode);
+int sys_unlink(const char *filename);
+int sys_rmdir(const char *dirname);
 
 void do_timer(void);
 void do_signal(void);

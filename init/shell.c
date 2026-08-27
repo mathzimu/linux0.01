@@ -113,6 +113,8 @@ static void cmd_help(int argc, char **argv)
     printk("  wtest   - write a file [path] through the write path\n");
     printk("  touch   - create a file (sys_mknod)\n");
     printk("  mkdir   - create a directory (sys_mkdir)\n");
+    printk("  rm      - delete a file (sys_unlink)\n");
+    printk("  rmdir   - delete an empty directory (sys_rmdir)\n");
     printk("  ppid    - getppid() demo\n");
     printk("  fdtest  - dup() demo: fds share the file offset\n");
     printk("  seektest- lseek() demo: SEEK_SET / SEEK_END\n");
@@ -321,6 +323,30 @@ static void cmd_mkdir(int argc, char **argv)
         printk("mkdir: failed (exists / bad path?)\n");
 }
 
+static void cmd_rm(int argc, char **argv)
+{
+    if (argc < 2) {
+        printk("rm: usage: rm <file>\n");
+        return;
+    }
+    if (unlink(argv[1]) == 0)
+        printk("rm: removed %s\n", argv[1]);
+    else
+        printk("rm: failed (not a file / not found?)\n");
+}
+
+static void cmd_rmdir(int argc, char **argv)
+{
+    if (argc < 2) {
+        printk("rmdir: usage: rmdir <dir>\n");
+        return;
+    }
+    if (rmdir(argv[1]) == 0)
+        printk("rmdir: removed %s\n", argv[1]);
+    else
+        printk("rmdir: failed (not empty / not a dir?)\n");
+}
+
 static void cmd_ppid(int argc, char **argv)
 {
     printk("getpid()=%d getppid()=%d\n", getpid(), getppid());
@@ -424,6 +450,10 @@ void shell_main(void)
             cmd_touch(argc, argv);
         } else if (strcmp(argv[0], "mkdir") == 0) {
             cmd_mkdir(argc, argv);
+        } else if (strcmp(argv[0], "rm") == 0) {
+            cmd_rm(argc, argv);
+        } else if (strcmp(argv[0], "rmdir") == 0) {
+            cmd_rmdir(argc, argv);
         } else if (strcmp(argv[0], "ppid") == 0) {
             cmd_ppid(argc, argv);
         } else if (strcmp(argv[0], "fdtest") == 0) {

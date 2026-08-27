@@ -258,7 +258,7 @@ int sys_mknod(const char *filename, int mode)
         iput(dir);
         return -1;
     }
-    if (dir_lookup(dir, name, namelen) == 0) {
+    if (dir_lookup(dir, name, namelen, &ino) == 0) {
         iput(dir);
         return -1;              /* already exists */
     }
@@ -312,7 +312,7 @@ int sys_mkdir(const char *dirname, int mode)
         iput(dir);
         return -1;
     }
-    if (dir_lookup(dir, name, namelen) == 0) {
+    if (dir_lookup(dir, name, namelen, &ino) == 0) {
         iput(dir);
         return -1;
     }
@@ -372,5 +372,124 @@ int sys_mkdir(const char *dirname, int mode)
 
     iput(dir);
     iput(inode);
+    return 0;
+}
+/* Remove a regular file: clear its parent-dir entry and drop its link
+   count; at zero links the inode and its data zones are freed. */
+int sys_unlink(const char *filename)
+{
+    char dirpath[64], name[15];
+    struct m_inode *dir, *inode;
+    unsigned short ino;
+    int namelen;
+
+    if (split_path(filename, dirpath, name) < 0)
+        return -1;
+    namelen = (int)strlen(name);
+    if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0)
+        return -1;
+
+    dir = namei(dirpath);
+    if (!dir)
+        return -1;
+    if (!(dir->i_mode & S_IFDIR)) {
+        iput(dir);
+        return -1;
+    }
+    if (dir_lookup(dir, name, namelen, &ino) < 0) {
+        iput(dir);
+        return -1;              /* not found */
+    }
+
+    inode = iget(dir->i_dev, ino);
+    if (!inode) {
+        iput(dir);
+        return -1;
+    }
+    if (inode->i_mode & S_IFDIR) {
+        iput(inode);            /* use rmdir for directories */
+        iput(dir);
+        return -1;
+    }
+
+    if (dir_remove_entry(dir, name, namelen) < 0) {
+        iput(inode);
+        iput(dir);
+        return -1;
+    }
+
+    inode->i_nlinks--;
+    if (inode->i_nlinks == 0)
+        truncate_inode(inode);  /* free data zones */
+    inode->i_dirt = 1;
+
+    iput(inode);
+    iput(dir);
+    return 0;
+}
+
+/* Remove an empty directory: '.'/'..' are checked, the parent link
+   count is decremented, and the directory zone + inode are freed. */
+int sys_rmdir(const char *dirname)
+{
+    char dirpath[64], name[15];
+    struct m_inode *dir, *inode;
+    unsigned short ino;
+    int namelen, zone0;
+
+    if (split_path(dirname, dirpath, name) < 0)
+        return -1;
+    namelen = (int)strlen(name);
+    if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0)
+        return -1;
+
+    dir = namei(dirpath);
+    if (!dir)
+        return -1;
+    if (!(dir->i_mode & S_IFDIR)) {
+        iput(dir);
+        return -1;
+    }
+    if (dir_lookup(dir, name, namelen, &ino) < 0) {
+        iput(dir);
+        return -1;
+    }
+
+    inode = iget(dir->i_dev, ino);
+    if (!inode) {
+        iput(dir);
+        return -1;
+    }
+    if (!(inode->i_mode & S_IFDIR)) {
+        iput(inode);
+        iput(dir);
+        return -1;
+    }
+    if (!dir_is_empty(inode)) {
+        iput(inode);
+        iput(dir);
+        return -1;              /* not empty */
+    }
+
+    if (dir_remove_entry(dir, name, namelen) < 0) {
+        iput(inode);
+        iput(dir);
+        return -1;
+    }
+
+    zone0 = inode->i_zone[0];
+    if (zone0)
+        free_block(inode->i_dev, zone0);
+    inode->i_zone[0] = 0;
+
+    dir->i_nlinks--;
+    dir->i_dirt = 1;
+
+    inode->i_nlinks = 0;
+    inode->i_dirt = 1;
+    free_inode(inode);
+
+    iput(inode);
+    iput(dir);
     return 0;
 }
