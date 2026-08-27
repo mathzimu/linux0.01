@@ -124,7 +124,8 @@ linux0.01/
 2. [`docs/INDEX.md`](docs/INDEX.md)：文档地图  
 3. `docs/PREREQ-*.md`：汇编 / C / 体系结构 / OS 理论  
 4. [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md)：当前实现边界  
-5. [`docs/TUTORIAL.md`](docs/TUTORIAL.md) + `docs/tutorial/`：按文件读源码  
+5. [`docs/TUTORIAL.md`](docs/TUTORIAL.md) + `docs/tutorial/`：按文件读源码
+6. [`docs/NEXT-STEPS.md`](docs/NEXT-STEPS.md)：后续工作清单（保存的 TODO）  
 
 **关键事实：** Shell 在 **内核态** 运行（`main` 直接 `shell_main`）；`user` 命令通过 `iret` 切换到 **Ring3** 运行嵌入的用户程序（链接地址 0x200000，用户栈 0x3FF000），用户程序经 `int 0x80` 调系统调用后 `exit`；
 分页恒等映射 **0–4MB**（页表 U/S=1，教学内核无隔离）；fork/调度/信号/文件读写路径均可通过 Shell 命令实测（`spawn`/`sig`/`ls`/`cat`/`wtest`）。
