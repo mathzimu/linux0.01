@@ -14,11 +14,11 @@ MINIX FS 增删改查闭环、Ring3 用户态 + 编程工具链（`make prog NAM
   宽度 `%Ns`、左对齐 `%-`、`%#x/%#o` 前缀（`0x`/`0`）
 - 验证：`user/printf.c` 演示程序（`make prog NAME=printf` → `exec /printf`），回归全过
 
-### 2. readdir 便捷接口（用户库）
-- 现状：`read(fd, buf, 16)` 读目录项（ino u16 + name[14]），用户要自己解析
-- 目标：`lib.h` 提供 `struct dirent` + `readdir` 封装（隐藏 MINIX 目录项格式）
-- 或内核侧加 `sys_getdents`（需新增 syscall，编号 22）
-- 示例：`ls` 用户程序（用 opendir/readdir 列目录）
+### 2. ~~readdir 便捷接口（用户库）~~ ✅ 完成（commit 待填）
+- `lib.h` 提供 `struct dirent`（d_ino + d_name[15]）、`DIR`、`opendir/readdir/closedir`
+- 选择**用户库封装**而非新增 `sys_getdents`（保持 syscall 数 22 不变，更简单）
+- readdir 内部读 16 字节目录项、跳过 ino==0 空槽、name 复制为 NUL 结尾
+- 示例：`user/ls.c`（`make prog NAME=ls` → `exec /ls` / `exec /ls /docs`），QEMU 验证通过
 
 ### 3. 更多 libc（user/lib.c）
 - `atoi/strtol`（解析数字，配合 printf %d）
@@ -81,8 +81,7 @@ python3 scripts/qemu-test.py --image Image --hda minix.img --keys $'cmd\n'
 | `init/shell.c` | Shell 命令 + run_user_program |
 | `user/lib.h/.c` | 用户态库（printf/malloc/syscall 包装） |
 | `user/crt.s` | 用户程序入口（读 0x3FF004/0x3FF008） |
-| `user/hello.c catfile.c memtest.c` | 示例程序 |
-| `user/printf.c` | printf 增强演示（宽度/精度/long/左对齐/前缀） |
+| `user/hello.c catfile.c memtest.c printf.c ls.c` | 示例程序（printf 演示 / readdir 列目录） |
 | `tools/mkminix.c` | 镜像制作（`tools/mkminix minix.img prog.elf:name` 注入） |
 | `tools/build.c` | 引导镜像拼接 |
 | `scripts/qemu-test.py` | 无头回归驱动 |

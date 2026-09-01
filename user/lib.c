@@ -1,10 +1,6 @@
-/* 用户态 printf + malloc/free：freestanding 实现，输出到 fd 1。 */
+/* 用户态 printf + malloc/free + opendir/readdir：freestanding 实现。 */
 
 #include "lib.h"
-
-#ifndef NULL
-#define NULL ((void *)0)
-#endif
 
 typedef __builtin_va_list va_list;
 #define va_start(v, l) __builtin_va_start(v, l)
@@ -172,6 +168,54 @@ int printf(const char *fmt, ...)
     }
     va_end(args);
     return n;
+}
+
+/* --- directory reading (MINIX v1 entries: u16 ino + name[14]) --- */
+
+DIR *opendir(const char *path)
+{
+    DIR *d;
+    int fd;
+
+    fd = open(path, 0);               /* O_RDONLY */
+    if (fd < 0)
+        return NULL;
+    d = malloc(sizeof(DIR));
+    if (!d) {
+        close(fd);
+        return NULL;
+    }
+    d->fd = fd;
+    return d;
+}
+
+struct dirent *readdir(DIR *d)
+{
+    int n, k;
+
+    for (;;) {
+        n = read(d->fd, d->buf, 16);
+        if (n != 16)
+            return NULL;              /* end of directory */
+        d->ent.d_ino = ((unsigned short *)d->buf)[0];
+        if (!d->ent.d_ino)
+            continue;                 /* free slot: skip */
+        for (k = 0; k < 14 && d->buf[2 + k]; k++)
+            d->ent.d_name[k] = d->buf[2 + k];
+        d->ent.d_name[k] = '\0';
+        return &d->ent;
+    }
+}
+
+int closedir(DIR *d)
+{
+    int r;
+
+    if (!d)
+        return 0;
+    r = close(d->fd);
+    free(d);
+    return r;
 }
 
 /* --- user-mode heap ---------------------------------------------------
