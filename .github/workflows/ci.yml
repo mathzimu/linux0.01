@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build & test dependencies
+        run: |
+          sudo apt-get update
+          # -m32 cross build (the Linux branch of the Makefile uses the
+          # native gcc -m32 toolchain) + QEMU.  QEMU runs without KVM
+          # here (TCG software emulation); the harness is fully headless.
+          sudo apt-get install -y gcc-multilib binutils qemu-system-x86
+
+      - name: Build the kernel
+        run: |
+          make clean
+          make Image
+          make minix.img
+
+      - name: Run regression suite (make test)
+        # Without KVM the virtual CPU runs under TCG, so give the
+        # key-injection / serial-capture windows more slack than locally.
+        env:
+          TEST_HOLD: "2"
+          TEST_TAIL: "4"
+        run: make test
+
+      - name: Upload serial logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: regression-logs
+          path: test-logs/

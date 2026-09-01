@@ -22,6 +22,9 @@ core
 minix.img
 tools/mkminix
 
+# Regression test serial logs
+test-logs/
+
 # User program build outputs
 user/user.bin
 user/user.elf

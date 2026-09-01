@@ -2,13 +2,14 @@
 # 一键回归测试：为每个场景准备干净的 MINIX 盘 → 跑核心命令 → 断言输出。
 # 用法: make test   (或 scripts/regress.sh)
 # QEMU writeback 会污染 minix.img，故每个场景开始前都重新生成干净盘。
+# 每个场景的串口日志保存在 ./test-logs/<name>.serial，便于排查失败。
 set -u
 cd "$(dirname "$0")/.."
 
 PASS=0
 FAIL=0
-TMPDIR=$(mktemp -d)
-trap 'rm -rf "$TMPDIR"' EXIT
+LOGDIR=${LOGDIR:-test-logs}
+mkdir -p "$LOGDIR"
 
 # run_case <name> <prep-cmd> <keys> <needle...>
 #   prep-cmd : 准备干净盘的命令（须生成 minix.img）
@@ -20,11 +21,12 @@ run_case() {
     local out
     eval "$prep" >/dev/null 2>&1
     out=$(python3 scripts/qemu-test.py --image Image --hda minix.img \
+             --hold "${TEST_HOLD:-1.2}" --tail "${TEST_TAIL:-1.5}" \
              --keys "$keys" 2>/dev/null)
-    printf '%s' "$out" > "$TMPDIR/$name.serial"
+    printf '%s' "$out" > "$LOGDIR/$name.serial"
     for needle in "$@"; do
         if ! printf '%s' "$out" | grep -qF "$needle"; then
-            echo "FAIL [$name]  missing: \"$needle\""
+            echo "FAIL [$name]  missing: \"$needle\"  (see $LOGDIR/$name.serial)"
             FAIL=$((FAIL+1)); return 1
         fi
     done
