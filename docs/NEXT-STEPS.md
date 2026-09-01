@@ -9,11 +9,10 @@ MINIX FS 增删改查闭环、Ring3 用户态 + 编程工具链（`make prog NAM
 
 ## 后续功能清单（按优先级）
 
-### 1. printf 增强（user/lib.c）
-- 补 `%ld/%lu/%lx`（long 修饰符目前被忽略，按 int 处理）
-- 补精度（`%.3d`）与 `%o` 对齐、`%5s` 宽度
-- 参考内核 `kernel/vsprintf.c`（已有实现，移植格式逻辑）
-- 验证：改 `user/memtest.c` 或新增示例打印 long 值
+### 1. ~~printf 增强（user/lib.c）~~ ✅ 完成（commit 待填）
+- 已补：`%ld/%lu/%lx`（long 修饰符）、精度 `%.d`（数字补零 / 字符串截断）、
+  宽度 `%Ns`、左对齐 `%-`、`%#x/%#o` 前缀（`0x`/`0`）
+- 验证：`user/printf.c` 演示程序（`make prog NAME=printf` → `exec /printf`），回归全过
 
 ### 2. readdir 便捷接口（用户库）
 - 现状：`read(fd, buf, 16)` 读目录项（ino u16 + name[14]），用户要自己解析
@@ -83,6 +82,7 @@ python3 scripts/qemu-test.py --image Image --hda minix.img --keys $'cmd\n'
 | `user/lib.h/.c` | 用户态库（printf/malloc/syscall 包装） |
 | `user/crt.s` | 用户程序入口（读 0x3FF004/0x3FF008） |
 | `user/hello.c catfile.c memtest.c` | 示例程序 |
+| `user/printf.c` | printf 增强演示（宽度/精度/long/左对齐/前缀） |
 | `tools/mkminix.c` | 镜像制作（`tools/mkminix minix.img prog.elf:name` 注入） |
 | `tools/build.c` | 引导镜像拼接 |
 | `scripts/qemu-test.py` | 无头回归驱动 |

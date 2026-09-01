@@ -35,17 +35,34 @@ static int num_to_str(char *str, unsigned long num, int base)
     return j;
 }
 
-static void write_num(unsigned long num, int base, int width)
+static void write_num(unsigned long num, int base, int width, int prec,
+                      int ljust, int alt)
 {
     char tmp[32];
     int len = num_to_str(tmp, num, base);
-    int pad = width > len ? width - len : 0;
+    int zlen = prec > len ? prec - len : 0;   /* 精度补零位数 */
+    int pad = width > len + zlen ? width - len - zlen : 0;
     int i;
 
-    while (pad--)
-        outn(" ", 1);
+    if (alt && base == 16) {
+        outn("0x", 2);
+        pad -= 2;
+    } else if (alt && base == 8) {
+        outn("0", 1);
+        pad -= 1;
+    }
+    if (pad < 0)
+        pad = 0;
+    if (!ljust)
+        while (pad--)
+            outn(" ", 1);
+    while (zlen--)
+        outn("0", 1);
     for (i = 0; i < len; i++)
         outn(&tmp[i], 1);
+    if (ljust)
+        while (pad--)
+            outn(" ", 1);
 }
 
 int printf(const char *fmt, ...)
@@ -63,46 +80,80 @@ int printf(const char *fmt, ...)
         }
         fmt++;
         {
-            int width = 0;
+            int width = 0, prec = -1, is_long = 0, ljust = 0, alt = 0;
+            for (;;) {
+                if (*fmt == '-') {
+                    ljust = 1;
+                    fmt++;
+                } else if (*fmt == '#') {
+                    alt = 1;
+                    fmt++;
+                } else {
+                    break;
+                }
+            }
             while (*fmt >= '0' && *fmt <= '9')
                 width = width * 10 + (*fmt++ - '0');
-            if (*fmt == 'l')
+            if (*fmt == '.') {
                 fmt++;
+                prec = 0;
+                while (*fmt >= '0' && *fmt <= '9')
+                    prec = prec * 10 + (*fmt++ - '0');
+            }
+            if (*fmt == 'l') {
+                is_long = 1;
+                fmt++;
+            }
 
             switch (*fmt) {
             case 'd':
             case 'i': {
-                int v = va_arg(args, int);
+                long v = is_long ? va_arg(args, long) : (long)va_arg(args, int);
                 if (v < 0) {
                     outn("-", 1);
                     n++;
-                    write_num((unsigned long)(-(long)v), 10, width);
+                    write_num((unsigned long)(-v), 10, width, prec, ljust, alt);
                 } else {
-                    write_num((unsigned long)v, 10, width);
+                    write_num((unsigned long)v, 10, width, prec, ljust, alt);
                 }
                 break;
             }
             case 'u':
-                write_num((unsigned long)va_arg(args, unsigned int), 10, width);
+                write_num(is_long ? (unsigned long)va_arg(args, unsigned long)
+                                  : (unsigned long)va_arg(args, unsigned int),
+                          10, width, prec, ljust, alt);
                 break;
             case 'x':
             case 'X':
-                write_num((unsigned long)va_arg(args, unsigned int), 16, width);
+                write_num(is_long ? (unsigned long)va_arg(args, unsigned long)
+                                  : (unsigned long)va_arg(args, unsigned int),
+                          16, width, prec, ljust, alt);
                 break;
             case 'o':
-                write_num((unsigned long)va_arg(args, unsigned int), 8, width);
+                write_num(is_long ? (unsigned long)va_arg(args, unsigned long)
+                                  : (unsigned long)va_arg(args, unsigned int),
+                          8, width, prec, ljust, alt);
                 break;
             case 'p':
                 outn("0x", 2);
-                write_num((unsigned long)va_arg(args, void *), 16, 0);
+                write_num((unsigned long)va_arg(args, void *), 16, 0, 0, 0, 0);
                 break;
             case 's': {
                 char *s = va_arg(args, char *);
-                int len = 0;
+                int len = 0, pad;
                 while (s[len])
                     len++;
+                if (prec >= 0 && len > prec)
+                    len = prec;
+                pad = width > len ? width - len : 0;
+                if (!ljust)
+                    while (pad--)
+                        outn(" ", 1);
                 outn(s, len);
                 n += len;
+                if (ljust)
+                    while (pad--)
+                        outn(" ", 1);
                 break;
             }
             case 'c': {
