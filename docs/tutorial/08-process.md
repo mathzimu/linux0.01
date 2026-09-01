@@ -84,14 +84,19 @@ p->tss.ldt = ldt_entry * 8;
 ## 3. `sys_exit`
 
 ```c
-// 从 task[] 摘掉 current
-current->state = TASK_UNINTERRUPTIBLE;
-free_page((unsigned long)current);
-schedule();   // 切到别人
-// 不应返回；防御性 hlt 循环
+// 关闭所有打开文件（filp f_count--、iput inode）；释放 pwd/root 引用
+current->exit_code = ret;
+current->state = TASK_ZOMBIE;   // 保留 task[] 槽与任务页
+// 通知父进程：SIGCHLD 位 + 唤醒 TASK_INTERRUPTIBLE 的父
+// （父 signal(SIGCHLD,SIG_IGN) 时跳过通知；僵尸由 schedule() 自动回收）
+for (;;) schedule();            // zombie 永不被选中，循环让出 CPU
 ```
 
-**简化：** 无关闭文件、无通知父进程、无 zombie。`free_page(current)` 后仍执行到 `schedule` 依赖“尚未被改写的指令缓存/时序”，属于教学级实现，生产内核不可如此。
+**为什么不能 free_page(current)：** 退出的任务仍运行在它的任务页上，切换时 CPU 会把
+状态写回该 TSS——提前释放就是 use-after-free。所以先变 **TASK_ZOMBIE**，由父进程
+`waitpid` 回收（读 exit_code + `free_page` + 清 task[] 槽）；init(task[0]) 保持空闲
+锚点不退出。父忽略 SIGCHLD 或父已退出（孤儿）的僵尸，由 `schedule()` 的清理循环
+自动回收。
 
 ## 4. `sys_pause`
 

@@ -835,7 +835,7 @@ setup_paging:
 - 0x007 (Bit 11-0) = 0111:
   - Bit 0 (P) = 1: 存在
   - Bit 1 (R/W) = 1: 可读写
-  - Bit 2 (U/S) = 0: 仅超级用户 → 用户态无法访问这些页 ⚠️
+  - Bit 2 (U/S) = 1: 用户可访问——**PDE 保留 U/S 位，由每个 PTE 单独决定该页是否对 Ring3 开放**（内存隔离的控制点在 PTE）
 
 **注意**：这里只设置了一个 PDE！只映射了 PDE[0]，覆盖 0-4MB 的地址空间。这就是为什么如果系统有超过 4MB 的 RAM，main.c 中的 `if (memory_end > 0x400000) memory_end = 0x400000` 会截断内存。
 
@@ -843,17 +843,18 @@ setup_paging:
 
 ```as
     mov $PGTBL0, %edi           # EDI = 0x101000 (页表 0)
-    lea 0x07, %eax              # EAX = 0x000007 (第一个 PTE)
+    lea 0x03, %eax              # EAX = 0x000003 (第一个 PTE: P+RW, 无 U/S)
     mov $0x400, %ecx            # ECX = 1024 (填充 1024 个 PTE)
 1:  stosl                       # PTE = EAX, EDI += 4
     add $0x1000, %eax           # EAX += 4096 (下一个物理页)
     loop 1b                     # 循环 1024 次
 ```
 
-**填充意义：**
-- PTE[0] = 0x000007 → 线性地址 0x000000 映射到物理页 0x000000
-- PTE[1] = 0x001007 → 线性地址 0x001000 映射到物理页 0x001000
-- PTE[1023] = 0x3FF007 → 线性地址 0x3FF000 映射到物理页 0x3FF000
+**填充意义（内存隔离）：**
+- PTE[0] = 0x000003 → 线性地址 0x000000 映射到物理页 0x000000（**0x03 = P+RW，无 U/S → 内核专属**）
+- PTE[1] = 0x001003 → 线性地址 0x001000 映射到物理页 0x001000
+- PTE[1023] = 0x3FF003 → 线性地址 0x3FF000 映射到物理页 0x3FF000
+- **默认全 0x03：0-4MB 全部只有 Ring0 能访问**。用户程序/堆/栈页在启动（`grant_user_pages` 授权堆+栈 0x310000-0x400000）和 `execve`（授权程序区 0x200000 起）时把对应 PTE 置为 0x07（P+RW+U/S）。Ring3 访问未授权页 → page fault → `do_no_page` panic。
 
 **恒等映射**：所有线性地址等于物理地址。
 
@@ -1228,10 +1229,70 @@ sys_call_table:
     .long sys_write             # 4
     .long sys_open              # 5
     .long sys_close             # 6
-    .long sys_getpid            # 7
-    .long sys_pause             # 8
-    .long sys_time              # 9
+    .long sys_waitpid           # 7
+    .long sys_creat             # 8
+    .long sys_link              # 9
+    .long sys_unlink            # 10
+    .long sys_execve            # 11
+    .long sys_chdir             # 12
+    .long sys_time              # 13
+    .long sys_mknod             # 14
+    .long sys_chmod             # 15
+    .long sys_chown             # 16
+    .long sys_break             # 17 (stub)
+    .long sys_stat              # 18
+    .long sys_lseek             # 19
+    .long sys_getpid            # 20
+    .long sys_mount             # 21 (stub)
+    .long sys_umount            # 22 (stub)
+    .long sys_setuid            # 23
+    .long sys_getuid            # 24
+    .long sys_stime             # 25
+    .long sys_ptrace            # 26 (stub)
+    .long sys_alarm             # 27
+    .long sys_fstat             # 28
+    .long sys_pause             # 29
+    .long sys_utime             # 30
+    .long sys_stty              # 31 (stub)
+    .long sys_gtty              # 32 (stub)
+    .long sys_access            # 33
+    .long sys_nice              # 34
+    .long sys_ftime             # 35 (stub)
+    .long sys_sync              # 36
+    .long sys_kill              # 37
+    .long sys_rename            # 38
+    .long sys_mkdir             # 39
+    .long sys_rmdir             # 40
+    .long sys_dup               # 41
+    .long sys_pipe              # 42
+    .long sys_times             # 43
+    .long sys_prof              # 44 (stub)
+    .long sys_brk               # 45
+    .long sys_setgid            # 46
+    .long sys_getgid            # 47
+    .long sys_signal            # 48
+    .long sys_geteuid           # 49
+    .long sys_getegid           # 50
+    .long sys_acct              # 51 (stub)
+    .long sys_phys              # 52 (stub)
+    .long sys_lock              # 53 (stub)
+    .long sys_ioctl             # 54 (stub)
+    .long sys_fcntl             # 55
+    .long sys_mpx               # 56 (stub)
+    .long sys_setpgid           # 57
+    .long sys_ulimit            # 58 (stub)
+    .long sys_uname             # 59
+    .long sys_umask             # 60
+    .long sys_chroot            # 61
+    .long sys_ustat             # 62 (stub)
+    .long sys_dup2              # 63
+    .long sys_getppid           # 64
+    .long sys_getpgrp           # 65
+    .long sys_setsid            # 66
 ```
+
+> 编号与 1991 年 Linux 0.01 的 `sys_call_table` **完全一致**（stub 项同样返回 -1）。
+> 完整对应关系与 `include/unistd.h` 一致；入口汇编见 §5 `system_call`（`cmpl $67, %eax; jb` 校验范围）。
 
 **sys_call_table 在 C 中的声明：**
 
@@ -1321,7 +1382,7 @@ extern int sys_setup(void);     // 文件系统挂载 (fs/minix.c)
     shell_main();                           // ⑦ 启动 Shell（内核态，不返回）
 ```
 
-**重要：** 这里**没有** `move_to_user_mode()` / `fork()`。Shell 与内核共享 Ring 0。系统调用入口（`int 0x80`）已实现，但 Shell 多数路径直接调用 `printk` / `schedule` / `sys_exit`。
+**重要：** 这里**没有** `move_to_user_mode()` / `fork()`。Shell 与内核共享 Ring 0。系统调用入口（`int 0x80`）已实现，但 Shell 多数路径直接调用 `printk` / `schedule` / `sys_exit`；用户程序则经 `execve`/`run_user_program` iret 切到 **Ring3** 运行（见 09-syscalls / 13-shell-lib）。
 
 **各初始化函数的职责：**
 
@@ -1331,7 +1392,7 @@ extern int sys_setup(void);     // 文件系统挂载 (fs/minix.c)
 | buffer_init | fs/buffer.c | 分配缓冲区缓存，连接双向链表 |
 | tty_init | drivers/tty_io.c | 初始化 TTY 设备（控制台等） |
 | sys_setup | fs/minix.c | 读取超级块，验证文件系统 |
-| sched_init | kernel/sched.c | 初始化进程表、TSS/LDT、PIT 定时器 |
+| sched_init | kernel/sched.c | 初始化进程表、TSS/LDT、PIT 定时器、pwd=根 inode |
 | sti | asm/system.h | 开启硬件中断 |
 | shell_main | init/shell.c | 启动交互式 Shell（内核态） |
 

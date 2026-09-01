@@ -30,7 +30,7 @@ Ring3 用户态 + 编程工具链（`make prog NAME=xxx` → `exec /xxx`）、�
 
 ### 2. ~~readdir 便捷接口（用户库）~~ ✅ 完成（`35ad6e2`）
 - `lib.h` 提供 `struct dirent`（d_ino + d_name[15]）、`DIR`、`opendir/readdir/closedir`
-- 选择**用户库封装**而非新增 `sys_getdents`（保持 syscall 数 22 不变，更简单）
+- 选择**用户库封装**而非新增 `sys_getdents`（syscall 编号保持与 Linux 0.01 一致，更简单）
 - readdir 内部读 16 字节目录项、跳过 ino==0 空槽、name 复制为 NUL 结尾
 - 示例：`user/ls.c`（`make prog NAME=ls` → `exec /ls` / `exec /ls /docs`），QEMU 验证通过
 

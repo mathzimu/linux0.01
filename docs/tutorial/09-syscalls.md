@@ -32,10 +32,14 @@
 
 ### `sys_open`
 
-1. 找 `current->filp[]` 空槽 → fd  
-2. 找 `file_table[]` 中 `f_count==0`  
-3. `namei(filename)` → inode  
-4. 初始化 `f_mode/f_count/f_inode/f_pos`，挂到 filp  
+1. 找 `current->filp[]` 空槽 → fd（0/1/2 保留给 tty，从 3 起）
+2. 找 `file_table[]` 中 `f_count==0`
+3. `namei(filename)` → inode；不存在且 `flag & O_CREAT` 时创建
+   （`split_path` 父目录 + `new_inode` + `dir_add_entry`，`mode &= 0777 & ~umask`）
+4. `flag & O_TRUNC` 且非目录 → `truncate_inode` 清空
+5. 初始化 `f_mode=flag / f_count / f_inode / f_pos`，挂到 filp
+
+> open 是 **3 参数**（filename, flag, mode，对齐 Linux 0.01）；`sys_creat` = `open(O_CREAT|O_TRUNC)`。
 
 ### `sys_close`
 

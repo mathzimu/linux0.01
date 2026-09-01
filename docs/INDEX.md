@@ -58,15 +58,21 @@
 
 ## 本仓库关键事实（先记住）
 
-1. **分页只映射 0–4MB**（head.s 仅填 PDE[0] + 一张页表）
+1. **分页只映射 0–4MB**（head.s 仅填 PDE[0] + 一张页表）；页表默认 **U/S=0（内核专属）**，
+   仅用户程序/堆/栈页经 `grant_user_pages` 授权（内存隔离，越权访问 → page fault panic）
 2. **段选择子**：`KERNEL_CS=0x08` `KERNEL_DS=0x10` `USER_CS=0x1B` `USER_DS=0x23`
-3. **Shell 运行在内核态**：`main()` 直接 `shell_main()`，**没有** `move_to_user_mode`
-4. **系统调用路径已实现且可实测**：`include/unistd.h` 提供 `int 0x80` 包装宏；Shell 的
-   `sys`/`spawn`/`sig`/`ls`/`cat`/`wtest` 命令全部走系统调用，fork/调度/信号/文件读写可运行验证
-5. **MINIX FS 已打通读写**：挂 `minix.img`（`make minix.img`）后 `ls`/`cat` 可用，`wtest`+`sync` 演示写回
+3. **Shell 运行在内核态**：`main()` 直接 `shell_main()`；用户程序经 `execve`/`run_user_program`
+   iret 进 Ring3（`int 0x80` 自动切回内核栈）
+4. **67 个系统调用，编号与 1991 Linux 0.01 的 sys_call_table 完全一致**（`include/unistd.h`
+   提供 `int 0x80` 包装宏；waitpid=7、execve=11、pipe=42、signal=48…dup2=63、setsid=66；
+   stub 项与 0.01 自身的 -ENOSYS 一致）
+5. **MINIX FS 已打通读写**：挂 `minix.img`（`make minix.img`）后 `ls`/`cat` 可用，
+   `wtest`+`sync` 演示写回；支持目录/文件创建删除、**硬链接（ln）、重命名（mv）、
+   chdir 相对路径、chroot、管道（pipe）**
 6. **修复过的内核级 bug**（读源码时留意注释）：schedule 预改 current 导致 ljmp 被跳过；
    `init_task.tss.cr3=0` 导致切回父进程 CR3 归零；exit 释放自身任务页的 use-after-free；
-   `sys_open` 从 fd 0 分配撞上 stdin；getblk 复用缓冲未摘旧哈希链的链环死循环
+   `sys_open` 从 fd 0 分配撞上 stdin；getblk 复用缓冲未摘旧哈希链的链环死循环；
+   mkminix imap 写入顺序（/hello inode 位被 new_inode 复用）；页表标志 0x06 缺 P 位
 
 ## 设计文档（背景，非源码权威）
 

@@ -81,11 +81,12 @@ PIT → IRQ0 → 0x20 → timer_interrupt
   int $0x80
 system_call:
   存 syscall_esp，切 DS/ES/GS=内核，FS=USER_DS
-  call sys_call_table[eax]
+  cmpl $67,%eax; jb → call sys_call_table[eax]（越界返回 -1）
   返回值写回栈上 eax 槽 → iret
 ```
 
-本仓库 Shell **很少**走这条路径；可用 GDB 在 `system_call` 下断验证。
+Shell 的 `ls`/`cat`/`stat`/`touch`/`mkdir`/`exec` 等命令与用户程序全部走这条路径；
+用户程序（Ring3）在 `ret_from_sys_call` 返回前会先投递待处理信号。
 
 ---
 

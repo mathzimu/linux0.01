@@ -74,10 +74,17 @@ while (1):
 
 ```c
 jiffies++;
+if (current->alarm && jiffies >= current->alarm) {   // alarm(2)
+    current->signal |= (1 << SIGALRM);
+    current->alarm = 0;
+}
 if (current->counter > 0) current->counter--;
 if (current->counter > 0) return;
 schedule();
 ```
+
+`schedule()` 开头还有一步：**自动回收**父忽略 SIGCHLD（或父已退出）的僵尸——
+`task[i]=NULL; free_page(z)`（跳过 current：退出中的任务页不能提前释放）。
 
 ## 7. 与源码其它文件的关系
 
