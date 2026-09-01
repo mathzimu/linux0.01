@@ -19,9 +19,13 @@ run_case() {
     local name="$1" prep="$2" keys="$3"
     shift 3
     local out
-    eval "$prep" >/dev/null 2>&1
+    if ! eval "$prep" >/dev/null 2>&1; then
+        echo "FAIL [$name]  setup failed: $prep"
+        FAIL=$((FAIL+1)); return 1
+    fi
     out=$(python3 scripts/qemu-test.py --image Image --hda minix.img \
              --hold "${TEST_HOLD:-1.2}" --tail "${TEST_TAIL:-1.5}" \
+             --extra "${TEST_EXTRA:-}" \
              --keys "$keys" 2>/dev/null)
     printf '%s' "$out" > "$LOGDIR/$name.serial"
     for needle in "$@"; do
