@@ -40,7 +40,7 @@ MINIX FS 增删改查闭环、Ring3 用户态 + 编程工具链（`make prog NAM
 - ⚠️ 教训：head.s system_call 的 syscall 号上限检查 `cmpl $22,%eax; jb` 要同步
   放宽到 23，否则新 syscall 一律返回 -1
 
-### 5. ~~内存隔离（内核，大工程）~~ ✅ 完成（commit 待填）
+### 5. ~~内存隔离（内核，大工程）~~ ✅ 完成（`795364a`）
 - 页表 0 全部 PTE 由 0x07 改 **0x03（P+RW，无 U/S）** —— 0-4MB 默认内核专属
   （⚠️ 教训：0x06=0b110 没有 P 位，会整页 not-present，曾致启动即崩；
    内核页标志是 0x03，不是 0x06）
