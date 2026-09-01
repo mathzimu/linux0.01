@@ -108,6 +108,7 @@ int dir_add_entry(struct m_inode *dir, const char *name, int namelen,
                   unsigned short ino);
 int dir_remove_entry(struct m_inode *dir, const char *name, int namelen);
 int dir_is_empty(struct m_inode *dir);
+void free_dir_zones(struct m_inode *inode);
 int split_path(const char *path, char *dirpath, char *name);
 void truncate_inode(struct m_inode *inode);
 

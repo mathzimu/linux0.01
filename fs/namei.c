@@ -159,6 +159,54 @@ int dir_lookup(struct m_inode *dir, const char *name, int namelen,
 
 /* Add an entry (ino, name) to dir: reuse a free slot or append one.
    Returns 0 on success, -1 if the directory's zones are exhausted. */
+/* Make sure directory block `block` (in 1KB zone units) exists, allocating
+   a new zone (and the single-indirect block when block >= 7) on demand.
+   This lets a directory grow beyond the 7 direct zones (>64 entries).
+   Returns 0 or -1. */
+static int ensure_dir_block(struct m_inode *dir, int block)
+{
+    struct buffer_head *ibh;
+    unsigned short blk, indblk;
+
+    if (block < 7) {
+        if (dir->i_zone[block])
+            return 0;
+        blk = (unsigned short)new_block(dir->i_dev);
+        if (!blk)
+            return -1;
+        dir->i_zone[block] = blk;
+        dir->i_dirt = 1;
+        return 0;
+    }
+
+    /* single-indirect: i_zone[7] -> a block of unsigned short zone ids */
+    indblk = dir->i_zone[7];
+    if (!indblk) {
+        indblk = (unsigned short)new_block(dir->i_dev);
+        if (!indblk)
+            return -1;
+        dir->i_zone[7] = indblk;
+        dir->i_dirt = 1;
+    }
+    ibh = bread(dir->i_dev, indblk);
+    if (!ibh)
+        return -1;
+    blk = ((unsigned short *)ibh->b_data)[block - 7];
+    if (blk) {
+        brelse(ibh);
+        return 0;
+    }
+    blk = (unsigned short)new_block(dir->i_dev);
+    if (!blk) {
+        brelse(ibh);
+        return -1;
+    }
+    ((unsigned short *)ibh->b_data)[block - 7] = blk;
+    ibh->b_dirt = 1;
+    brelse(ibh);
+    return 0;
+}
+
 int dir_add_entry(struct m_inode *dir, const char *name, int namelen,
                   unsigned short ino)
 {
@@ -179,10 +227,14 @@ int dir_add_entry(struct m_inode *dir, const char *name, int namelen,
             goto found;
         brelse(bh);
     }
-    /* 2) append one (only while the current zone still has room) */
+
+    /* 2) append one, growing the directory into indirect zones as needed
+       (direct zones 0..6 then a single-indirect block via i_zone[7]) */
     i = entries;
+    if (ensure_dir_block(dir, i * sizeof(struct minix_dir_entry) / BLOCK_SIZE) < 0)
+        return -1;
     if (next_entry(dir, i, &bh, &de))
-        return -1;              /* zone exhausted / indirect — unsupported */
+        return -1;
 
 found:
     de->inode = ino;
@@ -196,6 +248,34 @@ found:
         dir->i_dirt = 1;
     }
     return 0;
+}
+
+/* Free every data zone a directory owns (direct zones + the single-indirect
+   block and the zones it points to) so rmdir does not leak blocks. */
+void free_dir_zones(struct m_inode *inode)
+{
+    int i;
+
+    for (i = 0; i < 7; i++) {
+        if (inode->i_zone[i]) {
+            free_block(inode->i_dev, inode->i_zone[i]);
+            inode->i_zone[i] = 0;
+        }
+    }
+    if (inode->i_zone[7]) {
+        struct buffer_head *ibh = bread(inode->i_dev, inode->i_zone[7]);
+        if (ibh) {
+            int j;
+            for (j = 0; j < BLOCK_SIZE / 2; j++) {
+                unsigned short b = ((unsigned short *)ibh->b_data)[j];
+                if (b)
+                    free_block(inode->i_dev, b);
+            }
+            brelse(ibh);
+        }
+        free_block(inode->i_dev, inode->i_zone[7]);
+        inode->i_zone[7] = 0;
+    }
 }
 
 /* Clear the entry for (name) in dir.  Returns 0 or -1. */

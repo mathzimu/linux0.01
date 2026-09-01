@@ -436,7 +436,7 @@ int sys_mkdir(const char *dirname, int mode)
     brelse(bh);
 
     inode->i_zone[0] = block;
-    inode->i_mode = mode;
+    inode->i_mode = (unsigned short)((mode & 0777) | 0x4000);  /* S_IFDIR */
     inode->i_uid = 0;
     inode->i_size = 2 * sizeof(struct minix_dir_entry);
     inode->i_mtime = 0;
@@ -519,7 +519,7 @@ int sys_rmdir(const char *dirname)
     char dirpath[64], name[15];
     struct m_inode *dir, *inode;
     unsigned short ino;
-    int namelen, zone0;
+    int namelen;
 
     if (split_path(dirname, dirpath, name) < 0)
         return -1;
@@ -561,10 +561,10 @@ int sys_rmdir(const char *dirname)
         return -1;
     }
 
-    zone0 = inode->i_zone[0];
-    if (zone0)
-        free_block(inode->i_dev, zone0);
-    inode->i_zone[0] = 0;
+    /* free every data zone the (now-empty) directory owns — including any
+       indirect block it grew into — so rmdir never leaks blocks */
+    free_dir_zones(inode);
+    inode->i_dirt = 1;
 
     dir->i_nlinks--;
     dir->i_dirt = 1;

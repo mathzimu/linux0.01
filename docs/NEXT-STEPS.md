@@ -112,7 +112,8 @@ make test                   # 一键回归（scripts/regress.sh，8 个核心场
 2. **chdir 已支持**（syscall 23）；`..` 依赖目录的 `..` 项（mkminix 已写入；
    `mkdir` 建的目录自带 . / ..）
 3. **无自定义信号处理器** —— 只有默认动作（SIGINT/KILL 杀进程）
-4. **目录满不扩容** —— 单目录 >64 项需间接块目录（未实现）
+4. **目录已支持扩容** —— >64 项时自动分配单间接块（`ensure_dir_block`；
+   `rmdir` 释放全部目录 zone）。多级间接（>519 项）不支持。
 5. **用户栈**：顶 0x3FF000，crt 从 0x3FF004/0x3FF008 读 argc/argv（execve 约定）
 6. **用户堆**：0x310000-0x3FE000（lib.c bump+freelist）
 7. **程序链接地址**：0x200000（固定，无 PIE）

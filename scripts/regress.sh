@@ -75,6 +75,10 @@ run_case sysdemo 'rm -f minix.img && make prog NAME=sysdemo' 'exec /sysdemo\n' \
 run_case bad    'rm -f minix.img && make prog NAME=bad' 'exec /bad\n' \
     'PAGE FAULT' 'KERNEL PANIC: page fault'
 
+# 场景 9: 目录扩容（>64 项自动进单间接块）
+run_case bigdir 'rm -f minix.img && make prog NAME=bigdir' 'exec /bigdir\n' \
+    'created 70 files under /big' 'readdir /big = 72 entries'
+
 echo
 echo "================================"
 echo "  $PASS passed, $FAIL failed"
