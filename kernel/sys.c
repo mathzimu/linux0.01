@@ -539,6 +539,7 @@ int sys_execve(const char *filename, char **argv, char **envp)
 {
     unsigned char eh[64], ph[32];
     unsigned long entry, phoff, phnum, phentsize;
+    unsigned long max_end = 0;         /* end of the program image */
     char argv_buf[16][64];
     unsigned long argv_ptr[16];
     int fd, argc = 0, i;
@@ -589,8 +590,16 @@ int sys_execve(const char *filename, char **argv, char **envp)
         }
         if (p_memsz > p_filesz)
             memset((void *)(p_vaddr + p_filesz), 0, p_memsz - p_filesz);
+        if (p_vaddr + p_memsz > max_end)
+            max_end = p_vaddr + p_memsz;
     }
     sys_close(fd);
+
+    /* Memory isolation: make the program image user-accessible (it was
+       loaded while the pages were still supervisor-only; Ring0 can
+       write them either way, Ring3 cannot). */
+    if (max_end > 0x200000)
+        grant_user_pages(0x200000, max_end - 0x200000);
 
     /* --- collect argv (user pointers) --- */
     for (i = 0; i < 15; i++) {

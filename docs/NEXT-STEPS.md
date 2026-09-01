@@ -40,11 +40,19 @@ MINIX FS 增删改查闭环、Ring3 用户态 + 编程工具链（`make prog NAM
 - ⚠️ 教训：head.s system_call 的 syscall 号上限检查 `cmpl $22,%eax; jb` 要同步
   放宽到 23，否则新 syscall 一律返回 -1
 
-### 5. 内存隔离（内核，大工程）
-- 现状：页表 U/S=1，用户可访问全部 0-4MB（教学取舍）
-- 目标：用户段页 U/S=0（内核）→ 保护内核；execve 时为用户程序映射专用页
-- 风险高：fork 的页表复制、用户栈/堆的页分配都要改
-- **建议留到最后**，改动前先备份当前可运行状态
+### 5. ~~内存隔离（内核，大工程）~~ ✅ 完成（commit 待填）
+- 页表 0 全部 PTE 由 0x07 改 **0x03（P+RW，无 U/S）** —— 0-4MB 默认内核专属
+  （⚠️ 教训：0x06=0b110 没有 P 位，会整页 not-present，曾致启动即崩；
+   内核页标志是 0x03，不是 0x06）
+- `grant_user_pages(from,size)`（mm/memory.c）：按页把 PTE 置 U/S 位
+  （|= 4 → 0x07），并重载 CR3 刷 TLB
+- 授权区域：启动时（main.c）堆+栈 [0x310000, 0x400000)；execve 时按
+  ELF 段尾授权程序区 [0x200000, max_end)；run_user_program 同
+- **效果**：Ring3 只能访问程序/堆/栈页；内核页（含 buffer cache、
+  任务页、页表）用户不可访问；越权访问 → page fault → do_no_page
+  panic（教学行为：非法访问即崩溃）
+- 验证：`user/bad.c` 读 0x0 → `PAGE FAULT pte[0x0]=0x3 → PANIC`（隔离
+  生效证明）；hello/printf/ls/catfile/memtest/sigchld + 内建命令全回归
 
 ### 6. ~~chdir / 相对路径（内核）~~ ✅ 完成（`81c7f1d`）
 - task_struct 加 `struct m_inode *pwd`；init（sched_init 里 FS 挂载后）pwd=根
@@ -81,7 +89,8 @@ python3 scripts/qemu-test.py --image Image --hda minix.img --keys $'cmd\n'
 
 ## 已知限制 / 注意事项
 
-1. **无内存隔离**（U/S=1）—— 用户可读写内核内存（教学取舍，见清单 5）
+1. **内存隔离已实现**：内核页 supervisor-only；用户仅可访问程序/堆/栈页
+   （越权访问 → page fault panic，见清单 5）
 2. **chdir 已支持**（syscall 23）；`..` 依赖目录的 `..` 项（mkminix 已写入；
    `mkdir` 建的目录自带 . / ..）
 3. **无自定义信号处理器** —— 只有默认动作（SIGINT/KILL 杀进程）
@@ -97,12 +106,14 @@ python3 scripts/qemu-test.py --image Image --hda minix.img --keys $'cmd\n'
 |------|------|
 | `kernel/sys.c` | 系统调用实现（含 sys_execve） |
 | `kernel/process.c` | fork/waitpid/exit/do_signal |
-| `boot/head.s` | system_call 入口（syscall_cpl 检测）、sys_call_table |
+| `boot/head.s` | system_call 入口（syscall_cpl 检测）、sys_call_table、setup_paging（PTE 0x03） |
+| `mm/memory.c` | 物理内存管理 + `grant_user_pages`（内存隔离授权） |
+| `mm/page.s` | page_fault 处理（do_no_page） |
 | `fs/*` | MINIX FS（inode.c 的 iget/read_inode 有历史 bug 修复记录） |
 | `init/shell.c` | Shell 命令 + run_user_program |
 | `user/lib.h/.c` | 用户态库（printf/malloc/syscall 包装） |
 | `user/crt.s` | 用户程序入口（读 0x3FF004/0x3FF008） |
-| `user/hello.c catfile.c memtest.c printf.c ls.c str.c sigchld.c` | 示例程序（printf / readdir / libc / SIGCHLD 语义演示） |
+| `user/hello.c catfile.c memtest.c printf.c ls.c str.c sigchld.c bad.c` | 示例程序（printf / readdir / libc / SIGCHLD / 隔离演示） |
 | `tools/mkminix.c` | 镜像制作（`tools/mkminix minix.img prog.elf:name` 注入；目录含 . / ..） |
 | `tools/build.c` | 引导镜像拼接 |
 | `scripts/qemu-test.py` | 无头回归驱动 |
@@ -120,3 +131,6 @@ python3 scripts/qemu-test.py --image Image --hda minix.img --keys $'cmd\n'
 - **syscall 号保存**：system_call 里 CPL 检测必须在 `push %eax`（保存 syscall 号）之后
 - **syscall 上限检查**：head.s `cmpl $N,%eax; jb` 的 N 必须与 sys_call_table 项数
   同步（本次新增 signal=22 时忘了改，新 syscall 全被拦返回 -1）
+- **页表标志**（`81c7f1d` 后）：内核页 PTE=0x03（P+RW 无 U/S）；写页表标志时
+  0x06=0b110 **没有 P 位**（曾致 0-4MB 全 not-present、启动即崩）；授权用户页
+  用 `|= 4`（0x03→0x07）

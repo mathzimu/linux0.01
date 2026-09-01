@@ -25,6 +25,8 @@ void run_user_program(void)
     unsigned long size = user_prog_len;
 
     memcpy((void *)USER_PROG_ADDR, user_prog, size);
+    /* memory isolation: make the program pages user-accessible */
+    grant_user_pages(USER_PROG_ADDR, size);
 
     __asm__ volatile(
         "movl %0, %%eax\n\t"      /* user stack top */

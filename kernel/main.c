@@ -35,6 +35,12 @@ void main(void)
     mem_init(memory_start, memory_end);
     buffer_init(memory_end - 0x100000);
 
+    /* Memory isolation: everything is supervisor-only by default.
+       Grant user-mode access to the fixed user regions — heap
+       [0x310000, 0x3FE000) and stack [0x3FE000, 0x400000).  The
+       program image at 0x200000 is granted at exec time. */
+    grant_user_pages(0x310000, 0x400000 - 0x310000);
+
     tty_init();
 
     if (sys_setup() < 0)

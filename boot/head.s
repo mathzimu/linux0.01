@@ -60,8 +60,11 @@ setup_paging:
     lea (PGTBL0 + 0x07), %eax
     stosl
 
+    /* Identity-map 0..4MB, all supervisor-only (0x03 = P+RW, no U/S).
+       User access is granted page-by-page later via grant_user_pages()
+       for the program / heap / stack regions only. */
     mov $PGTBL0, %edi
-    lea 0x07, %eax
+    lea 0x03, %eax
     mov $0x400, %ecx
 1:  stosl
     add $0x1000, %eax

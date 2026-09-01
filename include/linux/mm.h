@@ -17,4 +17,9 @@ void free_page(unsigned long addr);
 int free_page_tables(unsigned long from, unsigned long size);
 void do_no_page(unsigned long error_code, unsigned long eip, unsigned long address);
 
+/* Grant user-mode (Ring3) access to the linear range [from, from+size)
+   by setting the U/S bit in the corresponding page-table entries.
+   Everything else stays supervisor-only.  Page granular. */
+void grant_user_pages(unsigned long from, unsigned long size);
+
 #endif

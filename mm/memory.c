@@ -83,6 +83,25 @@ void free_page(unsigned long addr)
     mem_map[i]--;
 }
 
+/* Ring3 access control (memory isolation).
+   Page table 0 identity-maps the whole 0..4MB with U/S cleared
+   (supervisor-only).  This routine ORs the U/S bit into the PTEs of
+   the given range, marking exactly the user program / heap / stack
+   pages as user-accessible; the kernel (including the buffer cache
+   and task pages) stays supervisor-only.  Ring0 can still touch
+   everything (U/S only constrains Ring3). */
+void grant_user_pages(unsigned long from, unsigned long size)
+{
+    unsigned long end = (from + size + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+    unsigned long a;
+
+    for (a = from & ~(PAGE_SIZE - 1); a < end; a += PAGE_SIZE) {
+        unsigned long *pte = (unsigned long *)(PAGE_TABLE_0 + ((a >> 12) << 2));
+        *pte |= 4;                    /* _PAGE_USER */
+    }
+    write_cr3(read_cr3());            /* flush the TLB */
+}
+
 int free_page_tables(unsigned long from, unsigned long size)
 {
     unsigned long *pg_table;
