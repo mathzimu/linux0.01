@@ -5,6 +5,7 @@
    printf 输出到 stdout（fd 1）；系统调用包装来自 include/unistd.h。 */
 
 #include <unistd.h>
+#include <signal.h>
 
 #ifndef NULL
 #define NULL ((void *)0)

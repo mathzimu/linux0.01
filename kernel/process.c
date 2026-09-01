@@ -3,6 +3,7 @@
 #include <linux/mm.h>
 #include <linux/fs.h>
 #include <linux/head.h>
+#include <signal.h>
 #include <asm/system.h>
 #include <asm/segment.h>
 #include <string.h>
@@ -197,10 +198,13 @@ int sys_exit(int ret)
     current->state = TASK_ZOMBIE;
 
     /* notify the parent (SIGCHLD bit + wake if it is waiting in
-       waitpid / sys_pause) */
+       waitpid / sys_pause).  A parent that set signal(SIGCHLD,
+       SIG_IGN) does not get notified: its exiting children are
+       auto-reaped by schedule() (see there), never becoming
+       reaped-by-waitpid zombies. */
     {
         struct task_struct *parent = task[current->parent];
-        if (parent) {
+        if (parent && !(parent->sig_ignore_mask & (1 << 17))) {
             parent->signal |= (1 << 17);   /* SIGCHLD */
             if (parent->state == TASK_INTERRUPTIBLE)
                 parent->state = TASK_RUNNING;
@@ -226,17 +230,46 @@ int sys_getppid(void)
     return p ? p->pid : 0;
 }
 
+/* Set a signal disposition.  This teaching kernel supports only the
+   two built-in dispositions:
+     signal(sig, SIG_IGN)  -> the signal is ignored
+     signal(sig, SIG_DFL)  -> default behaviour (terminate for
+                              SIGINT/SIGQUIT/SIGKILL, ignore otherwise)
+   Custom handlers are not implemented: any other handler value returns
+   -1.  SIGKILL is not ignorable (POSIX).  Dispositions are inherited
+   by fork() (*p = *current copies sig_ignore_mask). */
+int sys_signal(int sig, unsigned long handler)
+{
+    if (sig < 1 || sig >= 32)
+        return -1;
+    if (sig == SIGKILL && handler == SIG_IGN)
+        return -1;
+    if (handler != SIG_DFL && handler != SIG_IGN)
+        return -1;
+
+    if (handler == SIG_IGN)
+        current->sig_ignore_mask |= (1 << sig);
+    else
+        current->sig_ignore_mask &= ~(1 << sig);
+    return 0;
+}
+
 /* Wait for a child to become a zombie and reap it: hand out the exit
    code via *stat_addr and free the child's task page.
    pid > 0  : wait for that specific child (pid)
    pid <= 0 : wait for any child
    options & 1 (WNOHANG): return 0 immediately if no zombie yet.
-   Returns the child pid, 0 (WNOHANG), or -1 (no such child). */
+   Returns the child pid, 0 (WNOHANG), or -1 (no such child).
+   POSIX: once the parent has set signal(SIGCHLD, SIG_IGN) there are
+   no waitable children — return -1 (ECHILD) immediately. */
 int sys_waitpid(int pid, unsigned long *stat_addr, int options)
 {
     int i, current_idx;
     struct task_struct *p;
     int found_any;
+
+    if (current->sig_ignore_mask & (1 << 17))
+        return -1;
 
     for (current_idx = 0; current_idx < NR_TASKS; current_idx++)
         if (task[current_idx] == current)

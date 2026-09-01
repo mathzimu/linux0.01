@@ -33,6 +33,7 @@
 #define __NR_rmdir 19
 #define __NR_waitpid 20
 #define __NR_execve 21
+#define __NR_signal 22
 
 /* waitpid options */
 #define WNOHANG 1
@@ -109,5 +110,6 @@ _syscall1(int, unlink, const char *, filename)
 _syscall1(int, rmdir, const char *, dirname)
 _syscall3(int, waitpid, int, pid, unsigned long *, stat_addr, int, options)
 _syscall3(int, execve, const char *, filename, char **, argv, char **, envp)
+_syscall2(int, signal, int, sig, unsigned long, handler)
 
 #endif

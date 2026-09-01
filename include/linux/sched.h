@@ -34,6 +34,7 @@
 #define __NR_rmdir 19
 #define __NR_waitpid 20
 #define __NR_execve 21
+#define __NR_signal 22
 
 #define NR_OPEN 64
 
@@ -65,6 +66,7 @@ struct task_struct {
     long priority;
     long signal;
     long exit_code;          /* set on exit; reaped by waitpid() */
+    unsigned long sig_ignore_mask; /* signals set to SIG_IGN via signal() */
     struct tss_struct tss;
     struct file *filp[NR_OPEN];
     unsigned short uid;
@@ -115,6 +117,7 @@ int sys_unlink(const char *filename);
 int sys_rmdir(const char *dirname);
 int sys_waitpid(int pid, unsigned long *stat_addr, int options);
 int sys_execve(const char *filename, char **argv, char **envp);
+int sys_signal(int sig, unsigned long handler);
 
 void do_timer(void);
 void do_signal(void);

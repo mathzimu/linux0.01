@@ -28,10 +28,17 @@ MINIX FS 增删改查闭环、Ring3 用户态 + 编程工具链（`make prog NAM
 - 全部声明在 user/lib.h（用户 include lib.h 即可，无需 include <string.h>）
 - 示例：`user/str.c`（`make prog NAME=str` → `exec /str`），QEMU 验证通过
 
-### 4. SIGCHLD 完整语义（内核）
-- 现状：子进程 exit 发 SIGCHLD 唤醒父；do_signal 忽略 SIGCHLD
-- 目标：父可 `signal(SIGCHLD, SIG_IGN)` 时子进程自动回收（避免僵尸累积）
-- 或 waitpid(-1, ...) 任意子进程的 Shell 演示（WNOHANG 已有实现未演示）
+### 4. ~~SIGCHLD 完整语义（内核）~~ ✅ 完成（commit 待填）
+- 新增 **syscall 22 `signal(sig, handler)`**（SIG_DFL/SIG_IGN，SIGKILL 不可忽略；
+  自定义 handler 返回 -1；fork 继承 sig_ignore_mask——`*p = *current`）
+- `signal(SIGCHLD, SIG_IGN)`：waitpid 立即返回 -1（ECHILD）；子进程 exit 时
+  不通知父（不置 SIGCHLD 位/不唤醒）；**调度器 schedule() 自动回收**这些僵尸
+  （也顺带清理孤儿僵尸——本内核无收养，父退出后僵尸无人 reap 的问题一并解决；
+  清理循环必须跳过 current：sys_exit 正在 schedule() 让出，页不能提前释放）
+- 演示：`user/sigchld.c` 三阶段（忽略→ECHILD+自动回收 / 默认→waitpid(-1) /
+  WNOHANG→0 非阻塞），QEMU 验证通过
+- ⚠️ 教训：head.s system_call 的 syscall 号上限检查 `cmpl $22,%eax; jb` 要同步
+  放宽到 23，否则新 syscall 一律返回 -1
 
 ### 5. 内存隔离（内核，大工程）
 - 现状：页表 U/S=1，用户可访问全部 0-4MB（教学取舍）
@@ -84,7 +91,7 @@ python3 scripts/qemu-test.py --image Image --hda minix.img --keys $'cmd\n'
 | `init/shell.c` | Shell 命令 + run_user_program |
 | `user/lib.h/.c` | 用户态库（printf/malloc/syscall 包装） |
 | `user/crt.s` | 用户程序入口（读 0x3FF004/0x3FF008） |
-| `user/hello.c catfile.c memtest.c printf.c ls.c str.c` | 示例程序（printf / readdir / libc 演示） |
+| `user/hello.c catfile.c memtest.c printf.c ls.c str.c sigchld.c` | 示例程序（printf / readdir / libc / SIGCHLD 语义演示） |
 | `tools/mkminix.c` | 镜像制作（`tools/mkminix minix.img prog.elf:name` 注入） |
 | `tools/build.c` | 引导镜像拼接 |
 | `scripts/qemu-test.py` | 无头回归驱动 |
@@ -100,3 +107,5 @@ python3 scripts/qemu-test.py --image Image --hda minix.img --keys $'cmd\n'
 - **sys_exit use-after-free**（`372529c`）：zombie 语义（`ac0d136`）后由 waitpid 回收任务页
 - **fork 帧**：Ring3 16 项（含 ss/esp）、Ring0 14 项；`child_top` 必须赋值
 - **syscall 号保存**：system_call 里 CPL 检测必须在 `push %eax`（保存 syscall 号）之后
+- **syscall 上限检查**：head.s `cmpl $N,%eax; jb` 的 N 必须与 sys_call_table 项数
+  同步（本次新增 signal=22 时忘了改，新 syscall 全被拦返回 -1）

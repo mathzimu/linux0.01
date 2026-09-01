@@ -17,6 +17,7 @@ static struct task_struct init_task = {
     15,           /* priority */
     0,            /* signal */
     0,            /* exit_code */
+    0,            /* sig_ignore_mask */
     {0},          /* tss */
     {NULL,},      /* filp */
     0,            /* uid */
@@ -79,8 +80,25 @@ void sched_init(void)
 
 void schedule(void)
 {
-    int next, c;
+    int next, c, i;
     struct task_struct **p;
+
+    /* Auto-reap zombies nobody will wait for: children whose parent
+       set signal(SIGCHLD, SIG_IGN), and orphans whose parent task is
+       already gone (no adoption in this kernel).  We must skip
+       `current`: an exiting task calls schedule() from sys_exit and
+       its page must stay valid until the switch actually happens. */
+    for (i = 0; i < NR_TASKS; i++) {
+        struct task_struct *z = task[i];
+        struct task_struct *par;
+        if (!z || z == current || z->state != TASK_ZOMBIE)
+            continue;
+        par = task[z->parent];
+        if (par && !(par->sig_ignore_mask & (1 << 17)))
+            continue;                 /* parent will waitpid() for it */
+        task[i] = NULL;
+        free_page((unsigned long)z);
+    }
 
     while (1) {
         c = -1;
