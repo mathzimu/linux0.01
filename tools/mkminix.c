@@ -12,7 +12,7 @@
  *   firstdatazone ..     : data zones
  *
  * Usage: mkminix [output.img]   (default: minix.img)
- * The image is 128 KB with a root dir containing:
+ * The image is 1 MB with a root dir containing:
  *   hello.txt  readme.txt  big.txt (18 KB, uses the indirect zone)
  *   docs/note.txt
  */
@@ -56,12 +56,12 @@ struct dir_entry {
     char name[14];
 } __attribute__((packed));
 
-#define NINODES 128
+#define NINODES 512
 #define IMAP_BLOCKS 1
 #define ZMAP_BLOCKS 1
-#define INODE_BLOCKS (NINODES / 32)          /* 4 */
-#define FIRSTDATAZONE (2 + IMAP_BLOCKS + ZMAP_BLOCKS + INODE_BLOCKS) /* 8 */
-#define NZONES 128                           /* 128 KB image */
+#define INODE_BLOCKS (NINODES / 32)          /* 16 */
+#define FIRSTDATAZONE (2 + IMAP_BLOCKS + ZMAP_BLOCKS + INODE_BLOCKS) /* 20 */
+#define NZONES 1024                          /* 1 MB image */
 
 static unsigned char img[NZONES * BLOCK];
 static unsigned char imap[BLOCK];
