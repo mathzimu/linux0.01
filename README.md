@@ -87,14 +87,14 @@ $ cd /docs                       # chdir + 相对路径
 $ cat note.txt
 A file inside a subdirectory.
 
-$ exec /hello a b                # fork + execve 进 Ring3 跑 ELF32
+$ exec /bin/hello a b            # fork + execve 进 Ring3 跑 ELF32（程序在 /bin）
 hello from user program: argc=3
-  argv[0] = /hello
+  argv[0] = /bin/hello
   argv[1] = a
   argv[2] = b
 exec: child 1 exit_code=42
 
-$ exec /pipedemo                 # 管道：父进程阻塞读子进程写入
+$ exec /bin/pipedemo             # 管道：父进程阻塞读子进程写入
 pipe: read fd=3 write fd=4
 parent read 26 bytes: "hello from child via pipe!"
 parent read after EOF: 0
@@ -261,10 +261,10 @@ int main(int argc, char *argv[]) {
 ```
 
 ```bash
-make prog NAME=myprog        # 编译 myprog + 注入一个含 /hello 与 /myprog 的新镜像
+make prog NAME=myprog        # 编译 myprog + 注入一个含 /bin/hello 与 /bin/myprog 的新镜像
 ```
 
-`make prog` **每次都会重新生成 `minix.img`**（保留默认 `/hello` + 当前程序）。若要
+`make prog` **每次都会重新生成 `minix.img`**（保留默认 `/bin/hello` + 当前程序）。若要
 一次性注入多个程序，直接调用 `tools/mkminix`：
 
 ```bash
@@ -274,7 +274,7 @@ tools/mkminix minix.img user/a.elf:a user/b.elf:b   # /a 和 /b 都注入
 QEMU 里：
 
 ```
-$ exec /myprog world
+$ exec /bin/myprog world
 hi, world! argc=2
 exec: child 1 exit_code=7
 ```
@@ -292,7 +292,7 @@ exec: child 1 exit_code=7
 
 ## 🧪 自动化验证
 
-**一键回归**（8 个核心场景：exec / 管道 / chdir / 硬链接 / fork-waitpid / 信号 / 系统调用 / 内存隔离）：
+**一键回归**（10 个核心场景：exec / 管道 / chdir / 硬链接 / fork-waitpid / 信号 / 系统调用 / 内存隔离 / 目录扩容 / 基础应用）：
 
 ```bash
 make test                    # 等价于 scripts/regress.sh

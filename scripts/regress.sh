@@ -44,11 +44,11 @@ run_case() {
 BASE='rm -f minix.img'
 
 # 场景 1: execve + argv + 退出码
-run_case hello  'rm -f minix.img && make prog NAME=hello' 'exec /hello a b\n' \
+run_case hello  'rm -f minix.img && make prog NAME=hello' 'exec /bin/hello a b\n' \
     'hello from user program: argc=3' 'exec: child 1 exit_code=42'
 
 # 场景 2: 管道（fork + pipe 通信）
-run_case pipe   'rm -f minix.img && make prog NAME=pipedemo' 'exec /pipedemo\n' \
+run_case pipe   'rm -f minix.img && make prog NAME=pipedemo' 'exec /bin/pipedemo\n' \
     'hello from child via pipe!' 'parent read after EOF: 0'
 
 # 场景 3: chdir + 相对路径 + cat
@@ -68,20 +68,20 @@ run_case sig    "$BASE && make minix.img" 'sig\n' \
     'exit_code=130'
 
 # 场景 7: 多系统调用（stat / uid / umask / uname / fcntl）
-run_case sysdemo 'rm -f minix.img && make prog NAME=sysdemo' 'exec /sysdemo\n' \
+run_case sysdemo 'rm -f minix.img && make prog NAME=sysdemo' 'exec /bin/sysdemo\n' \
     'uname: linux' 'fcntl F_DUPFD: fd=4 dup=5'
 
 # 场景 8: 内存隔离（Ring3 访问内核页 → SIGSEGV 终止肇事进程，不 panic 内核）
-run_case bad    'rm -f minix.img && make prog NAME=bad' 'exec /bad\n' \
+run_case bad    'rm -f minix.img && make prog NAME=bad' 'exec /bin/bad\n' \
     'PAGE FAULT' 'exec: child 1 exit_code=139'
 
 # 场景 9: 目录扩容（>64 项自动进单间接块）
-run_case bigdir 'rm -f minix.img && make prog NAME=bigdir' 'exec /bigdir\n' \
+run_case bigdir 'rm -f minix.img && make prog NAME=bigdir' 'exec /bin/bigdir\n' \
     'created 70 files under /big' 'readdir /big = 72 entries'
 
 # 场景 10: 基础应用程序（cat / wc / grep / cp / touch）
 APPS='rm -f minix.img && make user/cat.elf user/wc.elf user/grep.elf user/cp.elf user/touch.elf && tools/mkminix minix.img user/cat.elf:cat user/wc.elf:wc user/grep.elf:grep user/cp.elf:cp user/touch.elf:touch'
-run_case apps "$APPS" 'exec /cat /readme.txt\nexec /wc /readme.txt\nexec /grep kernel /readme.txt\nexec /cp /hello.txt /c2.txt\nexec /touch /n.txt\n' \
+run_case apps "$APPS" 'exec /bin/cat /readme.txt\nexec /bin/wc /readme.txt\nexec /bin/grep kernel /readme.txt\nexec /bin/cp /hello.txt /c2.txt\nexec /bin/touch /n.txt\n' \
     'Minimal Linux 0.01 equivalent kernel.' \
     '3 19 129 /readme.txt' \
     'cp: /hello.txt -> /c2.txt done'

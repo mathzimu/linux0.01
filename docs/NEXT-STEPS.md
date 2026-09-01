@@ -26,13 +26,13 @@ Ring3 用户态 + 编程工具链（`make prog NAME=xxx` → `exec /xxx`）、�
 ### 1. ~~printf 增强（user/lib.c）~~ ✅ 完成（`e8681e6`）
 - 已补：`%ld/%lu/%lx`（long 修饰符）、精度 `%.d`（数字补零 / 字符串截断）、
   宽度 `%Ns`、左对齐 `%-`、`%#x/%#o` 前缀（`0x`/`0`）
-- 验证：`user/printf.c` 演示程序（`make prog NAME=printf` → `exec /printf`），回归全过
+- 验证：`user/printf.c` 演示程序（`make prog NAME=printf` → `exec /bin/printf`），回归全过
 
 ### 2. ~~readdir 便捷接口（用户库）~~ ✅ 完成（`35ad6e2`）
 - `lib.h` 提供 `struct dirent`（d_ino + d_name[15]）、`DIR`、`opendir/readdir/closedir`
 - 选择**用户库封装**而非新增 `sys_getdents`（syscall 编号保持与 Linux 0.01 一致，更简单）
 - readdir 内部读 16 字节目录项、跳过 ino==0 空槽、name 复制为 NUL 结尾
-- 示例：`user/ls.c`（`make prog NAME=ls` → `exec /ls` / `exec /ls /docs`），QEMU 验证通过
+- 示例：`user/ls.c`（`make prog NAME=ls` → `exec /bin/ls` / `exec /bin/ls /docs`），QEMU 验证通过
 
 ### 3. ~~更多 libc（user/lib.c）~~ ✅ 完成（`c483d76`）
 - `atoi/strtol`（支持 base 0/2..36、前导空白、符号、0x/0 前缀、endptr 停靠点）
@@ -40,7 +40,7 @@ Ring3 用户态 + 编程工具链（`make prog NAME=xxx` → `exec /xxx`）、�
   strlen/strchr/strrchr/memcpy/memset/memcmp/memmove
 - ctype 副本：isdigit/isspace/isalpha/isalnum/isupper/islower/tolower/toupper
 - 全部声明在 user/lib.h（用户 include lib.h 即可，无需 include <string.h>）
-- 示例：`user/str.c`（`make prog NAME=str` → `exec /str`），QEMU 验证通过
+- 示例：`user/str.c`（`make prog NAME=str` → `exec /bin/str`），QEMU 验证通过
 
 ### 4. ~~SIGCHLD 完整语义（内核）~~ ✅ 完成（`4aca6df`）
 - 新增 **syscall 22 `signal(sig, handler)`**（SIG_DFL/SIG_IGN，SIGKILL 不可忽略；
@@ -81,7 +81,7 @@ Ring3 用户态 + 编程工具链（`make prog NAME=xxx` → `exec /xxx`）、�
   +2）——否则 `cd /docs` 后 `cd ..` 失败（基础目录无 .. 项）
 - shell 加 `cd` 命令；`ls` 默认当前目录
 - 验证：`cd /docs`→`ls`→`cd ..`、`touch x`/`rm x` 相对创建删除、
-  `mkdir sub`→`cd sub`（. / .. 指向正确）→`rmdir sub`、`exec /ls .` 全通
+  `mkdir sub`→`cd sub`（. / .. 指向正确）→`rmdir sub`、`exec /bin/ls .` 全通
 
 ## 工具链速查（继续工作必备）
 

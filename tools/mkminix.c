@@ -143,7 +143,7 @@ static void fill(int zone, const char *text, int len)
         p[i] = text[i % len];
 }
 
-static int next_inode = 7;      /* inodes 1-6 are used by the base fs */
+static int next_inode = 8;      /* inodes 1-7 are used by the base fs */
 
 /* Inject an ELF file as a root-dir file: spec = "path:name". */
 static int inject_elf(const char *spec, int root_zone)
@@ -217,8 +217,7 @@ static int inject_elf(const char *spec, int root_zone)
 int main(int argc, char *argv[])
 {
     const char *out = argc > 1 ? argv[1] : "minix.img";
-    int root_zone, docs_zone, ind_zone, i;
-    unsigned short z;
+    int root_zone, docs_zone, bin_zone, ind_zone, i;
 
     memset(img, 0, sizeof(img));
     memset(imap, 0, sizeof(imap));
@@ -226,9 +225,9 @@ int main(int argc, char *argv[])
 
     put_super();
 
-    /* --- root dir (inode 1): '.'/'..' + base files + injected progs --- */
+    /* --- root dir (inode 1): '.'/'..' + base files + subdirs --- */
     root_zone = alloc_zone();
-    put_inode(1, MODE_DIR, 6 * sizeof(struct dir_entry), 2,
+    put_inode(1, MODE_DIR, 7 * sizeof(struct dir_entry), 2,
               (unsigned short[]){root_zone}, 1);
     add_dir_entry(root_zone, 1, ".");
     add_dir_entry(root_zone, 1, "..");
@@ -236,6 +235,7 @@ int main(int argc, char *argv[])
     add_dir_entry(root_zone, 3, "readme.txt");
     add_dir_entry(root_zone, 4, "big.txt");
     add_dir_entry(root_zone, 5, "docs");
+    add_dir_entry(root_zone, 7, "bin");
 
     /* --- hello.txt (inode 3) --- */
     {
@@ -281,7 +281,7 @@ int main(int argc, char *argv[])
         }
     }
 
-    /* --- docs/ (inode 6) + note.txt (inode 7) --- */
+    /* --- docs/ (inode 5) + note.txt (inode 6) --- */
     docs_zone = alloc_zone();
     put_inode(5, MODE_DIR, 3 * sizeof(struct dir_entry), 2,
               (unsigned short[]){docs_zone}, 1);
@@ -296,23 +296,31 @@ int main(int argc, char *argv[])
                   (unsigned short[]){zone}, 1);
     }
 
+    /* --- bin/ (inode 7): holds the injected user programs --- */
+    bin_zone = alloc_zone();
+    put_inode(7, MODE_DIR, 3 * sizeof(struct dir_entry), 2,
+              (unsigned short[]){bin_zone}, 1);
+    add_dir_entry(bin_zone, 7, ".");
+    add_dir_entry(bin_zone, 1, "..");
+
     /* --- injected programs: always the default user/hello.elf:hello
-       (if it exists), plus any "path:name" arguments --- */
+       (if it exists), plus any "path:name" arguments.  They all land in
+       /bin so the root dir stays a clean 7-entry layout. --- */
     {
         int inj = 0;
         FILE *hf = fopen("user/hello.elf", "rb");
         if (hf) {
             fclose(hf);
-            inject_elf("user/hello.elf:hello", root_zone);
+            inject_elf("user/hello.elf:hello", bin_zone);
         }
         for (i = 2; i < argc; i++)
-            if (inject_elf(argv[i], root_zone) == 0)
+            if (inject_elf(argv[i], bin_zone) == 0)
                 inj++;
         (void)inj;
-        /* refresh root dir size (2 dot entries + 4 base + injected) */
-        put_inode(1, MODE_DIR,
-                  (6UL + (unsigned long)(next_inode - 7)) * sizeof(struct dir_entry),
-                  2, (unsigned short[]){root_zone}, 1);
+        /* refresh bin dir size (2 dot entries + injected programs) */
+        put_inode(7, MODE_DIR,
+                  (2UL + (unsigned long)(next_inode - 8)) * sizeof(struct dir_entry),
+                  2, (unsigned short[]){bin_zone}, 1);
     }
 
 
