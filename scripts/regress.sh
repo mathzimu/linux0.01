@@ -27,6 +27,9 @@ run_case() {
     for needle in "$@"; do
         if ! printf '%s' "$out" | grep -qF "$needle"; then
             echo "FAIL [$name]  missing: \"$needle\"  (see $LOGDIR/$name.serial)"
+            echo "---- tail $LOGDIR/$name.serial ----"
+            tail -15 "$LOGDIR/$name.serial" 2>/dev/null
+            echo "--------------------------------"
             FAIL=$((FAIL+1)); return 1
         fi
     done
