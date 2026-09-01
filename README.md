@@ -152,7 +152,7 @@ BIOS POST
 
 1. **Shell 在内核态**（`main` 直接 `shell_main`）；用户程序经 `execve`/`run_user_program` iret 进 **Ring3**，`int 0x80` 自动切回内核栈
 2. **67 个系统调用，编号 = Linux 0.01**；`include/unistd.h` 提供 `int $0x80` 包装宏
-3. **内存隔离**：页表默认 `0x03`（P+RW 无 U/S），仅用户程序/堆/栈页被 `grant_user_pages` 授权（`0x07`）；Ring3 越权访问 → page fault panic
+3. **内存隔离**：页表默认 `0x03`（P+RW 无 U/S），仅用户程序/堆/栈页被 `grant_user_pages` 授权（`0x07`）；Ring3 越权访问 → 终止肇事进程（SIGSEGV），内核继续运行
 4. **段选择子**：`KERNEL_CS=0x08` `KERNEL_DS=0x10` `USER_CS=0x1B` `USER_DS=0x23`
 5. **MINIX FS** 挂 `minix.img`（dev 0x301）后 `ls`/`cat`/`wtest` 可实测读写
 

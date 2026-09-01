@@ -65,8 +65,8 @@ Ring3 用户态 + 编程工具链（`make prog NAME=xxx` → `exec /xxx`）、�
 - **效果**：Ring3 只能访问程序/堆/栈页；内核页（含 buffer cache、
   任务页、页表）用户不可访问；越权访问 → page fault → do_no_page
   panic（教学行为：非法访问即崩溃）
-- 验证：`user/bad.c` 读 0x0 → `PAGE FAULT pte[0x0]=0x3 → PANIC`（隔离
-  生效证明）；hello/printf/ls/catfile/memtest/sigchld + 内建命令全回归
+- 验证：`user/bad.c` 读 0x0 → `PAGE FAULT` → 肇事进程 SIGSEGV 终止（exit 139），
+  内核继续运行（不再 panic）；hello/printf/ls/catfile/memtest/sigchld + 内建命令全回归
 
 ### 6. ~~chdir / 相对路径（内核）~~ ✅ 完成（`81c7f1d`）
 - task_struct 加 `struct m_inode *pwd`；init（sched_init 里 FS 挂载后）pwd=根
@@ -108,7 +108,7 @@ make test                   # 一键回归（scripts/regress.sh，8 个核心场
 ## 已知限制 / 注意事项
 
 1. **内存隔离已实现**：内核页 supervisor-only；用户仅可访问程序/堆/栈页
-   （越权访问 → page fault panic，见清单 5）
+   （越权访问 → SIGSEGV 终止肇事进程，见清单 5）
 2. **chdir 已支持**（syscall 23）；`..` 依赖目录的 `..` 项（mkminix 已写入；
    `mkdir` 建的目录自带 . / ..）
 3. **无自定义信号处理器** —— 只有默认动作（SIGINT/KILL 杀进程）

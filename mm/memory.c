@@ -149,5 +149,9 @@ void do_no_page(unsigned long error_code, unsigned long eip, unsigned long addre
     printk("  cr3=0x%lx pde[0x%x]=0x%lx pte[0x%x]=0x%lx\n",
            read_cr3(), (unsigned)(address >> 22), pde,
            (unsigned)(address >> 12), pte);
-    panic("page fault");
+
+    /* A bad pointer must not crash the whole kernel: terminate only the
+       faulting task with SIGSEGV's default action (128 + 11 = 139).
+       The task becomes a zombie; its parent's waitpid() reaps it. */
+    sys_exit(128 + 11);        /* never returns */
 }

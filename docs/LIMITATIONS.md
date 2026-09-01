@@ -12,7 +12,7 @@
 | 用户程序 | **`sys_execve` 从 MINIX 加载 ELF32**（/hello，链接 0x200000）：LOAD 段加载到 vaddr、BSS 清零、argc/argv 放用户栈顶之上（0x3FF004+，避开向下生长的用户栈）、授权用户页（`grant_user_pages`）、iret 到入口；内嵌程序（user 命令）保留 |
 | inode 缓存 | 正常（曾误判为缺陷：实为 mkminix 的 imap 写入顺序错误——/hello 的 inode 位在 memcpy 后才设置，导致 new_inode 复用其编号；已修复） |
 | 用户态 fork | **已实现**：`system_call` 检测调用者 CPL（`syscall_cpl`）；Ring3 调用时 `sys_fork` 构造 16 项恢复帧（含用户 esp/ss）并把用户栈复制到子进程区域（0x3E0000 下），子进程 iret 回 Ring3 运行 |
-| 内存隔离 | **已实现**：页表默认 U/S=0（PTE=0x03 = P+RW），仅用户程序/堆/栈页经 `grant_user_pages` 置 U/S（0x07）；越权访问 → page fault → do_no_page **panic**（教学行为，非 EFAULT 返回） |
+| 内存隔离 | **已实现**：页表默认 U/S=0（PTE=0x03 = P+RW），仅用户程序/堆/栈页经 `grant_user_pages` 置 U/S（0x07）；Ring3 越权访问 → page fault → **终止肇事进程**（SIGSEGV 默认动作，exit 139，内核继续运行），不再是 panic 整个内核 |
 
 ## 2. 内存
 
@@ -20,7 +20,7 @@
 |------|------|
 | 恒等映射范围 | **0–4MB**（仅 PDE[0]） |
 | `memory_end` | 截断到 `0x400000` |
-| COW / 按需换页 | 未实现；`do_no_page` 直接 panic |
+| COW / 按需换页 | 未实现；`do_no_page` 对任何页错误都终止肇事进程（SIGSEGV），不分配/换页 |
 | 用户堆 | `user/lib.c` 的 bump+freelist（0x310000–0x3FE000），与内核 `get_free_page` **无统一协调**（内核分配页 U/S=0，用户堆区页启动时预授权） |
 
 ## 3. 进程与调度

@@ -71,9 +71,9 @@ run_case sig    "$BASE && make minix.img" 'sig\n' \
 run_case sysdemo 'rm -f minix.img && make prog NAME=sysdemo' 'exec /sysdemo\n' \
     'uname: linux' 'fcntl F_DUPFD: fd=4 dup=5'
 
-# 场景 8: 内存隔离（Ring3 访问内核页 → page fault panic）
+# 场景 8: 内存隔离（Ring3 访问内核页 → SIGSEGV 终止肇事进程，不 panic 内核）
 run_case bad    'rm -f minix.img && make prog NAME=bad' 'exec /bad\n' \
-    'PAGE FAULT' 'KERNEL PANIC: page fault'
+    'PAGE FAULT' 'exec: child 1 exit_code=139'
 
 # 场景 9: 目录扩容（>64 项自动进单间接块）
 run_case bigdir 'rm -f minix.img && make prog NAME=bigdir' 'exec /bigdir\n' \
