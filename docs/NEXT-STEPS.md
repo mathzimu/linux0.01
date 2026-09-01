@@ -28,7 +28,7 @@ MINIX FS 增删改查闭环、Ring3 用户态 + 编程工具链（`make prog NAM
 - 全部声明在 user/lib.h（用户 include lib.h 即可，无需 include <string.h>）
 - 示例：`user/str.c`（`make prog NAME=str` → `exec /str`），QEMU 验证通过
 
-### 4. ~~SIGCHLD 完整语义（内核）~~ ✅ 完成（commit 待填）
+### 4. ~~SIGCHLD 完整语义（内核）~~ ✅ 完成（`4aca6df`）
 - 新增 **syscall 22 `signal(sig, handler)`**（SIG_DFL/SIG_IGN，SIGKILL 不可忽略；
   自定义 handler 返回 -1；fork 继承 sig_ignore_mask——`*p = *current`）
 - `signal(SIGCHLD, SIG_IGN)`：waitpid 立即返回 -1（ECHILD）；子进程 exit 时
