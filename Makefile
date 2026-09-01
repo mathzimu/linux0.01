@@ -151,6 +151,11 @@ prog: tools/mkminix user/$(NAME).elf
 minix.img: tools/mkminix user/hello.elf
 	tools/mkminix minix.img
 
+# One-shot regression suite (see scripts/regress.sh): builds a clean
+# MINIX disk per scenario, boots QEMU, and asserts the serial output.
+test: Image
+	scripts/regress.sh
+
 tools/mkminix: tools/mkminix.c
 	$(HOST_CC) -O2 -Wall -o $@ $<
 
@@ -183,4 +188,4 @@ run-cd: kernel.iso
 debug: Image
 	qemu-system-i386 -fda Image -m 4M -boot a -s -S
 
-.PHONY: all clean run run-cd debug iso docker-build
+.PHONY: all clean run run-cd debug iso docker-build test

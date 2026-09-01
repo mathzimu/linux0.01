@@ -239,7 +239,7 @@ linux0.01/
 ├── lib/           # 内核侧 C 子集（string/ctype/malloc）
 ├── include/       # 头文件（含 unistd.h：int 0x80 包装宏）
 ├── tools/         # build.c（镜像拼接）· mkminix.c（MINIX 测试盘）
-├── scripts/       # qemu-test.py（无头验证）· ppm2png.py（截图）
+├── scripts/       # qemu-test.py（无头验证）· regress.sh（一键回归）· ppm2png.py（截图）
 ├── docs/          # 教学与设计文档
 └── Makefile       # 构建系统（工具链自动检测）
 ```
@@ -261,7 +261,14 @@ int main(int argc, char *argv[]) {
 ```
 
 ```bash
-make prog NAME=myprog        # 编译 + 注入 minix.img（保留已有程序）
+make prog NAME=myprog        # 编译 myprog + 注入一个含 /hello 与 /myprog 的新镜像
+```
+
+`make prog` **每次都会重新生成 `minix.img`**（保留默认 `/hello` + 当前程序）。若要
+一次性注入多个程序，直接调用 `tools/mkminix`：
+
+```bash
+tools/mkminix minix.img user/a.elf:a user/b.elf:b   # /a 和 /b 都注入
 ```
 
 QEMU 里：
@@ -284,7 +291,13 @@ exec: child 1 exit_code=7
 
 ## 🧪 自动化验证
 
-无头验证（串口捕获 + sendkey 注入，输出精确文本到 stdout）：
+**一键回归**（8 个核心场景：exec / 管道 / chdir / 硬链接 / fork-waitpid / 信号 / 系统调用 / 内存隔离）：
+
+```bash
+make test                    # 等价于 scripts/regress.sh
+```
+
+手动无头验证（串口捕获 + sendkey 注入，输出精确文本到 stdout）：
 
 ```bash
 python3 scripts/qemu-test.py --image Image --hda minix.img \
@@ -292,7 +305,7 @@ python3 scripts/qemu-test.py --image Image --hda minix.img \
 ```
 
 > 注意：QEMU 的 writeback 会把测试期间的脏块刷进 `minix.img`，**每次测试前先**
-> `rm -f minix.img && make minix.img` 重新生成干净磁盘。
+> `rm -f minix.img && make minix.img` 重新生成干净磁盘（`make test` 已自动处理）。
 
 ---
 

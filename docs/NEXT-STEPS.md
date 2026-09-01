@@ -95,10 +95,14 @@ make Image                # 引导镜像
 # 运行/验证
 qemu-system-i386 -fda Image -hda minix.img -m 4M -boot a
 python3 scripts/qemu-test.py --image Image --hda minix.img --keys $'cmd\n'
+make test                   # 一键回归（scripts/regress.sh，8 个核心场景断言）
 # 注意：QEMU writeback 会把测试中的脏块刷进 minix.img —— 测试前 rm -f minix.img && make minix.img
+#       （make test 每个场景自动重建干净盘）
 
 # 用户程序写法
 # user/xxx.c: #include "lib.h"; int main(int argc, char *argv[]) {...}
+# make prog NAME=xxx 每次重建 minix.img（含 /hello + /xxx）；多程序用
+#   tools/mkminix minix.img user/a.elf:a user/b.elf:b 一次性注入
 ```
 
 ## 已知限制 / 注意事项

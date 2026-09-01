@@ -112,7 +112,10 @@ def main():
 
         time.sleep(args.hold)
         if args.keys:
-            type_text(sock, args.keys)
+            # accept literal "\n" (from plain single-quoted CLI args) as well
+            # as an actual newline (bash $'...\n') — unify both
+            keys = args.keys.replace('\\n', '\n')
+            type_text(sock, keys)
             time.sleep(args.tail)
         hmp(sock, 'screendump %s.ppm' % args.out)
         time.sleep(0.5)
