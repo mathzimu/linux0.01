@@ -42,6 +42,7 @@ char *strcat(char *dest, const char *src);
 int strlen(const char *s);
 char *strchr(const char *s, int c);
 char *strrchr(const char *s, int c);
+char *strstr(const char *haystack, const char *needle);
 void *memcpy(void *dest, const void *src, int n);
 void *memset(void *s, int c, int n);
 int memcmp(const void *s1, const void *s2, int n);

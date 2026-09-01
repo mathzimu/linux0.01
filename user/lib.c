@@ -295,6 +295,18 @@ char *strrchr(const char *s, int c)
     return (char *)found;
 }
 
+char *strstr(const char *haystack, const char *needle)
+{
+    int nlen = strlen(needle);
+
+    if (!nlen)
+        return (char *)haystack;
+    for (; *haystack; haystack++)
+        if (*haystack == *needle && strncmp(haystack, needle, nlen) == 0)
+            return (char *)haystack;
+    return NULL;
+}
+
 void *memcpy(void *dest, const void *src, int n)
 {
     char *d = dest;

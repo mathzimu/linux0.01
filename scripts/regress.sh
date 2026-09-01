@@ -79,6 +79,13 @@ run_case bad    'rm -f minix.img && make prog NAME=bad' 'exec /bad\n' \
 run_case bigdir 'rm -f minix.img && make prog NAME=bigdir' 'exec /bigdir\n' \
     'created 70 files under /big' 'readdir /big = 72 entries'
 
+# 场景 10: 基础应用程序（cat / wc / grep / cp / touch）
+APPS='rm -f minix.img && make user/cat.elf user/wc.elf user/grep.elf user/cp.elf user/touch.elf && tools/mkminix minix.img user/cat.elf:cat user/wc.elf:wc user/grep.elf:grep user/cp.elf:cp user/touch.elf:touch'
+run_case apps "$APPS" 'exec /cat /readme.txt\nexec /wc /readme.txt\nexec /grep kernel /readme.txt\nexec /cp /hello.txt /c2.txt\nexec /touch /n.txt\n' \
+    'Minimal Linux 0.01 equivalent kernel.' \
+    '3 19 129 /readme.txt' \
+    'cp: /hello.txt -> /c2.txt done'
+
 echo
 echo "================================"
 echo "  $PASS passed, $FAIL failed"
