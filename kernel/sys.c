@@ -965,8 +965,55 @@ int sys_rename(const char *oldname, const char *newname)
     iput(dir_new);
     return 0;
 }
-int sys_fcntl(unsigned int fd, unsigned int cmd, unsigned long arg) { (void)fd; (void)cmd; (void)arg; return -1; }
-int sys_brk(unsigned long end_data_seg) { (void)end_data_seg; return -1; }
+/* --- fcntl (Linux 0.01 fs/fcntl.c) and brk (kernel/sys.c) --- */
+
+static int dupfd(unsigned int fd, unsigned int arg)
+{
+    if (fd >= NR_OPEN || !current->filp[fd])
+        return -1;
+    if (arg >= NR_OPEN)
+        return -1;
+    while (arg < NR_OPEN && current->filp[arg])
+        arg++;
+    if (arg >= NR_OPEN)
+        return -1;
+    (current->filp[arg] = current->filp[fd])->f_count++;
+    return arg;
+}
+
+int sys_fcntl(unsigned int fd, unsigned int cmd, unsigned long arg)
+{
+    struct file *filp;
+
+    if (fd >= NR_OPEN || !(filp = current->filp[fd]))
+        return -1;
+    switch (cmd) {
+    case F_DUPFD:
+        return dupfd(fd, (unsigned int)arg);
+    case F_GETFD:
+        return 0;                     /* no close_on_exec tracking */
+    case F_SETFD:
+        return 0;
+    case F_GETFL:
+        return filp->f_flags;
+    case F_SETFL:
+        filp->f_flags = (unsigned short)arg;
+        return 0;
+    case F_GETLK:
+    case F_SETLK:
+    case F_SETLKW:
+    default:
+        return -1;
+    }
+}
+
+int sys_brk(unsigned long end_data_seg)
+{
+    if (end_data_seg >= current->end_code &&
+        end_data_seg < current->start_stack - 16384)
+        current->brk = end_data_seg;
+    return (int)current->brk;
+}
 
 /* ------------------------------------------------------------------
  * execve: load a 32-bit ELF from the MINIX filesystem and run it in

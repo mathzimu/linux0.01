@@ -1,11 +1,25 @@
 # 后续工作清单（NEXT STEPS）
 
-> 当前阶段收尾于提交 `0d3c58e`。本文档保存未完成的工作与继续所需的关键上下文。
+> 当前阶段收尾于提交 `5426b8b`（Linux 0.01 功能对齐完成）。本文档保存未完成的工作与继续所需的关键上下文。
 
 ## 当前状态（一句话）
 
-22 个系统调用、19 条 Shell 命令的教学内核：进程生命周期完整（fork/execve/waitpid/信号）、
-MINIX FS 增删改查闭环、Ring3 用户态 + 编程工具链（`make prog NAME=xxx` → `exec /xxx`）全通。
+**67 个系统调用（编号与 1991 Linux 0.01 完全一致）**、23 条 Shell 命令的教学内核：
+进程生命周期完整（fork/execve/waitpid/信号/管道）、MINIX FS 增删改查 + 硬链接/重命名、
+Ring3 用户态 + 编程工具链（`make prog NAME=xxx` → `exec /xxx`）、内存隔离、chdir。
+
+## Linux 0.01 功能对齐（`39f1b72`→`5426b8b`）
+
+- **系统调用编号 0-66 与 Linux 0.01 的 sys_call_table 完全一致**（unistd.h 同步）
+- 新增实现：creat、link（硬链接）、rename、stat/fstat、chmod/chown、access、
+  umask、uname、stime、utime、setuid/getuid/setgid/getgid/geteuid/getegid、
+  alarm（SIGALRM）、nice、times、setpgid/getpgrp/setsid、chroot、fcntl（F_DUPFD）、
+  brk、**pipe（管道，0.01 fs/pipe.c 移植）**
+- open 改 3 参数（flag/mode + O_CREAT/O_TRUNC + umask）
+- stub 保留 -1 的：break/mount/umount/ptrace/stty/gtty/ftime/prof/acct/phys/
+  lock/mpx/ulimit/ustat/ioctl —— **与 Linux 0.01 自身 -ENOSYS 完全一致**
+- 比 0.01 强：mknod/rename/chroot 是 0.01 的 stub，我们已真实现；有内存隔离
+- 验证：user/sysdemo.c、user/pipedemo.c + shell ln/mv/stat/id 命令
 
 ## 后续功能清单（按优先级）
 

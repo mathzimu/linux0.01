@@ -51,6 +51,15 @@ int main(void)
 
     printf("access /readme.txt = %d\n", access("/readme.txt", 4));
 
+    /* fcntl F_DUPFD: duplicate fd onto the first free slot >= 3 */
+    fd = open("/hello.txt", 0, 0);
+    if (fd >= 0) {
+        int d = fcntl(fd, 0, 5);      /* F_DUPFD, start at 5 */
+        printf("fcntl F_DUPFD: fd=%d dup=%d\n", fd, d);
+        if (d >= 0) close(d);
+        close(fd);
+    }
+
     chmod("/hello.txt", 0600);
     chown("/hello.txt", 1, 2);
     printf("chmod/chown ok\n");
