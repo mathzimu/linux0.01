@@ -143,7 +143,8 @@ static void cmd_help(int argc, char **argv)
     printk("  sys     - syscall path demo (getpid/time/write/open/close)\n");
     printk("  spawn   - fork() demo: two children print and exit\n");
     printk("  sig     - pause/kill demo: SIGINT kills a paused child\n");
-    printk("  ls      - list a directory (via open/read/close)\n");
+    printk("  ls      - list a directory (default: current, via open/read)\n");
+    printk("  cd      - change directory (sys_chdir, relative paths OK)\n");
     printk("  cat     - print a file (via open/read/close)\n");
     printk("  sync    - write back dirty buffers/inodes\n");
     printk("  wtest   - write a file [path] through the write path\n");
@@ -313,9 +314,19 @@ static void cmd_exec(int argc, char **argv)
 
 /* --- filesystem commands (open/read/close go through int 0x80) --- */
 
+static void cmd_cd(int argc, char **argv)
+{
+    if (argc < 2) {
+        printk("cd: usage: cd <dir>\n");
+        return;
+    }
+    if (sys_chdir(argv[1]) < 0)
+        printk("cd: %s: no such directory\n", argv[1]);
+}
+
 static void cmd_ls(int argc, char **argv)
 {
-    const char *path = (argc > 1) ? argv[1] : "/";
+    const char *path = (argc > 1) ? argv[1] : "";   /* "" = pwd */
     char buf[16];                 /* one minix dir entry */
     int fd, n;
 
@@ -539,6 +550,8 @@ void shell_main(void)
             cmd_sig(argc, argv);
         } else if (strcmp(argv[0], "ls") == 0) {
             cmd_ls(argc, argv);
+        } else if (strcmp(argv[0], "cd") == 0) {
+            cmd_cd(argc, argv);
         } else if (strcmp(argv[0], "cat") == 0) {
             cmd_cat(argc, argv);
         } else if (strcmp(argv[0], "sync") == 0) {

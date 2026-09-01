@@ -46,10 +46,20 @@ MINIX FS 增删改查闭环、Ring3 用户态 + 编程工具链（`make prog NAM
 - 风险高：fork 的页表复制、用户栈/堆的页分配都要改
 - **建议留到最后**，改动前先备份当前可运行状态
 
-### 6. chdir / 相对路径（内核）
-- 现状：namei 硬编码从根 `/` 解析
-- 目标：task_struct 加 `pwd` inode；namei 支持相对路径
-- 涉及：sys_chdir（新增 syscall）、open/mkdir 等路径解析
+### 6. ~~chdir / 相对路径（内核）~~ ✅ 完成（commit 待填）
+- task_struct 加 `struct m_inode *pwd`；init（sched_init 里 FS 挂载后）pwd=根
+  inode；fork 继承（`p->pwd->i_count++` 共享引用）；sys_exit iput 释放
+- **syscall 23 `chdir(path)`**：namei 解析（相对旧 pwd）、非目录返回 -1、
+  iput 旧 pwd 换新
+- namei 支持相对路径（非 `/` 开头从 current->pwd 起步，walk 期间多持一
+  引用，iput 平衡）；`""`=当前目录；`.` 特判（`./x`、`.`）
+- split_path 的 bare name 由 `/`（根）改为 `""`（当前目录）→ touch/mkdir/
+  rm/rmdir 相对路径生效
+- **mkminix 目录补 `.`/`..` 项**（root 6 项、docs 3 项、注入后 size 刷新
+  +2）——否则 `cd /docs` 后 `cd ..` 失败（基础目录无 .. 项）
+- shell 加 `cd` 命令；`ls` 默认当前目录
+- 验证：`cd /docs`→`ls`→`cd ..`、`touch x`/`rm x` 相对创建删除、
+  `mkdir sub`→`cd sub`（. / .. 指向正确）→`rmdir sub`、`exec /ls .` 全通
 
 ## 工具链速查（继续工作必备）
 
@@ -72,7 +82,8 @@ python3 scripts/qemu-test.py --image Image --hda minix.img --keys $'cmd\n'
 ## 已知限制 / 注意事项
 
 1. **无内存隔离**（U/S=1）—— 用户可读写内核内存（教学取舍，见清单 5）
-2. **无 chdir** —— 路径必须从 `/` 写全
+2. **chdir 已支持**（syscall 23）；`..` 依赖目录的 `..` 项（mkminix 已写入；
+   `mkdir` 建的目录自带 . / ..）
 3. **无自定义信号处理器** —— 只有默认动作（SIGINT/KILL 杀进程）
 4. **目录满不扩容** —— 单目录 >64 项需间接块目录（未实现）
 5. **用户栈**：顶 0x3FF000，crt 从 0x3FF004/0x3FF008 读 argc/argv（execve 约定）
@@ -92,7 +103,7 @@ python3 scripts/qemu-test.py --image Image --hda minix.img --keys $'cmd\n'
 | `user/lib.h/.c` | 用户态库（printf/malloc/syscall 包装） |
 | `user/crt.s` | 用户程序入口（读 0x3FF004/0x3FF008） |
 | `user/hello.c catfile.c memtest.c printf.c ls.c str.c sigchld.c` | 示例程序（printf / readdir / libc / SIGCHLD 语义演示） |
-| `tools/mkminix.c` | 镜像制作（`tools/mkminix minix.img prog.elf:name` 注入） |
+| `tools/mkminix.c` | 镜像制作（`tools/mkminix minix.img prog.elf:name` 注入；目录含 . / ..） |
 | `tools/build.c` | 引导镜像拼接 |
 | `scripts/qemu-test.py` | 无头回归驱动 |
 | `docs/LIMITATIONS.md` | 实现边界（权威：源码 > 本文件） |

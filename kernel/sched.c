@@ -2,6 +2,7 @@
 #include <linux/sched.h>
 #include <linux/mm.h>
 #include <linux/head.h>
+#include <linux/fs.h>
 #include <asm/system.h>
 
 extern unsigned long _end;
@@ -18,6 +19,7 @@ static struct task_struct init_task = {
     0,            /* signal */
     0,            /* exit_code */
     0,            /* sig_ignore_mask */
+    NULL,         /* pwd — set in sched_init after sys_setup mounts the fs */
     {0},          /* tss */
     {NULL,},      /* filp */
     0,            /* uid */
@@ -46,6 +48,11 @@ void sched_init(void)
 
     current = &init_task;
     task[0] = &init_task;
+
+    /* sys_setup() (called before sched_init in main) has mounted the
+       MINIX fs, so the root inode is resolvable.  The init task (and
+       via fork, everyone else) starts with pwd = root. */
+    init_task.pwd = iget(0x301, 1);
 
     init_task.tss.ss0 = KERNEL_DS;
     init_task.tss.esp0 = (unsigned long)&_end + 0x1000;

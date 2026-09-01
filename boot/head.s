@@ -174,8 +174,8 @@ system_call:
     /* reload saved syscall number for dispatch */
     mov 24(%esp), %eax
 
-    /* 23 syscalls: numbers 0..22 valid */
-    cmpl $23, %eax
+    /* 24 syscalls: numbers 0..23 valid */
+    cmpl $24, %eax
     jb 1f
     movl $-1, %eax
     jmp 2f
@@ -314,3 +314,4 @@ sys_call_table:
     .long sys_waitpid
     .long sys_execve
     .long sys_signal
+    .long sys_chdir

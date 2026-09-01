@@ -77,6 +77,10 @@ static int find_entry(struct m_inode *dir, const char *name, int namelen,
     return -1;
 }
 
+/* Resolve a pathname to an inode.  Absolute paths ("/a/b") start at
+   the root; relative paths ("a/b", "b") start at current->pwd.  The
+   empty string means the current directory.  Returns an inode with a
+   held reference (caller must iput it) or NULL. */
 struct m_inode *namei(const char *pathname)
 {
     struct m_inode *inode;
@@ -88,14 +92,20 @@ struct m_inode *namei(const char *pathname)
 
     if (!pathname) return NULL;
 
-    if (*pathname == '/') pathname++;
-
-    if (*pathname == '\0') {
+    if (*pathname == '/') {
+        pathname++;
         inode = iget(dev, 1);
-        return inode;
+    } else {
+        /* relative: start at the current working directory */
+        inode = current->pwd;
+        if (!inode)
+            return NULL;
+        inode->i_count++;          /* extra ref for the walk */
     }
 
-    inode = iget(dev, 1);
+    if (*pathname == '\0')
+        return inode;              /* "/" or "" -> root or pwd */
+
     if (!inode) return NULL;
 
     p = pathname;
@@ -106,6 +116,12 @@ struct m_inode *namei(const char *pathname)
         }
         name[namelen] = '\0';
         while (*p == '/') p++;
+
+        if (namelen == 1 && name[0] == '.') {
+            if (*p == '\0')
+                return inode;          /* "." -> this directory */
+            continue;                  /* "./x" keeps walking from here */
+        }
 
         if (find_entry(inode, name, namelen, &ino) < 0) {
             iput(inode);
@@ -219,7 +235,7 @@ int dir_is_empty(struct m_inode *dir)
 }
 
 /* Split "a/b/c" into dirpath="a/b" and name="c" (name ≤ 14 chars).
-   A bare name resolves against "/".  Returns 0 or -1. */
+   A bare name resolves against the current directory (dirpath = ""). */
 int split_path(const char *path, char *dirpath, char *name)
 {
     const char *slash;
@@ -230,7 +246,7 @@ int split_path(const char *path, char *dirpath, char *name)
 
     slash = strrchr(path, '/');
     if (!slash) {
-        strcpy(dirpath, "/");
+        dirpath[0] = '\0';             /* relative to pwd */
         len = (int)strlen(path);
         if (len == 0 || len > 14)
             return -1;

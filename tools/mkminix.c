@@ -226,10 +226,12 @@ int main(int argc, char *argv[])
 
     put_super();
 
-    /* --- root dir (inode 1): base files + injected programs --- */
+    /* --- root dir (inode 1): '.'/'..' + base files + injected progs --- */
     root_zone = alloc_zone();
-    put_inode(1, MODE_DIR, 4 * sizeof(struct dir_entry), 2,
+    put_inode(1, MODE_DIR, 6 * sizeof(struct dir_entry), 2,
               (unsigned short[]){root_zone}, 1);
+    add_dir_entry(root_zone, 1, ".");
+    add_dir_entry(root_zone, 1, "..");
     add_dir_entry(root_zone, 2, "hello.txt");
     add_dir_entry(root_zone, 3, "readme.txt");
     add_dir_entry(root_zone, 4, "big.txt");
@@ -281,8 +283,10 @@ int main(int argc, char *argv[])
 
     /* --- docs/ (inode 6) + note.txt (inode 7) --- */
     docs_zone = alloc_zone();
-    put_inode(5, MODE_DIR, 1 * sizeof(struct dir_entry), 2,
+    put_inode(5, MODE_DIR, 3 * sizeof(struct dir_entry), 2,
               (unsigned short[]){docs_zone}, 1);
+    add_dir_entry(docs_zone, 5, ".");
+    add_dir_entry(docs_zone, 1, "..");
     add_dir_entry(docs_zone, 6, "note.txt");
     {
         const char *text = "A file inside a subdirectory.\n";
@@ -305,9 +309,9 @@ int main(int argc, char *argv[])
             if (inject_elf(argv[i], root_zone) == 0)
                 inj++;
         (void)inj;
-        /* refresh root dir size (4 base entries + injected) */
+        /* refresh root dir size (2 dot entries + 4 base + injected) */
         put_inode(1, MODE_DIR,
-                  (4UL + (unsigned long)(next_inode - 7)) * sizeof(struct dir_entry),
+                  (6UL + (unsigned long)(next_inode - 7)) * sizeof(struct dir_entry),
                   2, (unsigned short[]){root_zone}, 1);
     }
 

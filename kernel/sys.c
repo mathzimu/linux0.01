@@ -16,6 +16,25 @@ int sys_time(unsigned long *tloc)
     return i;
 }
 
+/* Change the current working directory.  Relative paths are resolved
+   against the *old* pwd (chdir("sub") inside /docs -> /docs/sub). */
+int sys_chdir(const char *filename)
+{
+    struct m_inode *inode;
+
+    inode = namei(filename);
+    if (!inode)
+        return -1;
+    if (!(inode->i_mode & 0x4000)) {
+        iput(inode);
+        return -1;
+    }
+    if (current->pwd)
+        iput(current->pwd);
+    current->pwd = inode;
+    return 0;
+}
+
 long sys_write(unsigned int fd, const char *buf, unsigned long count)
 {
     long result;
