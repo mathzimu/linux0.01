@@ -218,6 +218,232 @@ int closedir(DIR *d)
     return r;
 }
 
+/* --- string functions (user-lib copies of kernel lib/string.c) ------- */
+
+char *strcpy(char *dest, const char *src)
+{
+    char *tmp = dest;
+    while ((*dest++ = *src++) != '\0');
+    return tmp;
+}
+
+char *strncpy(char *dest, const char *src, int n)
+{
+    int i;
+    for (i = 0; i < n && src[i] != '\0'; i++)
+        dest[i] = src[i];
+    for (; i < n; i++)
+        dest[i] = '\0';
+    return dest;
+}
+
+int strcmp(const char *s1, const char *s2)
+{
+    while (*s1 && *s1 == *s2) {
+        s1++;
+        s2++;
+    }
+    return *(unsigned char *)s1 - *(unsigned char *)s2;
+}
+
+int strncmp(const char *s1, const char *s2, int n)
+{
+    while (n-- && *s1 && *s1 == *s2) {
+        s1++;
+        s2++;
+    }
+    if (n < 0)
+        return 0;
+    return *(unsigned char *)s1 - *(unsigned char *)s2;
+}
+
+char *strcat(char *dest, const char *src)
+{
+    char *tmp = dest;
+    while (*dest)
+        dest++;
+    while ((*dest++ = *src++) != '\0');
+    return tmp;
+}
+
+int strlen(const char *s)
+{
+    int len = 0;
+    while (*s++)
+        len++;
+    return len;
+}
+
+char *strchr(const char *s, int c)
+{
+    while (*s) {
+        if (*s == (char)c)
+            return (char *)s;
+        s++;
+    }
+    return NULL;
+}
+
+char *strrchr(const char *s, int c)
+{
+    const char *found = NULL;
+    while (*s) {
+        if (*s == (char)c)
+            found = s;
+        s++;
+    }
+    return (char *)found;
+}
+
+void *memcpy(void *dest, const void *src, int n)
+{
+    char *d = dest;
+    const char *s = src;
+    while (n--)
+        *d++ = *s++;
+    return dest;
+}
+
+void *memset(void *s, int c, int n)
+{
+    char *p = s;
+    while (n--)
+        *p++ = (char)c;
+    return s;
+}
+
+int memcmp(const void *s1, const void *s2, int n)
+{
+    const unsigned char *p1 = s1, *p2 = s2;
+    while (n--) {
+        if (*p1 != *p2)
+            return *p1 - *p2;
+        p1++;
+        p2++;
+    }
+    return 0;
+}
+
+void *memmove(void *dest, const void *src, int n)
+{
+    char *d = dest;
+    const char *s = src;
+
+    if (d < s) {
+        while (n--)
+            *d++ = *s++;
+    } else {
+        d += n;
+        s += n;
+        while (n--)
+            *--d = *--s;
+    }
+    return dest;
+}
+
+/* --- ctype (user-lib copies) ----------------------------------------- */
+
+int isdigit(int c)
+{
+    return c >= '0' && c <= '9';
+}
+
+int isspace(int c)
+{
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r';
+}
+
+int isalpha(int c)
+{
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+}
+
+int isalnum(int c)
+{
+    return isalpha(c) || isdigit(c);
+}
+
+int isupper(int c)
+{
+    return c >= 'A' && c <= 'Z';
+}
+
+int islower(int c)
+{
+    return c >= 'a' && c <= 'z';
+}
+
+int tolower(int c)
+{
+    if (isupper(c))
+        return c + 32;
+    return c;
+}
+
+int toupper(int c)
+{
+    if (islower(c))
+        return c - 32;
+    return c;
+}
+
+/* --- stdlib: number parsing ------------------------------------------ */
+
+long strtol(const char *nptr, char **endptr, int base)
+{
+    long result = 0;
+    int sign = 1;
+    const char *p = nptr;
+
+    while (isspace(*p))
+        p++;
+    if (*p == '+' || *p == '-') {
+        if (*p == '-')
+            sign = -1;
+        p++;
+    }
+    if (base == 0) {
+        if (*p == '0') {
+            p++;
+            if (*p == 'x' || *p == 'X') {
+                base = 16;
+                p++;
+            } else {
+                base = 8;
+            }
+        } else {
+            base = 10;
+        }
+    } else if (base == 16) {
+        if (*p == '0' && (p[1] == 'x' || p[1] == 'X'))
+            p += 2;
+    }
+    for (;;) {
+        int d;
+        char c = *p;
+        if (c >= '0' && c <= '9')
+            d = c - '0';
+        else if (c >= 'a' && c <= 'z')
+            d = c - 'a' + 10;
+        else if (c >= 'A' && c <= 'Z')
+            d = c - 'A' + 10;
+        else
+            break;
+        if (d >= base)
+            break;
+        result = result * base + d;
+        p++;
+    }
+    if (endptr)
+        *endptr = (char *)p;
+    return sign * result;
+}
+
+int atoi(const char *nptr)
+{
+    return (int)strtol(nptr, NULL, 10);
+}
+
 /* --- user-mode heap ---------------------------------------------------
    Region: [0x310000, 0x3FE000) — above the kernel buffer cache and
    below the user stack (top 0x3FF000).  Free chunks form a singly

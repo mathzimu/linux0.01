@@ -20,10 +20,13 @@ MINIX FS 增删改查闭环、Ring3 用户态 + 编程工具链（`make prog NAM
 - readdir 内部读 16 字节目录项、跳过 ino==0 空槽、name 复制为 NUL 结尾
 - 示例：`user/ls.c`（`make prog NAME=ls` → `exec /ls` / `exec /ls /docs`），QEMU 验证通过
 
-### 3. 更多 libc（user/lib.c）
-- `atoi/strtol`（解析数字，配合 printf %d）
-- `strlen/strcpy/strcmp` 等（内核 `lib/string.c` 已有，可移植进用户库或让用户 -Iinclude 复用）
-- 注意：include/string.h 的函数是内核编译的，用户程序链接需用户库副本
+### 3. ~~更多 libc（user/lib.c）~~ ✅ 完成（commit 待填）
+- `atoi/strtol`（支持 base 0/2..36、前导空白、符号、0x/0 前缀、endptr 停靠点）
+- 字符串函数副本（与内核 lib/string.c 一致）：strcpy/strncpy/strcmp/strncmp/strcat/
+  strlen/strchr/strrchr/memcpy/memset/memcmp/memmove
+- ctype 副本：isdigit/isspace/isalpha/isalnum/isupper/islower/tolower/toupper
+- 全部声明在 user/lib.h（用户 include lib.h 即可，无需 include <string.h>）
+- 示例：`user/str.c`（`make prog NAME=str` → `exec /str`），QEMU 验证通过
 
 ### 4. SIGCHLD 完整语义（内核）
 - 现状：子进程 exit 发 SIGCHLD 唤醒父；do_signal 忽略 SIGCHLD
@@ -81,7 +84,7 @@ python3 scripts/qemu-test.py --image Image --hda minix.img --keys $'cmd\n'
 | `init/shell.c` | Shell 命令 + run_user_program |
 | `user/lib.h/.c` | 用户态库（printf/malloc/syscall 包装） |
 | `user/crt.s` | 用户程序入口（读 0x3FF004/0x3FF008） |
-| `user/hello.c catfile.c memtest.c printf.c ls.c` | 示例程序（printf 演示 / readdir 列目录） |
+| `user/hello.c catfile.c memtest.c printf.c ls.c str.c` | 示例程序（printf / readdir / libc 演示） |
 | `tools/mkminix.c` | 镜像制作（`tools/mkminix minix.img prog.elf:name` 注入） |
 | `tools/build.c` | 引导镜像拼接 |
 | `scripts/qemu-test.py` | 无头回归驱动 |
