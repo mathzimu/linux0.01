@@ -20,7 +20,7 @@ MINIX FS 增删改查闭环、Ring3 用户态 + 编程工具链（`make prog NAM
 - readdir 内部读 16 字节目录项、跳过 ino==0 空槽、name 复制为 NUL 结尾
 - 示例：`user/ls.c`（`make prog NAME=ls` → `exec /ls` / `exec /ls /docs`），QEMU 验证通过
 
-### 3. ~~更多 libc（user/lib.c）~~ ✅ 完成（commit 待填）
+### 3. ~~更多 libc（user/lib.c）~~ ✅ 完成（`c483d76`）
 - `atoi/strtol`（支持 base 0/2..36、前导空白、符号、0x/0 前缀、endptr 停靠点）
 - 字符串函数副本（与内核 lib/string.c 一致）：strcpy/strncpy/strcmp/strncmp/strcat/
   strlen/strchr/strrchr/memcpy/memset/memcmp/memmove
