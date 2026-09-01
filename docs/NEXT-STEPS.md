@@ -14,7 +14,7 @@ MINIX FS 增删改查闭环、Ring3 用户态 + 编程工具链（`make prog NAM
   宽度 `%Ns`、左对齐 `%-`、`%#x/%#o` 前缀（`0x`/`0`）
 - 验证：`user/printf.c` 演示程序（`make prog NAME=printf` → `exec /printf`），回归全过
 
-### 2. ~~readdir 便捷接口（用户库）~~ ✅ 完成（commit 待填）
+### 2. ~~readdir 便捷接口（用户库）~~ ✅ 完成（`35ad6e2`）
 - `lib.h` 提供 `struct dirent`（d_ino + d_name[15]）、`DIR`、`opendir/readdir/closedir`
 - 选择**用户库封装**而非新增 `sys_getdents`（保持 syscall 数 22 不变，更简单）
 - readdir 内部读 16 字节目录项、跳过 ino==0 空槽、name 复制为 NUL 结尾
