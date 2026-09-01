@@ -240,7 +240,7 @@ linux0.01/
 ├── include/       # 头文件（含 unistd.h：int 0x80 包装宏）
 ├── tools/         # build.c（镜像拼接）· mkminix.c（MINIX 测试盘）
 ├── scripts/       # qemu-test.py（无头验证）· regress.sh（一键回归）· ppm2png.py（截图）
-├── docs/          # 教学与设计文档
+├── docs/          # 教学与设计文档（含 GIT-WORKFLOW.md 分支/版本规范）
 └── Makefile       # 构建系统（工具链自动检测）
 ```
 
@@ -318,7 +318,8 @@ python3 scripts/qemu-test.py --image Image --hda minix.img \
 | 3 | [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md) — 先知道"做了什么 / 没做什么" |
 | 4 | [`docs/TUTORIAL.md`](docs/TUTORIAL.md) + `docs/tutorial/` — 按文件逐行读源码 |
 | 5 | [`docs/HLD.md`](docs/HLD.md) / [`docs/SRS.md`](docs/SRS.md) — 高层设计 / 需求背景 |
-| 6 | [`docs/NEXT-STEPS.md`](docs/NEXT-STEPS.md) — 保存的后续工作清单 |
+| 6 | [`docs/GIT-WORKFLOW.md`](docs/GIT-WORKFLOW.md) — 分支 / 提交 / 版本规范 |
+| 7 | [`docs/NEXT-STEPS.md`](docs/NEXT-STEPS.md) — 保存的后续工作清单 |
 
 > **权威顺序**：源码 > LIMITATIONS/TUTORIAL > HLD/SRS。文档与代码冲突时以源码为准。
 
