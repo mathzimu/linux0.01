@@ -9,7 +9,7 @@ MINIX FS 增删改查闭环、Ring3 用户态 + 编程工具链（`make prog NAM
 
 ## 后续功能清单（按优先级）
 
-### 1. ~~printf 增强（user/lib.c）~~ ✅ 完成（commit 待填）
+### 1. ~~printf 增强（user/lib.c）~~ ✅ 完成（`e8681e6`）
 - 已补：`%ld/%lu/%lx`（long 修饰符）、精度 `%.d`（数字补零 / 字符串截断）、
   宽度 `%Ns`、左对齐 `%-`、`%#x/%#o` 前缀（`0x`/`0`）
 - 验证：`user/printf.c` 演示程序（`make prog NAME=printf` → `exec /printf`），回归全过
