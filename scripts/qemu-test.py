@@ -116,7 +116,25 @@ def main():
             # as an actual newline (bash $'...\n') — unify both
             keys = args.keys.replace('\\n', '\n')
             type_text(sock, keys)
-            time.sleep(args.tail)
+            # Instead of a fixed wait, poll the serial capture until it stops
+            # growing (output settled).  This is much more robust when QEMU
+            # runs under TCG (no KVM, as on CI) where commands are slower.
+            settle_window = max(args.tail, 10)
+            last = 0
+            if os.path.exists(serial):
+                last = os.path.getsize(serial)
+            last_change = time.time()
+            start = time.time()
+            while time.time() - start < settle_window:
+                time.sleep(0.2)
+                cur = 0
+                if os.path.exists(serial):
+                    cur = os.path.getsize(serial)
+                if cur != last:
+                    last = cur
+                    last_change = time.time()
+                elif time.time() - last_change >= 1.5:
+                    break
         hmp(sock, 'screendump %s.ppm' % args.out)
         time.sleep(0.5)
         with open(args.out + '.regs', 'w') as f:
