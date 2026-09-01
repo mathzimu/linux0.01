@@ -830,8 +830,137 @@ int sys_mpx(void) { return -1; }
 int sys_ulimit(void) { return -1; }
 int sys_ustat(void) { return -1; }
 int sys_ioctl(void) { return -1; }
-int sys_link(const char *oldname, const char *newname) { (void)oldname; (void)newname; return -1; }
-int sys_rename(const char *oldname, const char *newname) { (void)oldname; (void)newname; return -1; }
+
+/* Hard link: create a new directory entry for an existing inode.
+   Directories cannot be linked (POSIX).  Same device implied. */
+int sys_link(const char *oldname, const char *newname)
+{
+    struct m_inode *oldinode, *dir;
+    char dirpath[64], name[15];
+    unsigned short ino;
+    int namelen;
+
+    oldinode = namei(oldname);
+    if (!oldinode)
+        return -1;
+    if (oldinode->i_mode & S_IFDIR) {
+        iput(oldinode);
+        return -1;
+    }
+    if (split_path(newname, dirpath, name) < 0) {
+        iput(oldinode);
+        return -1;
+    }
+    dir = namei(dirpath);
+    if (!dir) {
+        iput(oldinode);
+        return -1;
+    }
+    if (!(dir->i_mode & S_IFDIR)) {
+        iput(oldinode);
+        iput(dir);
+        return -1;
+    }
+    namelen = (int)strlen(name);
+    if (dir_lookup(dir, name, namelen, &ino) == 0) {   /* target exists */
+        iput(oldinode);
+        iput(dir);
+        return -1;
+    }
+    if (dir_add_entry(dir, name, namelen,
+                      (unsigned short)oldinode->i_num) < 0) {
+        iput(oldinode);
+        iput(dir);
+        return -1;
+    }
+    oldinode->i_nlinks++;
+    oldinode->i_dirt = 1;
+    iput(oldinode);
+    iput(dir);
+    return 0;
+}
+
+/* Rename (Linux 0.01 left this -ENOSYS; we implement it).  Same-device
+   only: move the entry from the old parent dir to the new one. */
+int sys_rename(const char *oldname, const char *newname)
+{
+    struct m_inode *oldinode, *dir_old, *dir_new;
+    char olddir[64], oldbase[15], newdir[64], newbase[15];
+    unsigned short ino;
+    int n1, n2;
+
+    if (split_path(oldname, olddir, oldbase) < 0)
+        return -1;
+    if (split_path(newname, newdir, newbase) < 0)
+        return -1;
+    n1 = (int)strlen(oldbase);
+    n2 = (int)strlen(newbase);
+
+    dir_old = namei(olddir);
+    if (!dir_old)
+        return -1;
+    if (dir_lookup(dir_old, oldbase, n1, &ino) < 0) {
+        iput(dir_old);
+        return -1;
+    }
+    oldinode = iget(dir_old->i_dev, ino);
+    if (!oldinode) {
+        iput(dir_old);
+        return -1;
+    }
+
+    dir_new = namei(newdir);
+    if (!dir_new) {
+        iput(dir_old);
+        iput(oldinode);
+        return -1;
+    }
+    if (dir_new != dir_old && dir_old->i_dev != dir_new->i_dev) {
+        iput(oldinode);
+        iput(dir_old);
+        iput(dir_new);
+        return -1;
+    }
+
+    /* target must not exist (unless it is the same file) */
+    if (dir_lookup(dir_new, newbase, n2, &ino) == 0 && ino != oldinode->i_num) {
+        iput(oldinode);
+        iput(dir_old);
+        iput(dir_new);
+        return -1;
+    }
+
+    if (dir_new != dir_old) {
+        /* cross-directory: add new entry, then remove the old one */
+        if (dir_add_entry(dir_new, newbase, n2,
+                          (unsigned short)oldinode->i_num) < 0 ||
+            dir_remove_entry(dir_old, oldbase, n1) < 0) {
+            iput(oldinode);
+            iput(dir_old);
+            iput(dir_new);
+            return -1;
+        }
+        dir_old->i_nlinks--;               /* lost a child */
+        dir_new->i_nlinks++;
+        dir_old->i_dirt = 1;
+        dir_new->i_dirt = 1;
+    } else {
+        /* same directory: swap the name in place */
+        if (dir_remove_entry(dir_old, oldbase, n1) < 0 ||
+            dir_add_entry(dir_old, newbase, n2,
+                          (unsigned short)oldinode->i_num) < 0) {
+            iput(oldinode);
+            iput(dir_old);
+            iput(dir_new);
+            return -1;
+        }
+    }
+
+    iput(oldinode);
+    iput(dir_old);
+    iput(dir_new);
+    return 0;
+}
 int sys_pipe(unsigned long *fildes) { (void)fildes; return -1; }
 int sys_fcntl(unsigned int fd, unsigned int cmd, unsigned long arg) { (void)fd; (void)cmd; (void)arg; return -1; }
 int sys_brk(unsigned long end_data_seg) { (void)end_data_seg; return -1; }

@@ -149,6 +149,8 @@ static void cmd_help(int argc, char **argv)
     printk("  cd      - change directory (sys_chdir, relative paths OK)\n");
     printk("  stat    - stat() a file (ino/size/mode/nlink/uid/gid)\n");
     printk("  id      - uid/euid/gid/egid/pgrp\n");
+    printk("  ln      - hard link (sys_link)\n");
+    printk("  mv      - rename (sys_rename)\n");
     printk("  cat     - print a file (via open/read/close)\n");
     printk("  sync    - write back dirty buffers/inodes\n");
     printk("  wtest   - write a file [path] through the write path\n");
@@ -350,6 +352,30 @@ static void cmd_id(int argc, char **argv)
     printk("uid=%d euid=%d gid=%d egid=%d pgrp=%d\n",
            sys_getuid(), sys_geteuid(), sys_getgid(), sys_getegid(),
            sys_getpgrp());
+}
+
+static void cmd_ln(int argc, char **argv)
+{
+    if (argc < 3) {
+        printk("ln: usage: ln <old> <new>\n");
+        return;
+    }
+    if (sys_link(argv[1], argv[2]) < 0)
+        printk("ln: failed\n");
+    else
+        printk("ln: linked\n");
+}
+
+static void cmd_mv(int argc, char **argv)
+{
+    if (argc < 3) {
+        printk("mv: usage: mv <old> <new>\n");
+        return;
+    }
+    if (sys_rename(argv[1], argv[2]) < 0)
+        printk("mv: failed\n");
+    else
+        printk("mv: renamed\n");
 }
 
 static void cmd_ls(int argc, char **argv)
@@ -584,6 +610,10 @@ void shell_main(void)
             cmd_stat(argc, argv);
         } else if (strcmp(argv[0], "id") == 0) {
             cmd_id(argc, argv);
+        } else if (strcmp(argv[0], "ln") == 0) {
+            cmd_ln(argc, argv);
+        } else if (strcmp(argv[0], "mv") == 0) {
+            cmd_mv(argc, argv);
         } else if (strcmp(argv[0], "cat") == 0) {
             cmd_cat(argc, argv);
         } else if (strcmp(argv[0], "sync") == 0) {
