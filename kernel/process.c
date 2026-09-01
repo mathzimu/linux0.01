@@ -358,6 +358,7 @@ void do_signal(void)
         case 2:   /* SIGINT */
         case 3:   /* SIGQUIT */
         case 9:   /* SIGKILL */
+        case 13:  /* SIGPIPE */
         case 14:  /* SIGALRM */
             sys_exit(128 + sig);   /* never returns */
         default:

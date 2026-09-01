@@ -73,6 +73,8 @@ long sys_write(unsigned int fd, const char *buf, unsigned long count)
     struct file *f = current->filp[fd];
     if (f->f_mode == 0)
         return -1;
+    if (f->f_inode->i_pipe)
+        return write_pipe(f->f_inode, (char *)buf, (int)count);
 
     result = file_write(f->f_inode, f, buf, count);
     if (result > 0)
@@ -115,6 +117,8 @@ long sys_read(unsigned int fd, char *buf, unsigned long count)
         return -1;
 
     struct file *f = current->filp[fd];
+    if (f->f_inode->i_pipe)
+        return read_pipe(f->f_inode, buf, count);
     if (f->f_mode == 1)
         return -1;
 
@@ -961,7 +965,6 @@ int sys_rename(const char *oldname, const char *newname)
     iput(dir_new);
     return 0;
 }
-int sys_pipe(unsigned long *fildes) { (void)fildes; return -1; }
 int sys_fcntl(unsigned int fd, unsigned int cmd, unsigned long arg) { (void)fd; (void)cmd; (void)arg; return -1; }
 int sys_brk(unsigned long end_data_seg) { (void)end_data_seg; return -1; }
 

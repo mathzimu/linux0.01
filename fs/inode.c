@@ -1,6 +1,7 @@
 #include <linux/kernel.h>
 #include <linux/sched.h>
 #include <linux/fs.h>
+#include <linux/mm.h>
 #include <asm/system.h>
 
 extern struct super_block super_block[NR_SUPER];
@@ -163,9 +164,48 @@ struct m_inode *iget(int dev, int nr)
     return NULL;
 }
 
+/* Grab an inode-table slot without reading anything from disk
+   (used for pipe inodes). */
+struct m_inode *get_empty_inode(void)
+{
+    struct m_inode *inode;
+    int i;
+
+    for (i = 0; i < NR_INODE; i++) {
+        inode = &inode_table[i];
+        if (!inode->i_count) {
+            inode->i_count = 1;
+            inode->i_dev = 0;
+            inode->i_num = 0;
+            inode->i_dirt = 0;
+            inode->i_lock = 0;
+            inode->i_pipe = 0;
+            inode->i_mount = 0;
+            inode->i_seek = 0;
+            inode->i_update = 0;
+            inode->i_nlinks = 0;
+            inode->i_size = 0;
+            return inode;
+        }
+    }
+    return NULL;
+}
+
 void iput(struct m_inode *inode)
 {
     if (!inode) return;
+
+    if (inode->i_pipe) {
+        /* pipe inode: no disk representation; the last close frees
+           the buffer page */
+        if (--inode->i_count == 0) {
+            free_page(inode->i_size);
+            inode->i_pipe = 0;
+            inode->i_size = 0;
+        }
+        return;
+    }
+
     inode->i_count--;
     if (inode->i_count) return;
     if (inode->i_nlinks) return;

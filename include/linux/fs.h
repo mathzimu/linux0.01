@@ -95,6 +95,10 @@ long sys_read(unsigned int fd, char *buf, unsigned long count);
 long sys_write(unsigned int fd, const char *buf, unsigned long count);
 
 struct m_inode *iget(int dev, int nr);
+struct m_inode *get_empty_inode(void);
+int read_pipe(struct m_inode *inode, char *buf, int count);
+int write_pipe(struct m_inode *inode, char *buf, int count);
+int sys_pipe(unsigned long *fildes);
 void iput(struct m_inode *inode);
 struct m_inode *namei(const char *pathname);
 void sync_inodes(int dev);

@@ -56,6 +56,7 @@ OBJS = kernel/main.o kernel/sched.o kernel/process.o kernel/sys.o \
        kernel/asm.o kernel/vsprintf.o kernel/panic.o \
        mm/memory.o mm/page.o \
        fs/minix.o fs/buffer.o fs/bitmap.o fs/inode.o fs/file_dev.o fs/namei.o \
+       fs/pipe.o \
        drivers/console.o drivers/keyboard.o drivers/hd.o drivers/tty_io.o \
        drivers/serial.o \
        lib/string.o lib/ctype.o lib/malloc.o lib/close.o \
