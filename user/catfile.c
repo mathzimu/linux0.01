@@ -13,7 +13,7 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    fd = open(argv[1], 0);
+    fd = open(argv[1], 0, 0);
     if (fd < 0) {
         printf("catfile: cannot open %s\n", argv[1]);
         return 1;

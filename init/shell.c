@@ -147,6 +147,8 @@ static void cmd_help(int argc, char **argv)
     printk("  sig     - pause/kill demo: SIGINT kills a paused child\n");
     printk("  ls      - list a directory (default: current, via open/read)\n");
     printk("  cd      - change directory (sys_chdir, relative paths OK)\n");
+    printk("  stat    - stat() a file (ino/size/mode/nlink/uid/gid)\n");
+    printk("  id      - uid/euid/gid/egid/pgrp\n");
     printk("  cat     - print a file (via open/read/close)\n");
     printk("  sync    - write back dirty buffers/inodes\n");
     printk("  wtest   - write a file [path] through the write path\n");
@@ -201,7 +203,7 @@ static void cmd_sys(int argc, char **argv)
     r = write(1, msg, strlen(msg));
     printk("sys: write(1, msg, %d) = %d\n", strlen(msg), r);
 
-    fd = open("/no/such/file", 0);
+    fd = open("/no/such/file", 0, 0);
     printk("sys: open(\"/no/such/file\") = %d\n", fd);
     if (fd >= 0) close(fd);
 
@@ -326,13 +328,37 @@ static void cmd_cd(int argc, char **argv)
         printk("cd: %s: no such directory\n", argv[1]);
 }
 
+static void cmd_stat(int argc, char **argv)
+{
+    struct stat st;
+
+    if (argc < 2) {
+        printk("stat: usage: stat <file>\n");
+        return;
+    }
+    if (sys_stat(argv[1], &st) < 0) {
+        printk("stat: %s: not found\n", argv[1]);
+        return;
+    }
+    printk("stat %s: ino=%d size=%d mode=0%o nlink=%d uid=%d gid=%d\n",
+           argv[1], st.st_ino, st.st_size, st.st_mode, st.st_nlink,
+           st.st_uid, st.st_gid);
+}
+
+static void cmd_id(int argc, char **argv)
+{
+    printk("uid=%d euid=%d gid=%d egid=%d pgrp=%d\n",
+           sys_getuid(), sys_geteuid(), sys_getgid(), sys_getegid(),
+           sys_getpgrp());
+}
+
 static void cmd_ls(int argc, char **argv)
 {
     const char *path = (argc > 1) ? argv[1] : "";   /* "" = pwd */
     char buf[16];                 /* one minix dir entry */
     int fd, n;
 
-    fd = open(path, 0);           /* O_RDONLY */
+    fd = open(path, 0, 0);         /* O_RDONLY */
     if (fd < 0) {
         printk("ls: %s: no such file\n", path);
         return;
@@ -366,7 +392,7 @@ static void cmd_cat(int argc, char **argv)
         printk("cat: usage: cat <file>\n");
         return;
     }
-    fd = open(argv[1], 0);
+    fd = open(argv[1], 0, 0);
     if (fd < 0) {
         printk("cat: %s: no such file\n", argv[1]);
         return;
@@ -399,7 +425,7 @@ static void cmd_writetest(int argc, char **argv)
     const char *msg = "Minimal Linux 0.01 write path works!\n";
     int fd, n;
 
-    fd = open(path, 1);           /* O_WRONLY */
+    fd = open(path, 1, 0);         /* O_WRONLY */
     if (fd < 0) {
         printk("wtest: open(%s, write) failed\n", path);
         return;
@@ -468,7 +494,7 @@ static void cmd_fdtest(int argc, char **argv)
 {
     int fd, d;
 
-    fd = open("/readme.txt", 0);
+    fd = open("/readme.txt", 0, 0);
     if (fd < 0) {
         printk("fdtest: open failed\n");
         return;
@@ -491,7 +517,7 @@ static void cmd_seektest(int argc, char **argv)
     int fd, n;
     char buf[17];
 
-    fd = open("/hello.txt", 0);
+    fd = open("/hello.txt", 0, 0);
     if (fd < 0) {
         printk("seektest: open failed\n");
         return;
@@ -554,6 +580,10 @@ void shell_main(void)
             cmd_ls(argc, argv);
         } else if (strcmp(argv[0], "cd") == 0) {
             cmd_cd(argc, argv);
+        } else if (strcmp(argv[0], "stat") == 0) {
+            cmd_stat(argc, argv);
+        } else if (strcmp(argv[0], "id") == 0) {
+            cmd_id(argc, argv);
         } else if (strcmp(argv[0], "cat") == 0) {
             cmd_cat(argc, argv);
         } else if (strcmp(argv[0], "sync") == 0) {

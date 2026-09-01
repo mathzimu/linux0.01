@@ -78,9 +78,10 @@ static int find_entry(struct m_inode *dir, const char *name, int namelen,
 }
 
 /* Resolve a pathname to an inode.  Absolute paths ("/a/b") start at
-   the root; relative paths ("a/b", "b") start at current->pwd.  The
-   empty string means the current directory.  Returns an inode with a
-   held reference (caller must iput it) or NULL. */
+   current->root if chroot() was called (else the fs root); relative
+   paths ("a/b", "b") start at current->pwd.  The empty string means
+   the current directory.  Returns an inode with a held reference
+   (caller must iput it) or NULL. */
 struct m_inode *namei(const char *pathname)
 {
     struct m_inode *inode;
@@ -94,7 +95,12 @@ struct m_inode *namei(const char *pathname)
 
     if (*pathname == '/') {
         pathname++;
-        inode = iget(dev, 1);
+        if (current->root) {
+            inode = current->root;
+            inode->i_count++;          /* extra ref for the walk */
+        } else {
+            inode = iget(dev, 1);
+        }
     } else {
         /* relative: start at the current working directory */
         inode = current->pwd;

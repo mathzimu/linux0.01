@@ -3,6 +3,7 @@
 #include <linux/mm.h>
 #include <linux/head.h>
 #include <linux/fs.h>
+#include <signal.h>
 #include <asm/system.h>
 
 extern unsigned long _end;
@@ -20,9 +21,13 @@ static struct task_struct init_task = {
     0,            /* exit_code */
     0,            /* sig_ignore_mask */
     NULL,         /* pwd — set in sched_init after sys_setup mounts the fs */
+    NULL,         /* root — NULL means the fs root */
+    0,0,0,        /* uid, euid, suid (root) */
+    0,0,0,        /* gid, egid, sgid */
+    0,            /* alarm */
+    0,            /* umask */
     {0},          /* tss */
     {NULL,},      /* filp */
-    0,            /* uid */
     0,            /* pid */
     0,            /* parent */
     0,            /* pgrp */
@@ -159,6 +164,12 @@ void schedule(void)
 void do_timer(void)
 {
     jiffies++;
+
+    /* alarm(2): deliver SIGALRM when the deadline passes */
+    if (current->alarm && (unsigned long)jiffies >= current->alarm) {
+        current->signal |= (1 << SIGALRM);
+        current->alarm = 0;
+    }
 
     if (current->counter > 0) {
         current->counter--;

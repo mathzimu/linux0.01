@@ -4,16 +4,29 @@
 #include <linux/fs.h>
 #include <linux/tty.h>
 #include <string.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <sys/times.h>
+#include <sys/utsname.h>
 #include <asm/segment.h>
+
+/* System time (seconds since epoch-ish boot).  sys_stime() can set it. */
+unsigned long boot_time = 0;
 
 int sys_time(unsigned long *tloc)
 {
-    int i = jiffies / HZ;
+    int i = boot_time + jiffies / HZ;
 
     /* Match Linux 0.01 semantics: store the time at *tloc when given. */
     if (tloc)
         put_fs_long(i, tloc);
     return i;
+}
+
+int sys_stime(unsigned long *tptr)
+{
+    boot_time = get_fs_long(tptr) - jiffies / HZ;
+    return 0;
 }
 
 /* Change the current working directory.  Relative paths are resolved
@@ -111,7 +124,7 @@ long sys_read(unsigned int fd, char *buf, unsigned long count)
     return result;
 }
 
-int sys_open(const char *filename, int flag)
+int sys_open(const char *filename, int flag, int mode)
 {
     int i, fd;
     struct file *f;
@@ -130,7 +143,50 @@ int sys_open(const char *filename, int flag)
     if (i >= NR_FILE) return -1;
 
     inode = namei(filename);
+    if (!inode && (flag & O_CREAT)) {
+        /* create the file: split parent dir + basename (Linux 0.01
+           open_namei logic, simplified) */
+        char dirpath[64], name[15];
+        struct m_inode *dir;
+        unsigned short ino;
+        int namelen;
+
+        if (split_path(filename, dirpath, name) < 0)
+            return -1;
+        dir = namei(dirpath);
+        if (!dir) return -1;
+        if (!(dir->i_mode & 0x4000)) {
+            iput(dir);
+            return -1;
+        }
+        namelen = (int)strlen(name);
+        if (dir_lookup(dir, name, namelen, &ino) == 0) {
+            inode = iget(dir->i_dev, ino);     /* already exists */
+            iput(dir);
+            if (!inode) return -1;
+        } else {
+            inode = new_inode(dir->i_dev);
+            if (!inode) {
+                iput(dir);
+                return -1;
+            }
+            mode &= 0777 & ~current->umask;
+            inode->i_mode = (unsigned short)(mode | 0x8000);  /* S_IFREG */
+            inode->i_dirt = 1;
+            if (dir_add_entry(dir, name, namelen,
+                              (unsigned short)inode->i_num) < 0) {
+                free_inode(inode);
+                iput(inode);
+                iput(dir);
+                return -1;
+            }
+            iput(dir);
+        }
+    }
     if (!inode) return -1;
+
+    if ((flag & O_TRUNC) && !(inode->i_mode & 0x4000))
+        truncate_inode(inode);                 /* empty the file */
 
     f = &file_table[i];
     f->f_mode = flag;
@@ -141,6 +197,11 @@ int sys_open(const char *filename, int flag)
 
     current->filp[fd] = f;
     return fd;
+}
+
+int sys_creat(const char *pathname, int mode)
+{
+    return sys_open(pathname, O_CREAT | O_TRUNC, mode);
 }
 
 int sys_close(unsigned int fd)
@@ -514,6 +575,268 @@ int sys_rmdir(const char *dirname)
 }
 
 /* ------------------------------------------------------------------
+ * Linux 0.01 alignment (sys_call_table numbers 15..66): stat, chmod,
+ * chown, access, umask, uname, utime, uid/gid, alarm, nice, times,
+ * process groups, chroot.  Anything 0.01 left as -ENOSYS stays -1.
+ * ------------------------------------------------------------------ */
+
+static int cp_stat(struct m_inode *inode, struct stat *statbuf)
+{
+    struct stat tmp;
+    int i;
+
+    tmp.st_dev = inode->i_dev;
+    tmp.st_ino = (unsigned short)inode->i_num;
+    tmp.st_mode = inode->i_mode;
+    tmp.st_nlink = inode->i_nlinks;
+    tmp.st_uid = inode->i_uid;
+    tmp.st_gid = inode->i_gid;
+    tmp.st_rdev = inode->i_zone[0];
+    tmp.st_size = inode->i_size;
+    tmp.st_atime = inode->i_mtime;
+    tmp.st_mtime = inode->i_mtime;
+    tmp.st_ctime = inode->i_mtime;
+    for (i = 0; i < (int)sizeof(tmp); i++)
+        put_fs_byte(((char *)&tmp)[i], &((char *)statbuf)[i]);
+    return 0;
+}
+
+int sys_stat(const char *filename, struct stat *statbuf)
+{
+    struct m_inode *inode = namei(filename);
+    int r;
+
+    if (!inode)
+        return -1;
+    r = cp_stat(inode, statbuf);
+    iput(inode);
+    return r;
+}
+
+int sys_fstat(unsigned int fd, struct stat *statbuf)
+{
+    struct file *f;
+    struct m_inode *inode;
+
+    if (fd >= NR_OPEN || !(f = current->filp[fd]) || !(inode = f->f_inode))
+        return -1;
+    return cp_stat(inode, statbuf);
+}
+
+int sys_chmod(const char *filename, int mode)
+{
+    struct m_inode *inode = namei(filename);
+
+    if (!inode)
+        return -1;
+    inode->i_mode = (unsigned short)((inode->i_mode & 0xF000) | (mode & 0777));
+    inode->i_dirt = 1;
+    iput(inode);
+    return 0;
+}
+
+int sys_chown(const char *filename, int uid, int gid)
+{
+    struct m_inode *inode = namei(filename);
+
+    if (!inode)
+        return -1;
+    inode->i_uid = (unsigned short)uid;
+    inode->i_gid = (unsigned char)gid;
+    inode->i_dirt = 1;
+    iput(inode);
+    return 0;
+}
+
+/* Simplest permission model: existence check (all tasks are uid 0). */
+int sys_access(const char *filename, int mode)
+{
+    struct m_inode *inode = namei(filename);
+
+    if (!inode)
+        return -1;
+    iput(inode);
+    return 0;
+}
+
+int sys_utime(const char *filename, unsigned long *times)
+{
+    struct m_inode *inode = namei(filename);
+
+    (void)times;
+    if (!inode)
+        return -1;
+    inode->i_mtime = jiffies / HZ;
+    inode->i_dirt = 1;
+    iput(inode);
+    return 0;
+}
+
+int sys_umask(int mask)
+{
+    int old = current->umask;
+
+    current->umask = (unsigned short)(mask & 0777);
+    return old;
+}
+
+int sys_uname(struct utsname *utsbuf)
+{
+    static const char *src[5] = { "linux", "teaching", "0.0.1",
+                                  "#1 (0.01)", "i386" };
+    char *dst = (char *)utsbuf;
+    int i, k;
+
+    for (i = 0; i < 5; i++) {
+        for (k = 0; k < 8; k++)
+            put_fs_byte(src[i][k] ? src[i][k] : 0, dst + i * 9 + k);
+        put_fs_byte(0, dst + i * 9 + 8);
+    }
+    return 0;
+}
+
+int sys_setuid(int uid)
+{
+    if (current->euid == 0)
+        current->uid = current->euid = current->suid = (unsigned short)uid;
+    else if (current->uid == (unsigned short)uid ||
+             current->suid == (unsigned short)uid)
+        current->euid = (unsigned short)uid;
+    else
+        return -1;
+    return 0;
+}
+
+int sys_getuid(void)
+{
+    return current->uid;
+}
+
+int sys_geteuid(void)
+{
+    return current->euid;
+}
+
+int sys_setgid(int gid)
+{
+    if (current->euid == 0)
+        current->gid = current->egid = current->sgid = (unsigned short)gid;
+    else if (current->gid == (unsigned short)gid ||
+             current->sgid == (unsigned short)gid)
+        current->egid = (unsigned short)gid;
+    else
+        return -1;
+    return 0;
+}
+
+int sys_getgid(void)
+{
+    return current->gid;
+}
+
+int sys_getegid(void)
+{
+    return current->egid;
+}
+
+int sys_alarm(long seconds)
+{
+    current->alarm = (seconds > 0) ?
+        (unsigned long)jiffies + HZ * (unsigned long)seconds : 0;
+    return (int)seconds;
+}
+
+int sys_nice(long increment)
+{
+    if (current->priority - increment > 0)
+        current->priority -= increment;
+    return 0;
+}
+
+int sys_times(struct tms *tbuf)
+{
+    struct tms tmp;
+
+    tmp.tms_utime = current->utime;
+    tmp.tms_stime = current->stime;
+    tmp.tms_cutime = current->cutime;
+    tmp.tms_cstime = current->cstime;
+    put_fs_long(tmp.tms_utime, &tbuf->tms_utime);
+    put_fs_long(tmp.tms_stime, &tbuf->tms_stime);
+    put_fs_long(tmp.tms_cutime, &tbuf->tms_cutime);
+    put_fs_long(tmp.tms_cstime, &tbuf->tms_cstime);
+    return (int)(jiffies / HZ);
+}
+
+int sys_setpgid(int pid, int pgid)
+{
+    struct task_struct *p;
+
+    if (pid == 0)
+        p = current;
+    else if (pid < NR_TASKS && task[pid])
+        p = task[pid];
+    else
+        return -1;
+    if (pgid == 0)
+        pgid = (int)p->pid;
+    p->pgrp = (unsigned long)pgid;
+    return 0;
+}
+
+int sys_getpgrp(void)
+{
+    return (int)current->pgrp;
+}
+
+int sys_setsid(void)
+{
+    current->pgrp = current->pid;
+    current->session = current->pid;
+    current->leader = 1;
+    return (int)current->pid;
+}
+
+int sys_chroot(const char *filename)
+{
+    struct m_inode *inode = namei(filename);
+
+    if (!inode)
+        return -1;
+    if (!(inode->i_mode & S_IFDIR)) {
+        iput(inode);
+        return -1;
+    }
+    if (current->root)
+        iput(current->root);
+    current->root = inode;
+    return 0;
+}
+
+/* --- stubs: Linux 0.01 left these as -ENOSYS (or not yet ported) --- */
+
+int sys_break(void) { return -1; }
+int sys_mount(void) { return -1; }
+int sys_umount(void) { return -1; }
+int sys_ptrace(void) { return -1; }
+int sys_stty(void) { return -1; }
+int sys_gtty(void) { return -1; }
+int sys_ftime(void) { return -1; }
+int sys_prof(void) { return -1; }
+int sys_acct(void) { return -1; }
+int sys_phys(void) { return -1; }
+int sys_lock(void) { return -1; }
+int sys_mpx(void) { return -1; }
+int sys_ulimit(void) { return -1; }
+int sys_ustat(void) { return -1; }
+int sys_ioctl(void) { return -1; }
+int sys_link(const char *oldname, const char *newname) { (void)oldname; (void)newname; return -1; }
+int sys_rename(const char *oldname, const char *newname) { (void)oldname; (void)newname; return -1; }
+int sys_pipe(unsigned long *fildes) { (void)fildes; return -1; }
+int sys_fcntl(unsigned int fd, unsigned int cmd, unsigned long arg) { (void)fd; (void)cmd; (void)arg; return -1; }
+int sys_brk(unsigned long end_data_seg) { (void)end_data_seg; return -1; }
+
+/* ------------------------------------------------------------------
  * execve: load a 32-bit ELF from the MINIX filesystem and run it in
  * Ring3.  LOAD segments are copied to their vaddr (the teaching kernel
  * uses identity paging with U/S=1, so user code lives at its link
@@ -546,7 +869,7 @@ int sys_execve(const char *filename, char **argv, char **envp)
 
     (void)envp;
 
-    fd = sys_open(filename, 0);
+    fd = sys_open(filename, 0, 0);
     if (fd < 0) {
         return -1;
     }

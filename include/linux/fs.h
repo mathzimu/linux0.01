@@ -89,7 +89,7 @@ void buffer_init(long buffer_end);
 struct buffer_head *getblk(int dev, int block);
 struct buffer_head *bread(int dev, int block);
 void brelse(struct buffer_head *buf);
-int sys_open(const char *filename, int flag);
+int sys_open(const char *filename, int flag, int mode);
 int sys_close(unsigned int fd);
 long sys_read(unsigned int fd, char *buf, unsigned long count);
 long sys_write(unsigned int fd, const char *buf, unsigned long count);

@@ -47,11 +47,14 @@ int sys_fork(void)
 
     *p = *current;
 
-    /* pwd is a shared reference: give the child its own hold so the
-       parent's iput() on exit cannot free it out from under us */
+    /* pwd and root are shared references: give the child its own hold
+       so the parent's iput() on exit cannot free them under us */
     p->pwd = current->pwd;
     if (p->pwd)
         p->pwd->i_count++;
+    p->root = current->root;
+    if (p->root)
+        p->root->i_count++;
 
     /* remember the parent (task[] index) for sys_getppid */
     for (i = 0; i < NR_TASKS; i++)
@@ -184,10 +187,14 @@ int sys_exit(int ret)
         }
     }
 
-    /* release our pwd reference */
+    /* release our pwd and root references */
     if (current->pwd) {
         iput(current->pwd);
         current->pwd = NULL;
+    }
+    if (current->root) {
+        iput(current->root);
+        current->root = NULL;
     }
 
     /* The init task (task[0]) must never leave task[]: with an empty
@@ -351,6 +358,7 @@ void do_signal(void)
         case 2:   /* SIGINT */
         case 3:   /* SIGQUIT */
         case 9:   /* SIGKILL */
+        case 14:  /* SIGALRM */
             sys_exit(128 + sig);   /* never returns */
         default:
             break;                 /* default action: ignore */

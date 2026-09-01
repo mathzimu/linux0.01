@@ -177,8 +177,8 @@ system_call:
     /* reload saved syscall number for dispatch */
     mov 24(%esp), %eax
 
-    /* 24 syscalls: numbers 0..23 valid */
-    cmpl $24, %eax
+    /* 67 syscalls: numbers 0..66 valid (Linux 0.01 table) */
+    cmpl $67, %eax
     jb 1f
     movl $-1, %eax
     jmp 2f
@@ -301,20 +301,63 @@ sys_call_table:
     .long sys_write
     .long sys_open
     .long sys_close
-    .long sys_getpid
-    .long sys_pause
+    .long sys_waitpid
+    .long sys_creat
+    .long sys_link
+    .long sys_unlink
+    .long sys_execve
+    .long sys_chdir
     .long sys_time
-    .long sys_kill
-    .long sys_sync
+    .long sys_mknod
+    .long sys_chmod
+    .long sys_chown
+    .long sys_break
+    .long sys_stat
     .long sys_lseek
+    .long sys_getpid
+    .long sys_mount
+    .long sys_umount
+    .long sys_setuid
+    .long sys_getuid
+    .long sys_stime
+    .long sys_ptrace
+    .long sys_alarm
+    .long sys_fstat
+    .long sys_pause
+    .long sys_utime
+    .long sys_stty
+    .long sys_gtty
+    .long sys_access
+    .long sys_nice
+    .long sys_ftime
+    .long sys_sync
+    .long sys_kill
+    .long sys_rename
+    .long sys_mkdir
+    .long sys_rmdir
     .long sys_dup
+    .long sys_pipe
+    .long sys_times
+    .long sys_prof
+    .long sys_brk
+    .long sys_setgid
+    .long sys_getgid
+    .long sys_signal
+    .long sys_geteuid
+    .long sys_getegid
+    .long sys_acct
+    .long sys_phys
+    .long sys_lock
+    .long sys_ioctl
+    .long sys_fcntl
+    .long sys_mpx
+    .long sys_setpgid
+    .long sys_ulimit
+    .long sys_uname
+    .long sys_umask
+    .long sys_chroot
+    .long sys_ustat
     .long sys_dup2
     .long sys_getppid
-    .long sys_mknod
-    .long sys_mkdir
-    .long sys_unlink
-    .long sys_rmdir
-    .long sys_waitpid
-    .long sys_execve
-    .long sys_signal
-    .long sys_chdir
+    .long sys_getpgrp
+    .long sys_setsid

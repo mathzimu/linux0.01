@@ -3,11 +3,26 @@
 
 #ifndef __ASSEMBLER__
 
+#ifndef _SIZE_T
+#define _SIZE_T
+typedef unsigned int size_t;
+#endif
+
+#ifndef NULL
+#define NULL ((void *) 0)
+#endif
+
 typedef unsigned long time_t;
 typedef unsigned short uid_t;
 typedef unsigned short gid_t;
 typedef unsigned long off_t;
 typedef long ssize_t;
+typedef int pid_t;
+typedef unsigned short dev_t;
+typedef unsigned short ino_t;
+typedef unsigned short mode_t;
+typedef unsigned short umode_t;
+typedef unsigned char nlink_t;
 
 #endif
 

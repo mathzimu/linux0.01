@@ -177,7 +177,7 @@ DIR *opendir(const char *path)
     DIR *d;
     int fd;
 
-    fd = open(path, 0);               /* O_RDONLY */
+    fd = open(path, 0, 0);             /* O_RDONLY */
     if (fd < 0)
         return NULL;
     d = malloc(sizeof(DIR));
