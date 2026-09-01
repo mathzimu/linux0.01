@@ -46,7 +46,7 @@ MINIX FS 增删改查闭环、Ring3 用户态 + 编程工具链（`make prog NAM
 - 风险高：fork 的页表复制、用户栈/堆的页分配都要改
 - **建议留到最后**，改动前先备份当前可运行状态
 
-### 6. ~~chdir / 相对路径（内核）~~ ✅ 完成（commit 待填）
+### 6. ~~chdir / 相对路径（内核）~~ ✅ 完成（`81c7f1d`）
 - task_struct 加 `struct m_inode *pwd`；init（sched_init 里 FS 挂载后）pwd=根
   inode；fork 继承（`p->pwd->i_count++` 共享引用）；sys_exit iput 释放
 - **syscall 23 `chdir(path)`**：namei 解析（相对旧 pwd）、非目录返回 -1、
