@@ -116,7 +116,11 @@ struct task_struct {
     long priority;
     long signal;
     long exit_code;          /* set on exit; reaped by waitpid() */
-    unsigned long sig_ignore_mask; /* signals set to SIG_IGN via signal() */
+    /* Per-signal disposition: SIG_DFL (0), SIG_IGN (1) or a Ring3 handler
+     * address.  Indexed by signal number (0..31); index 0 is unused.
+     * SIGCHLD's entry carries the "ignore" semantics that the old
+     * sig_ignore_mask used to.  Inherited across fork by "*p = *current". */
+    unsigned long handlers[32];
     struct m_inode *pwd;     /* current working directory (held ref) */
     struct m_inode *root;    /* chroot() root (held ref; NULL = fs root) */
     unsigned short uid, euid, suid;

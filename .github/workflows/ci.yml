@@ -21,11 +21,19 @@ jobs:
           # here (TCG software emulation); the harness is fully headless.
           sudo apt-get install -y gcc-multilib binutils qemu-system-x86
 
+      - name: Check the memory map (no compiler needed)
+        # Catches overlapping regions, hard-coded user addresses and a
+        # cache that no longer fits *before* spending time on a build.
+        run: python3 scripts/check-layout.py
+
       - name: Build the kernel
         run: |
           make clean
           make Image
           make minix.img
+
+      - name: Re-check the memory map against the linked kernel (_end)
+        run: make check-layout
 
       - name: Run regression suite (make test)
         # Without KVM the virtual CPU runs under TCG, so give the

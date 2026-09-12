@@ -17,7 +17,7 @@ ifeq ($(shell uname -s),Linux)
   CC      = gcc
   LD      = ld
   OBJCOPY = objcopy
-  ASFLAGS = -32
+  ASFLAGS = -32 -Iinclude
   CFLAGS  = -m32 -Wall -O0 -fstrength-reduce -fomit-frame-pointer \
             -nostdinc -Iinclude -fno-stack-protector -fno-builtin \
             -ffreestanding
@@ -28,7 +28,7 @@ else ifneq ($(shell command -v i386-elf-gcc 2>/dev/null),)
   CC      = i386-elf-gcc
   LD      = i386-elf-ld
   OBJCOPY = i386-elf-objcopy
-  ASFLAGS =
+  ASFLAGS = -Iinclude
   CFLAGS  = -Wall -O0 -fstrength-reduce -fomit-frame-pointer \
             -nostdinc -Iinclude -fno-stack-protector -fno-builtin \
             -ffreestanding -MMD -MP
@@ -39,7 +39,7 @@ else ifneq ($(shell command -v i686-elf-gcc 2>/dev/null),)
   CC      = i686-elf-gcc
   LD      = i686-elf-ld
   OBJCOPY = i686-elf-objcopy
-  ASFLAGS =
+  ASFLAGS = -Iinclude
   CFLAGS  = -Wall -O0 -fstrength-reduce -fomit-frame-pointer \
             -nostdinc -Iinclude -fno-stack-protector -fno-builtin \
             -ffreestanding -MMD -MP
@@ -54,7 +54,7 @@ endif
 
 OBJS = kernel/main.o kernel/sched.o kernel/process.o kernel/sys.o \
        kernel/asm.o kernel/vsprintf.o kernel/panic.o \
-       mm/memory.o mm/page.o \
+       mm/memory.o mm/page.o mm/memcheck.o \
        fs/minix.o fs/buffer.o fs/bitmap.o fs/inode.o fs/file_dev.o fs/namei.o \
        fs/pipe.o \
        drivers/console.o drivers/keyboard.o drivers/hd.o drivers/tty_io.o \
@@ -62,6 +62,11 @@ OBJS = kernel/main.o kernel/sched.o kernel/process.o kernel/sys.o \
        lib/string.o lib/ctype.o lib/malloc.o lib/close.o \
        init/shell.o \
        user/user_data.o
+
+# User programs are linked at this address; the kernel's ELF loader
+# copies each LOAD segment to its link-time vaddr without relocating it
+# (include/memlayout.h, enforced by the assert in user/lib.h).
+USER_PROG_START = 0x200000
 
 HEAD_OBJ = boot/head.o
 SETUP_OBJ = boot/setup.o
@@ -89,11 +94,15 @@ boot/setup: $(SETUP_OBJ)
 kernel/system: $(HEAD_OBJ) $(OBJS) user/user.bin
 	$(LD) $(LDFLAGS) -o kernel/system $(HEAD_OBJ) $(OBJS)
 
-# User-mode program: linked at 0x200000, embedded into the kernel and
-# copied there at runtime by run_user_program().
+# User-mode program: linked at USER_PROG_START, embedded into the kernel
+# and copied there at runtime by run_user_program().
 user/user.bin: user/user.o
-	$(LD) -m elf_i386 -Ttext 0x200000 -o user/user.elf user/user.o 2>/dev/null \
-	    || $(LD) -Ttext 0x200000 -o user/user.elf user/user.o
+	$(LD) -m elf_i386 -Ttext $(USER_PROG_START) \
+	    --defsym __user_prog_start=$(USER_PROG_START) \
+	    -o user/user.elf user/user.o 2>/dev/null \
+	    || $(LD) -Ttext $(USER_PROG_START) \
+	       --defsym __user_prog_start=$(USER_PROG_START) \
+	       -o user/user.elf user/user.o
 	$(OBJCOPY) -O binary user/user.elf user/user.bin
 
 user/user.o: user/user.s
@@ -141,8 +150,12 @@ user/%.o: user/%.c user/lib.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 user/%.elf: user/crt.o user/%.o user/lib.o
-	$(LD) -m elf_i386 -Ttext 0x200000 -o $@ user/crt.o user/$*.o user/lib.o 2>/dev/null \
-	    || $(LD) -Ttext 0x200000 -o $@ user/crt.o user/$*.o user/lib.o
+	$(LD) -m elf_i386 -Ttext $(USER_PROG_START) \
+	    --defsym __user_prog_start=$(USER_PROG_START) \
+	    -o $@ user/crt.o user/$*.o user/lib.o 2>/dev/null \
+	    || $(LD) -Ttext $(USER_PROG_START) \
+	       --defsym __user_prog_start=$(USER_PROG_START) \
+	       -o $@ user/crt.o user/$*.o user/lib.o
 
 prog: tools/mkminix user/$(NAME).elf
 	tools/mkminix minix.img user/$(NAME).elf:$(NAME)
@@ -155,6 +168,13 @@ minix.img: tools/mkminix user/hello.elf
 # MINIX disk per scenario, boots QEMU, and asserts the serial output.
 test: Image
 	scripts/regress.sh
+
+# Static memory-map verification.  Needs no compiler, so it can run
+# before (or without) a build; see scripts/check-layout.py.
+check-layout:
+	python3 scripts/check-layout.py --kernel kernel/system
+
+.PHONY: check-layout
 
 tools/mkminix: tools/mkminix.c
 	$(HOST_CC) -O2 -Wall -o $@ $<
@@ -173,6 +193,7 @@ docker-build:
 clean:
 	rm -f *.d */*.d
 	rm -f Image kernel.iso kernel/system kernel/system.bin
+	rm -f system system.bin
 	rm -f boot/boot boot/setup
 	rm -f $(OBJS) $(HEAD_OBJ) $(SETUP_OBJ) $(BOOT_OBJ)
 	rm -f tools/build

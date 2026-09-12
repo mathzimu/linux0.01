@@ -1,9 +1,13 @@
 #ifndef _MM_H
 #define _MM_H
 
+#include <memlayout.h>
+
 #define PAGE_SIZE 4096
-#define LOW_MEM 0x100000
-#define PAGING_PAGES 3840
+
+/* Physical memory is managed relative to the end of the low 1MB, which
+ * is where the identity-mapped kernel world begins. */
+#define LOW_MEM KERNEL_LOW_MEM
 #define MAP_NR(addr) (((addr) - LOW_MEM) / PAGE_SIZE)
 #define USED 100
 

@@ -177,8 +177,10 @@ system_call:
     /* reload saved syscall number for dispatch */
     mov 24(%esp), %eax
 
-    /* 67 syscalls: numbers 0..66 valid (Linux 0.01 table) */
-    cmpl $67, %eax
+    /* syscalls: numbers 0..66 are the Linux 0.01 table, 67 is this
+       kernel's sigreturn.  Keep this bound in step with sys_call_table
+       (an entry added without widening it is silently unreachable). */
+    cmpl $68, %eax
     jb 1f
     movl $-1, %eax
     jmp 2f
@@ -361,3 +363,4 @@ sys_call_table:
     .long sys_getppid
     .long sys_getpgrp
     .long sys_setsid
+    .long sys_sigreturn          /* 67: not in Linux 0.01; see kernel/asm.s */

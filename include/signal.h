@@ -20,11 +20,17 @@
 #define SIGTERM  15
 #define SIGCHLD  17
 
-/* Dispositions supported by this teaching kernel: default or ignore.
-   Custom handlers (function pointers) are not implemented; signal()
-   rejects anything other than these two values. */
-
+/* Signal dispositions.  SIG_DFL/SIG_IGN are the built-in values (all
+   upper addresses are rejected, so kernel text can never be handed to a
+   handler slot); anything else is a Ring3 handler function pointer,
+   which sys_signal() validates against the user program image. */
 #define SIG_DFL ((unsigned long)0)
 #define SIG_IGN ((unsigned long)1)
+
+/* A handler is reset to SIG_DFL before it runs (classic signal()
+   semantics), except for SIGCHLD.  The interrupted context is restored
+   by the sigreturn syscall (67), whose stub lives at
+   USER_SIGRETURN_ENTRY — see include/memlayout.h. */
+#define SIGFRAME_MAGIC 0x51475346UL   /* "FSGQ" */
 
 #endif

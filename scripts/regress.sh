@@ -86,6 +86,26 @@ run_case apps "$APPS" 'exec /bin/cat /readme.txt\nexec /bin/wc /readme.txt\nexec
     '3 19 129 /readme.txt' \
     'cp: /hello.txt -> /c2.txt done'
 
+# 场景 11: 用户堆与缓冲区缓存不得重叠（M1 回归）
+#   NR_BUFFERS = 512 时缓存落在 ~0x370000，与用户堆共用物理页：
+#   用户把数据写进文件系统的块缓冲，或反之，都不报错。此用例把堆填满后
+#   重读文件并逐字节校验堆内容。
+run_case bigalloc 'rm -f minix.img && make prog NAME=bigalloc' 'exec /bin/bigalloc\n' \
+    'bigalloc: heap vs buffer cache' \
+    'bigalloc: PASS (heap and buffer cache are disjoint)'
+
+# 场景 12: 启动时内存地图自检通过（不一致会 panic 而不是继续跑）
+#   顺带断言缓冲区缓存的启动日志，它暴露了缓存的真实位置与数量。
+run_case memcheck "$BASE && make minix.img" 'ls\n' \
+    'buffer cache:' 'hello.txt'
+
+# 场景 13: 自定义信号处理器 + sigreturn（M2-1）
+#   handler 返回后必须精确回到被中断的指令继续执行。
+run_case sigdemo 'rm -f minix.img && make prog NAME=sigdemo' 'exec /bin/sigdemo\n' \
+    'sigdemo: handler ran (sig=14, hits=1)' \
+    'sigdemo: after alarm: hits=1 last_sig=14' \
+    'sigdemo: PASS'
+
 echo
 echo "================================"
 echo "  $PASS passed, $FAIL failed"

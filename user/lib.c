@@ -1,6 +1,7 @@
 /* 用户态 printf + malloc/free + opendir/readdir：freestanding 实现。 */
 
 #include "lib.h"
+#include <memlayout.h>
 
 typedef __builtin_va_list va_list;
 #define va_start(v, l) __builtin_va_start(v, l)
@@ -457,12 +458,16 @@ int atoi(const char *nptr)
 }
 
 /* --- user-mode heap ---------------------------------------------------
-   Region: [0x310000, 0x3FE000) — above the kernel buffer cache and
-   below the user stack (top 0x3FF000).  Free chunks form a singly
-   linked list; allocation is first-fit, then bump from the top. */
+   Region: [USER_HEAP_START, USER_HEAP_END) — above the buffer cache and
+   below the user stack.  The boundaries come from include/memlayout.h
+   (shared with the kernel) because the buffer cache is placed just
+   below USER_HEAP_END and grows DOWN: the heap must never reach it, or
+   malloc'd bytes and filesystem blocks become the same pages.  Free
+   chunks form a singly linked list; allocation is first-fit, then bump
+   from the top. */
 
-#define HEAP_START 0x310000UL
-#define HEAP_END   0x3FE000UL
+#define HEAP_START USER_HEAP_START
+#define HEAP_END   USER_HEAP_END
 
 typedef struct chunk {
     unsigned long size;          /* usable data size */

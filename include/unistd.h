@@ -78,6 +78,11 @@
 #define __NR_getppid 64
 #define __NR_getpgrp 65
 #define __NR_setsid 66
+/* This kernel's own extension, not part of the 0.01 table: numbers
+ * 0..66 stay byte-for-byte what Linux 0.01 had, and new calls start at
+ * 67.  sigreturn is entered from the user stub at USER_SIGRETURN_ENTRY
+ * and never returns to its caller. */
+#define __NR_sigreturn 67
 
 /* open flags (Linux 0.01) */
 #define O_RDONLY 0
@@ -192,5 +197,9 @@ _syscall2(int, dup2, unsigned int, oldfd, unsigned int, newfd)
 _syscall0(int, getppid)
 _syscall0(int, getpgrp)
 _syscall0(int, setsid)
+
+/* Not a normal call: invoked by the signal trampoline after a custom
+   handler returns (see do_signal in kernel/process.c). */
+_syscall0(int, sigreturn)
 
 #endif

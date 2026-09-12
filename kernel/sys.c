@@ -1,6 +1,7 @@
 #include <linux/kernel.h>
 #include <linux/sched.h>
 #include <linux/mm.h>
+#include <linux/memmap.h>
 #include <linux/fs.h>
 #include <linux/tty.h>
 #include <string.h>
@@ -1019,8 +1020,8 @@ int sys_brk(unsigned long end_data_seg)
  * execve: load a 32-bit ELF from the MINIX filesystem and run it in
  * Ring3.  LOAD segments are copied to their vaddr (the teaching kernel
  * uses identity paging with U/S=1, so user code lives at its link
- * address); BSS (memsz - filesz) is zeroed; argv is placed on a user
- * stack at 0x3FF000; then iret jumps to the ELF entry point.
+ * address); BSS (memsz - filesz) is zeroed; argv is placed on the
+ * user stack at USER_STACK_TOP; then iret jumps to the ELF entry point.
  * ------------------------------------------------------------------ */
 static unsigned long rd32(const unsigned char *b)
 {
@@ -1033,9 +1034,11 @@ static unsigned short rd16(const unsigned char *b)
     return (unsigned short)b[0] | ((unsigned short)b[1] << 8);
 }
 
-#define USER_STACK_TOP 0x3FF000UL
 #define ELF_MAGIC 0x464C457F   /* \x7fELF */
 #define PT_LOAD 1
+
+/* Every fixed user address below comes from include/memlayout.h; see
+ * mm/memcheck.c for why they may not be sprinkled around any more. */
 
 int sys_execve(const char *filename, char **argv, char **envp)
 {
@@ -1068,6 +1071,17 @@ int sys_execve(const char *filename, char **argv, char **envp)
     phentsize = rd16(eh + 42);
     phnum = rd16(eh + 44);
 
+    /* The entry point must live in the user program image; anything
+       else would iret Ring3 straight into kernel or heap memory.  The
+       per-segment "is this address inside the image" check has to wait
+       until max_end is known (see below). */
+    if (entry < USER_PROG_START || entry >= USER_PROG_END) {
+        printk("execve: entry 0x%lx outside user program image "
+               "[0x%lx,0x%lx)\n", entry,
+               (unsigned long)USER_PROG_START, (unsigned long)USER_PROG_END);
+        goto fail;
+    }
+
     for (i = 0; i < phnum && i < 16; i++) {
         unsigned long p_type, p_offset, p_vaddr, p_filesz, p_memsz;
 
@@ -1084,6 +1098,20 @@ int sys_execve(const char *filename, char **argv, char **envp)
         p_filesz = rd32(ph + 16);
         p_memsz = rd32(ph + 20);
 
+        /* Reject anything that would be written outside the user program
+           image — a program linked below USER_PROG_START would have its
+           bytes copied on top of the page-allocator pool, and one that
+           runs long would be copied over the user heap. */
+        if (p_vaddr < USER_PROG_START ||
+            p_vaddr + p_filesz > USER_PROG_END ||
+            p_vaddr + p_memsz > USER_PROG_END) {
+            printk("execve: LOAD segment [0x%lx,+0x%lx) outside user "
+                   "program image [0x%lx,0x%lx)\n",
+                   p_vaddr, p_memsz,
+                   (unsigned long)USER_PROG_START, (unsigned long)USER_PROG_END);
+            goto fail;
+        }
+
         if (p_filesz) {
             if (sys_lseek(fd, (long)p_offset, 0) < 0)
                 goto fail;
@@ -1097,11 +1125,20 @@ int sys_execve(const char *filename, char **argv, char **envp)
     }
     sys_close(fd);
 
+    /* --- make sure the whole image fits the user program region, then
+       grant Ring3 access to exactly the pages it occupies --- */
+    if (max_end > USER_PROG_END) {
+        printk("execve: image ends at 0x%lx, past the user program region "
+               "[0x%lx,0x%lx)\n", max_end,
+               (unsigned long)USER_PROG_START, (unsigned long)USER_PROG_END);
+        return -1;
+    }
+
     /* Memory isolation: make the program image user-accessible (it was
        loaded while the pages were still supervisor-only; Ring0 can
        write them either way, Ring3 cannot). */
-    if (max_end > 0x200000)
-        grant_user_pages(0x200000, max_end - 0x200000);
+    if (max_end > USER_PROG_START)
+        grant_user_pages(USER_PROG_START, max_end - USER_PROG_START);
 
     /* --- collect argv (user pointers) --- */
     for (i = 0; i < 15; i++) {
@@ -1126,20 +1163,28 @@ int sys_execve(const char *filename, char **argv, char **envp)
         argv_buf[i][k] = '\0';
     }
 
-    /* --- build the user stack area ABOVE 0x3FF000 (the user stack
-       grows DOWN from 0x3FF000, so nothing here gets clobbered by the
-       program's own call frames):
-         0x3FF004 argc, 0x3FF008 argv-array pointer, 0x3FF00C+ argv[]
-         strings packed down from 0x400000 --- */
+    /* --- build the user stack area ABOVE USER_STACK_TOP (the user stack
+       grows DOWN from it, so nothing here gets clobbered by the
+       program's own call frames), inside the tail page
+       [USER_STACK_TOP, IDENTITY_MAP_TOP) laid out by include/memlayout.h:
+         +0x04 argc, +0x08 argv-array pointer, +0x0C+ argv[]
+         strings packed down from IDENTITY_MAP_TOP --- */
     {
-        char *sp = (char *)(0x400000 - 1);
-        unsigned long *uargv = (unsigned long *)(USER_STACK_TOP + 0xC);
+        char *sp = (char *)(USER_ARGV_STR_TOP - 1);
+        unsigned long *uargv = (unsigned long *)USER_ARGV_ADDR;
+        /* Strings must not grow down into the argv[] array. */
+        unsigned long frame_end = USER_ARGV_ADDR + (unsigned long)(argc + 1) *
+                                  sizeof(unsigned long);
 
         for (i = argc - 1; i >= 0; i--) {
             int len = 0;
             while (argv_buf[i][len])
                 len++;
             sp -= len + 1;
+            if ((unsigned long)sp < frame_end) {
+                printk("execve: argv block overflows the stack page\n");
+                return -1;
+            }
             memcpy(sp, argv_buf[i], len + 1);
             argv_ptr[i] = (unsigned long)sp;
         }
@@ -1147,8 +1192,8 @@ int sys_execve(const char *filename, char **argv, char **envp)
             uargv[i] = argv_ptr[i];
         uargv[argc] = 0;
 
-        *(unsigned long *)(USER_STACK_TOP + 4) = (unsigned long)argc;
-        *(unsigned long *)(USER_STACK_TOP + 8) = (unsigned long)uargv;
+        *(unsigned long *)USER_ARGC_ADDR = (unsigned long)argc;
+        *(unsigned long *)USER_ARGV_ADDR = (unsigned long)uargv;
 
         /* --- iret into Ring3 at the ELF entry point --- */
         {

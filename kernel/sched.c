@@ -19,7 +19,7 @@ static struct task_struct init_task = {
     15,           /* priority */
     0,            /* signal */
     0,            /* exit_code */
-    0,            /* sig_ignore_mask */
+    {0},          /* handlers[32] — all SIG_DFL */
     NULL,         /* pwd — set in sched_init after sys_setup mounts the fs */
     NULL,         /* root — NULL means the fs root */
     0,0,0,        /* uid, euid, suid (root) */
@@ -106,7 +106,7 @@ void schedule(void)
         if (!z || z == current || z->state != TASK_ZOMBIE)
             continue;
         par = task[z->parent];
-        if (par && !(par->sig_ignore_mask & (1 << 17)))
+        if (par && !(par->handlers[SIGCHLD] == SIG_IGN))
             continue;                 /* parent will waitpid() for it */
         task[i] = NULL;
         free_page((unsigned long)z);

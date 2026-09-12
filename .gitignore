@@ -1,8 +1,11 @@
-# Build outputs
+﻿# Build outputs
 Image
 kernel.iso
 kernel/system
 kernel/system.bin
+# stray artifacts from the pre-kernel/ layout (these were once committed)
+system
+system.bin
 boot/boot
 boot/setup
 tools/build
@@ -33,3 +36,7 @@ user/user_data.c
 # Auto-generated header deps (-MMD)
 *.d
 user/*.elf
+
+# Python bytecode from the repo scripts
+__pycache__/
+*.pyc

@@ -133,20 +133,31 @@ BIOS POST
 
 ### 内存布局
 
+**唯一权威：`include/memlayout.h`**（内核与用户态共用；汇编侧镜像 `include/memlayout.inc`）。
+编译器期 `STATIC_ASSERT`、启动期 `mem_check()`、CI 里 `make check-layout`
+三层把关，任何区域重叠都会**编译失败或 panic**，而不是静默写坏文件系统。
+
 ```
 0x000000 ┌──────────────────┐
          │   BIOS + IVT     │
 0x100000 ├──────────────────┤ ← 页目录 (PGDIR)
-0x101000 ├──────────────────┤ ← 页表 0 (仅 PDE[0]，恒等映射 0-4MB)
+0x101000 ├──────────────────┤ ← 页表 0（仅 PDE[0]，恒等映射 0-4MB）
 0x108000 ├──────────────────┤ ← 内核起始 (startup_32)
-         │  内核代码/数据/BSS│
-         │  内核堆           │
-         │  缓冲池 (512KB)   │
-         │  0x200000 用户程序 │ ← execve 加载 ELF32 到此处
-         │  0x310000 用户堆   │ ← user/lib.c malloc
-         │  0x3FF000 用户栈   │ ← argc/argv 在 0x3FF004/0x3FF008
+         │  内核代码/数据/BSS│  _end ≈ 0x19000（上限 KERNEL_IMAGE_LIMIT = 0x18A000）
+         │  内核 bump 堆     │ ← lib/malloc.c，[0x18A000, 0x1A0000)
+         │  页分配器池       │ ← < 0x200000（任务页 / 管道页）
+0x200000 ├──────────────────┤ ← 用户程序镜像 [0x200000, 0x300000)
+0x310000 ├──────────────────┤ ← 用户堆 [0x310000, 0x340000)（malloc）
+0x340000 ├──────────────────┤ ← fork 子进程用户栈（向下生长）
+0x3BC000 ├──────────────────┤ ← 缓冲区缓存 [0x3BC000, 0x400000)（256 × 1KB）
+0x3FF000 ├──────────────────┤ ← 用户栈顶（向下生长）
 0x400000 └──────────────────┘ ← 4MB 上限
 ```
+
+> 缓存条数不是手写的：`NR_BUFFERS` 由内存地图派生（`include/linux/fs.h`），
+> 所以缓存永远塞不进用户堆里。历史上 `NR_BUFFERS = 512` 曾把缓存放到 `~0x370000`
+> 压在用户堆上——Ring0 无视 PTE 的 U/S 位，用户 `malloc` 的字节会和文件系统块缓冲
+> 变成同一批物理页，写坏文件系统却毫无提示（见 `docs/LIMITATIONS.md` §2）。
 
 ### 关键事实（读源码前先记住）
 
@@ -218,7 +229,8 @@ linux0.01/
 │   └── panic.c    # 内核崩溃处理
 ├── mm/            # 内存管理
 │   ├── memory.c   # 页帧分配器 + grant_user_pages（内存隔离授权）
-│   └── page.s     # page_fault 处理
+│   ├── page.s     # page_fault 处理
+│   └── memcheck.c # ★ 启动自检：内存地图不一致就 panic（带地图 dump）
 ├── fs/            # 文件系统
 │   ├── minix.c    # 超级块 + sys_setup
 │   ├── buffer.c   # LRU 块缓冲 + sleep_on/wake_up
@@ -238,8 +250,10 @@ linux0.01/
 ├── user/          # 用户态编程工具链（lib.h/lib.c/crt.s + 示例程序）
 ├── lib/           # 内核侧 C 子集（string/ctype/malloc）
 ├── include/       # 头文件（含 unistd.h：int 0x80 包装宏）
+│   ├── memlayout.h    # ★ 内存地图唯一权威（内核+用户态共用）
+│   └── memlayout.inc  # ★ 汇编侧镜像（.equ 常量，与上面同步校验）
 ├── tools/         # build.c（镜像拼接）· mkminix.c（MINIX 测试盘）
-├── scripts/       # qemu-test.py（无头验证）· regress.sh（一键回归）· ppm2png.py（截图）
+├── scripts/       # qemu-test.py（无头验证）· regress.sh · check-layout.py（静态地图校验）· ppm2png.py
 ├── docs/          # 教学与设计文档（含 GIT-WORKFLOW.md 分支/版本规范）
 └── Makefile       # 构建系统（工具链自动检测）
 ```
@@ -285,17 +299,24 @@ exec: child 1 exit_code=7
 - `malloc/free`（0x310000–0x3FE000，first-fit + bump）、`opendir/readdir`
 - 字符串 / `ctype` / `atoi`/`strtol`
 
-**已内置示例**：`hello`（argv）· `catfile`（读文件）· `memtest`（堆复用）· `printf`（格式演示）· `ls`（列目录）· `str`（libc 演示）· `sigchld`（SIGCHLD 语义）· `pipedemo`（管道通信）· `sysdemo`（0.01 对齐 syscall）· `bigdir`（目录扩容）。
+**已内置示例**：`hello`（argv）· `catfile`（读文件）· `memtest`（堆复用）· `printf`（格式演示）· `ls`（列目录）· `str`（libc 演示）· `sigchld`（SIGCHLD 语义）· `pipedemo`（管道通信）· `sysdemo`（0.01 对齐 syscall）· `bigdir`（目录扩容）· `bigalloc`（堆与缓冲区缓存不重叠）。
 **基础应用程序**：`cat`（读文件输出）· `wc`（统计行/词/字节）· `grep`（行内搜索）· `cp`（复制文件）· `touch`（创建空文件）。
 
 ---
 
 ## 🧪 自动化验证
 
-**一键回归**（10 个核心场景：exec / 管道 / chdir / 硬链接 / fork-waitpid / 信号 / 系统调用 / 内存隔离 / 目录扩容 / 基础应用）：
+**一键回归**（12 个核心场景：exec / 管道 / chdir / 硬链接 / fork-waitpid / 信号 / 系统调用 / 内存隔离 / 目录扩容 / 基础应用 / 堆与缓存不重叠 / 启动自检）：
 
 ```bash
 make test                    # 等价于 scripts/regress.sh
+```
+
+**静态内存地图校验**（纯 Python，不需要编译器，CI 里在构建之前先跑）：
+
+```bash
+make check-layout            # 区域重叠/硬编码地址/缓存装不下 → 非零退出
+python3 scripts/check-layout.py --kernel kernel/system   # 另校验链接期 _end
 ```
 
 手动无头验证（串口捕获 + sendkey 注入，输出精确文本到 stdout）：

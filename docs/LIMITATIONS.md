@@ -18,10 +18,19 @@
 
 | 项目 | 事实 |
 |------|------|
-| 恒等映射范围 | **0–4MB**（仅 PDE[0]） |
-| `memory_end` | 截断到 `0x400000` |
-| COW / 按需换页 | 未实现；`do_no_page` 对任何页错误都终止肇事进程（SIGSEGV），不分配/换页 |
-| 用户堆 | `user/lib.c` 的 bump+freelist（0x310000–0x3FE000），与内核 `get_free_page` **无统一协调**（内核分配页 U/S=0，用户堆区页启动时预授权） |
+| 恒等映射范围 | **0–4MB**（仅 PDE[0]，`boot/head.s`）；`IDENTITY_MAP_TOP = 0x400000` |
+| 内存地图唯一来源 | **`include/memlayout.h`**（内核与用户态共用；`include/linux/memmap.h` 是内核侧视图，`include/memlayout.inc` 是汇编侧镜像）。**任何文件都不许再硬编码用户区地址**——`scripts/check-layout.py` 会扫描并让 CI 失败 |
+| 编译器期校验 | `include/linux/memmap.h` 的 `STATIC_ASSERT`（区域有序、缓存装得下、子进程栈不压缓存）；布局写错 = 编译失败 |
+| 启动期校验 | `mm/memcheck.c` 的 `mem_check()`（`kernel/main.c` 在 `mem_init`/`buffer_init` 之后立即调用）：不一致 → 打印完整内存地图并 `panic`，不再带病运行 |
+| 用户区固定地址 | 程序镜像 `[0x200000,0x300000)`、堆 `[0x310000,0x340000)`、fork 子进程栈 `(0x300000,0x340000]`、用户栈顶 `0x3FF000` |
+| 缓冲区缓存 | 在 RAM 顶端向下生长：`[0x3BC000,0x400000)`（256 × 1KB + 256 × 32B 头，共 264KB）。**缓存的条数由内存地图派生**（`include/linux/fs.h`），不再手工挑选 |
+| **已修复：缓存/堆重叠** | 旧值 `NR_BUFFERS=512` 把缓存放到 `~0x370000`，**正好压在用户堆上**：Ring0 无视 PTE 的 U/S 位，用户 malloc 的字节与文件系统块缓冲会是同一批物理页，写坏文件系统而毫无提示。现在堆/子进程栈/缓存的边界由静态断言 + 启动自检 + `make test` 场景 11（`user/bigalloc.c`）三重守住 |
+| 内核堆 | `lib/malloc.c` 的 bump 分配器，区间 `[KERNEL_HEAP_START, KERNEL_HEAP_END)` = `[0x18A000,0x1A0000)`；越界返回 NULL（此前上界写成 `memory_end-0x200000`，会伸进页分配器池） |
+| 页分配器 | `get_free_page()` 从 `LOW_MEM` 顺序扫描；上限由 `KERNEL_POOL_END = 0x200000` 守住，越界即 `panic`（否则会把用户程序镜像的物理页交给内核） |
+| 剩余页池 | 约 100 页（4MB 地图下），每个任务/管道各占 1 页——接近上限时会打印告警 |
+| COW / 按需换页 | **未实现**（M3 目标）；`do_no_page` 对任何页错误都终止肇事进程（SIGSEGV, exit 139），不分配/换页 |
+| 用户堆 | `user/lib.c` 的 first-fit + bump（`[0x310000,0x340000)`，192KB），与内核 `get_free_page` 无统一协调（内核页 U/S=0，用户区启动时预授权） |
+| fork 的用户栈 | 子进程栈是父栈的**真实副本**，放在 `(0x300000,0x340000]`；父栈超过 64KB 时 `fork` 返回 -1（不静默越界）。**代码段与堆仍然父子共享**（无 COW），正确性靠 fork 后立即 execve 的习惯维持——这是 M3 要解决的问题 |
 
 ## 3. 进程与调度
 
@@ -40,7 +49,7 @@
 | 类型 | MINIX v1 |
 | `sys_setup` | 读超级块到 `super_block[0]`（无分区表解析，dev 硬编码 0x301） |
 | 写路径 | **已打通**：`file_write` → 脏缓冲 → `sync_dev`/`sys_sync` → `ll_rw_block(WRITE)` → `hd_write_sectors` 落盘；inode 同步经 `write_inode` |
-| 缓冲 | `getblk` 复用前回写脏块、并从旧哈希链摘除（避免链环死循环）；`iget` 复用脏 inode 槽前先写盘；**无 writeback 定时器**（需显式 `sync`） |
+| 缓冲 | `getblk` 复用前回写脏块、并从旧哈希链摘除（避免链环死循环）；`iget` 复用脏 inode 槽前先写盘；**无 writeback 定时器**（需显式 `sync`）。缓存条数 256（见 §2：条数由内存地图派生，写死会压到用户堆） |
 | Shell ls/cat | **已实现**，走 open/read/close 系统调用；`wtest` 演示写路径 |
 | 文件创建 | **已实现**：`sys_open(O_CREAT)`/`sys_creat`（touch）/ `sys_mkdir` 含 `.`/`..` 项、inode/zone 位图、父目录项；**删除**：`sys_unlink`/`sys_rmdir`（空目录校验、zone 回收、父 nlinks 递减）；**硬链接** `sys_link`（nlinks++）、**重命名** `sys_rename`（跨目录同设备）、**chroot**、**chdir 相对路径**、`stat/fstat`、`chmod/chown`、`lseek`/`dup`/`dup2` 可用 |
 | 管道 | **已实现**（`sys_pipe`，fs/pipe.c 移植 0.01）：单页环形缓冲、sleep_on 阻塞、写端关闭 → 读 EOF、无读者写 → SIGPIPE；缓冲 4KB，写满阻塞（无 O_NONBLOCK） |
@@ -62,7 +71,8 @@
 | 目标 | i386 32-bit freestanding |
 | macOS | Homebrew `i686-elf-gcc` + `i686-elf-binutils` 直接构建（Makefile 自动检测），或 Docker |
 | 运行 | QEMU `-fda Image` 或 `-cdrom kernel.iso`，内存 4M；MINIX 测试盘 `make minix.img` + `-hda minix.img` |
-| 自动化 | `scripts/qemu-test.py` 无头驱动（串口文本 + sendkey），`scripts/ppm2png.py` 转截图 |
+| 自动化 | `scripts/qemu-test.py` 无头驱动（串口文本 + sendkey），`scripts/regress.sh` 12 个场景（`make test`），`scripts/ppm2png.py` 转截图 |
+| 静态校验（无需编译器） | `make check-layout` → `python3 scripts/check-layout.py`：内存地图有序/不重叠、`memlayout.inc` 与 `memlayout.h` 一致、缓存装得进窗口、**用户区地址没有被硬编码到布局头之外**，已构建 `kernel/system` 时还校验链接期 `_end` 未越界 |
 
 ## 7. 与文档/设计稿的关系
 

@@ -1,6 +1,7 @@
 #include <linux/kernel.h>
 #include <linux/sched.h>
 #include <linux/mm.h>
+#include <linux/memmap.h>
 #include <linux/fs.h>
 #include <linux/tty.h>
 #include <string.h>
@@ -10,8 +11,8 @@
 
 extern int sys_exit(int ret);
 
-#define USER_PROG_ADDR 0x200000
-#define USER_STACK_TOP 0x3FF000
+/* All user-visible addresses come from include/memlayout.h. */
+#define USER_PROG_ADDR USER_PROG_START
 
 /* Copy the embedded user program to USER_PROG_ADDR and iret into Ring3.
    The user program runs with cs=USER_CS (0x1B), ss/ds/es/fs/gs=USER_DS

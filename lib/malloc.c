@@ -1,7 +1,13 @@
 #include <linux/kernel.h>
 #include <linux/mm.h>
+#include <linux/memmap.h>
 
-extern unsigned long _end;
+/* Cheap non-page kernel heap: a bump pointer that lives in the window
+ * reserved for it by include/memlayout.h, between the kernel image and
+ * the page-allocator pool.  It is deliberately trivial — the kernel
+ * allocates almost everything in pages — but it must never grow into
+ * the pool (get_free_page's territory) or into the user program image
+ * beyond it. */
 
 static unsigned long heap_end = 0;
 
@@ -10,12 +16,12 @@ void *malloc(unsigned long size)
     void *addr;
 
     if (heap_end == 0) {
-        heap_end = (unsigned long)&_end + 0x40000;
+        heap_end = KERNEL_HEAP_START;
     }
 
     size = (size + 7) & ~7;
 
-    if (heap_end + size > memory_end - 0x200000)
+    if (heap_end + size > KERNEL_HEAP_END)
         return (void *)0;
 
     addr = (void *)heap_end;

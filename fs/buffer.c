@@ -2,14 +2,29 @@
 #include <linux/sched.h>
 #include <linux/fs.h>
 #include <linux/mm.h>
+#include <linux/memmap.h>
 #include <linux/hdreg.h>
 #include <asm/system.h>
 
 static struct buffer_head *free_list = NULL;
 static struct buffer_head *hash_table[NR_BUFFERS];
 static char *buffer_mem;
-static int nr_buffers = 0;
 
+/* Inspected by mm/memcheck.c: how many buffers the cache actually got,
+ * and the [start, end) of the region it occupies.  A mismatch between
+ * nr_buffers and NR_BUFFERS means the compile-time layout no longer
+ * matches reality and mem_check() will refuse to boot. */
+int nr_buffers = 0;
+unsigned long buf_mem_start = 0;
+unsigned long buffer_cache_end = 0;
+
+/* The cache is placed at the top of usable RAM and grows downward:
+ *   [ buf_mem_start .......... buffer_heads .......... buffer_end )
+ * and it must end at or above BUFFER_CACHE_FLOOR, or it would share
+ * pages with the user heap or the fork() child stack (Ring0 ignores the
+ * PTE U/S bit, so the corruption would be completely silent).  If the
+ * window cannot hold NR_BUFFERS this panics instead of quietly
+ * overlapping user data. */
 void buffer_init(long buffer_end)
 {
     struct buffer_head *bh;
@@ -24,6 +39,23 @@ void buffer_init(long buffer_end)
     data_start = (char *)bh - total_data_size;
     buffer_mem = data_start;
     nr_buffers = NR_BUFFERS;
+
+    /* Same invariant as mm/memcheck.c, checked here because this is the
+       function that would be doing the clobbering. */
+    if ((unsigned long)data_start < BUFFER_CACHE_FLOOR) {
+        printk("buffer_init: cache [0x%lx,0x%lx) would grow below "
+               "BUFFER_CACHE_FLOOR 0x%lx\n",
+               (unsigned long)data_start, (unsigned long)buffer_end,
+               (unsigned long)BUFFER_CACHE_FLOOR);
+        panic("buffer_init: NR_BUFFERS does not fit the cache window");
+    }
+    buf_mem_start = (unsigned long)data_start;
+    buffer_cache_end = (unsigned long)buffer_end;
+
+    printk("buffer cache: %d buffers (%luKB) at [0x%lx, 0x%lx)\n",
+           nr_buffers,
+           ((unsigned long)total_data_size + (unsigned long)total_bh_size) / 1024,
+           (unsigned long)data_start, (unsigned long)buffer_end);
 
     free_list = bh;
     data = data_start;
