@@ -26,9 +26,18 @@
 #define NR_BUFFERS_WINDOW   (IDENTITY_MAP_TOP - BUFFER_CACHE_FLOOR)
 #define NR_BUFFERS_FOR_WINDOW (NR_BUFFERS_WINDOW / (BLOCK_SIZE + 64))
 #define NR_BUFFERS \
-    ((NR_BUFFERS_FOR_WINDOW >= NR_BUFFERS_MAX) ? NR_BUFFERS_MAX : 64)#define READ 0
+    ((NR_BUFFERS_FOR_WINDOW >= NR_BUFFERS_MAX) ? NR_BUFFERS_MAX : 64)
+
+#define READ 0
 #define WRITE 1
 #define READA 2
+
+/* This header is now pulled in very early (include/linux/memmap.h needs
+ * BLOCK_SIZE and struct buffer_head), so the types it only points at
+ * have to be forward declared here instead of relying on the include
+ * order. */
+struct task_struct;
+struct file;
 
 /* minix v1 directory entry (16 bytes: inode + 14-char name) */
 struct minix_dir_entry {
@@ -87,6 +96,17 @@ struct m_inode {
     unsigned char i_mount;
     unsigned char i_seek;
     unsigned char i_update;
+};
+
+/* Open file description.  It lives here (not in sched.h) because fs.h is
+ * now included very early by include/linux/memmap.h, and file_table[]
+ * needs the complete type. */
+struct file {
+    unsigned short f_mode;
+    unsigned short f_flags;
+    unsigned short f_count;
+    struct m_inode *f_inode;
+    unsigned long f_pos;
 };
 
 struct super_block {

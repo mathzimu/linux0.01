@@ -8,16 +8,6 @@
 #include <signal.h>
 #include <memlayout.h>
 
-/* The kernel's sys_execve() copies each ELF LOAD segment to its
- * link-time vaddr (there is no relocation), so a user program linked at
- * the wrong address would either be rejected loudly or silently
- * overwrite the user heap.  Both the ELF entry check in kernel/sys.c and
- * this assert exist so that a wrong -Ttext fails at build time.
- * __user_prog_start is defined by the Makefile's user link rule. */
-extern char __user_prog_start[];
-typedef char user_prog_must_link_at_USER_PROG_START[
-    ((unsigned long)__user_prog_start == (unsigned long)USER_PROG_START) ? 1 : -1];
-
 #ifndef NULL
 #define NULL ((void *)0)
 #endif

@@ -88,6 +88,11 @@ void sched_init(void)
         "outb %%al, $0x40\n\t"
         : : : "al"
     );
+
+    /* Start the periodic write-back task (pid 1).  It gets its own task
+       page inside the kernel image, so this must happen before any user
+       process can fork. */
+    sync_init();
 }
 
 void schedule(void)
@@ -170,6 +175,12 @@ void do_timer(void)
         current->signal |= (1 << SIGALRM);
         current->alarm = 0;
     }
+
+    /* Periodic write-back: only raise the flag and wake the sync task
+       here.  Flushing from the timer interrupt would sleep in the
+       buffer/inode paths (sleep_on, buffer allocation) and deadlock. */
+    if ((long)(jiffies - (long)next_sync) >= 0)
+        event_sync();
 
     if (current->counter > 0) {
         current->counter--;

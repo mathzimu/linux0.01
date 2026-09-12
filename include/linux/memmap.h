@@ -23,16 +23,24 @@
  * the page directory/table and the kernel image. */
 #define KERNEL_LOW_MEM      0x00100000
 
-/* The kernel image is linked at KERNEL_IMG_BASE and grows upward as
- * code is added.  This is the ceiling it is allowed to reach: past it
- * the compiler would silently start overwriting the kernel bump heap.
- * (mm/memcheck.c verifies the real link-time _end against it at boot.) */
-#define KERNEL_IMAGE_LIMIT  0x0018A000
+/* The kernel image (code + data + bss) is linked at KERNEL_IMG_BASE and
+ * grows upward as code is added.  This is the ceiling it is allowed to
+ * reach: past it the compiler would silently start overwriting the
+ * kernel bump heap.
+ *
+ * The real figure is the link-time _end, which mem_check() and
+ * scripts/check-layout.py both verify against this limit.  Note how much
+ * bigger the bss is than the linked binary: the image on disk is ~80KB,
+ * while _end lands near 0x29E68 (~168KB) because of the static tables
+ * (page allocator bitmap, inode/file tables, tty buffers).  Sizing this
+ * from the binary alone is exactly the mistake this constant used to
+ * contain. */
+#define KERNEL_IMAGE_LIMIT  0x002B000
 
 /* Cheap non-page kernel heap (lib/malloc.c): grows up from
  * KERNEL_HEAP_START, must stop before the page-allocator pool. */
-#define KERNEL_HEAP_START   0x0018A000
-#define KERNEL_HEAP_END     0x001A0000
+#define KERNEL_HEAP_START   0x002B000
+#define KERNEL_HEAP_END     0x002D000
 
 /* Page-allocator pool (mm/memory.c get_free_page): task pages, pipe
  * pages.  It must stay below USER_PROG_START, because the identity map
@@ -65,7 +73,10 @@ STATIC_ASSERT(KERNEL_POOL_END <= USER_PROG_START, kernel_pool_below_user_prog);
 
 STATIC_ASSERT(KERNEL_LOW_MEM == USER_PROG_START - 0x00100000, low_mem_agrees_with_user_prog);
 STATIC_ASSERT(PAGE_TABLE_0 == PAGE_DIRECTORY + 0x1000, page_table_follows_directory);
-STATIC_ASSERT(KERNEL_IMG_BASE == KERNEL_LOW_MEM - 0xF800, kernel_base_load_offset);
+/* boot/boot.s loads the kernel at 0x10800: 0x100000 - 63.5KB (the low
+ * 1MB holds BIOS, the boot sector at 0x7C00, setup.s at 0x10000 and the
+ * kernel image from 0x10800). */
+STATIC_ASSERT(KERNEL_IMG_BASE == KERNEL_LOW_MEM - 0xEF800, kernel_base_load_offset);
 
 STATIC_ASSERT(USER_PROG_START < USER_PROG_END, user_prog_ordered);
 STATIC_ASSERT(USER_PROG_END <= USER_HEAP_START, user_prog_below_heap);

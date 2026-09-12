@@ -22,10 +22,10 @@
  *   0x00100000  ┌──────────────────────────────┐
  *               │ page directory + page table0 │  8KB, reserved
  *   0x00102000  ├──────────────────────────────┤
- *               │ kernel image (linked 0x10800)│  grows downward only
- *   0x0018A000  ├──────────────────────────────┤
+ *               │ kernel image (linked 0x10800)│  code+data+bss, ~168KB
+ *   0x002B000   ├──────────────────────────────┤  (see KERNEL_IMAGE_LIMIT)
  *               │ kernel bump heap (unused)    │
- *   0x001A0000  ├──────────────────────────────┤
+ *   0x002D000   ├──────────────────────────────┤
  *               │ ** page-allocator pool **    │  task pages, pipe pages
  *   0x00200000  ├──────────────────────────────┤
  *               │ user program image           │  execve / embedded prog

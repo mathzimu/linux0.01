@@ -53,7 +53,7 @@ else
 endif
 
 OBJS = kernel/main.o kernel/sched.o kernel/process.o kernel/sys.o \
-       kernel/asm.o kernel/vsprintf.o kernel/panic.o \
+       kernel/asm.o kernel/vsprintf.o kernel/panic.o kernel/sync.o \
        mm/memory.o mm/page.o mm/memcheck.o \
        fs/minix.o fs/buffer.o fs/bitmap.o fs/inode.o fs/file_dev.o fs/namei.o \
        fs/pipe.o \

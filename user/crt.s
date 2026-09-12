@@ -10,6 +10,16 @@
 .include "memlayout.inc"
 
 _start:
+    /* The kernel's sys_execve() copies each LOAD segment to its link-time
+       vaddr (there is no relocation), so a program linked anywhere but
+       USER_PROG_START would overwrite whatever lives at its link address.
+       __user_prog_start is defined by the Makefile's user link rule; this
+       is the only place where a wrong -Ttext can be caught, because it is
+       the only user code that runs before any C gets a chance to. */
+    movl $__user_prog_start, %eax
+    cmpl $USER_PROG_START, %eax
+    jne link_bad
+
     movl USER_ARGV_ADDR, %ecx /* argv */
     movl USER_ARGC_ADDR, %edx /* argc */
     movl $USER_STACK_TOP, %esp
@@ -21,3 +31,22 @@ _start:
     movl $1, %eax
     int $0x80
     hlt
+
+link_bad:
+    /* Write "bad link address\n" straight to fd 1 and exit(1).  No C is
+       safe to call here: this binary's relocations are already wrong. */
+    movl $4, %eax             /* write */
+    movl $1, %ebx             /* fd 1 = stdout */
+    movl $link_msg, %ecx
+    movl $link_msg_len, %edx
+    int $0x80
+    movl $1, %ebx             /* exit(1) */
+    movl $1, %eax
+    int $0x80
+1:  hlt
+    jmp 1b
+
+.data
+link_msg:
+    .ascii "bad link address\n"
+link_msg_len = . - link_msg

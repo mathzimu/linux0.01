@@ -140,17 +140,23 @@ struct task_struct {
     struct desc_struct ldt[3];
 };
 
-struct file {
-    unsigned short f_mode;
-    unsigned short f_flags;
-    unsigned short f_count;
-    struct m_inode *f_inode;
-    unsigned long f_pos;
-};
+/* struct file lives in include/linux/fs.h (pulled in through
+ * include/linux/memmap.h), together with the file_table[] that needs the
+ * complete type. */
 
 extern struct task_struct *task[];
 extern struct task_struct *current;
 extern int jiffies;
+
+/* Periodic write-back task (kernel/sync.c): pid 1, its task page is a
+ * static buffer inside the kernel image so it cannot be reaped or
+ * confused with a user process. */
+void sync_init(void);
+void event_sync(void);
+void wait_for_sync(void);
+extern volatile int sync_pending;
+extern unsigned long sync_interval;
+extern unsigned long next_sync;
 
 void sched_init(void);
 void schedule(void);

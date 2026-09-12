@@ -1,6 +1,11 @@
 #ifndef _HEAD_H
 #define _HEAD_H
 
+/* The page-directory and page-table addresses live in include/memlayout.h
+ * (the single source of truth for the memory map); they used to be
+ * redefined here, which produced conflicting definitions. */
+#include <memlayout.h>
+
 #ifndef _DESC_STRUCT_DEFINED
 #define _DESC_STRUCT_DEFINED
 struct desc_struct {
@@ -19,8 +24,5 @@ extern desc_table _gdt, _idt;
 #define KERNEL_DS 0x10  /* index 2, RPL 0 */
 #define USER_CS   0x1B  /* index 3, RPL 3 */
 #define USER_DS   0x23  /* index 4, RPL 3 */
-
-#define PAGE_DIRECTORY 0x100000
-#define PAGE_TABLE_0   0x101000
 
 #endif
