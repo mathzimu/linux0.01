@@ -46,6 +46,21 @@ _start:
     lgdt (gdt_descr - _start)
     lidt (idt_descr - _start)
 
+    /* Point the data segments at the kernel's segment before handing
+       control over.  The kernel's first instructions reference symbols
+       (lgdt gdt_descr, call setup_paging), and those addresses are
+       resolved through DS: leaving DS at setup's own selector (0x1000)
+       made the kernel read its GDT descriptor from 0x10000+offset - the
+       staging area - so GDTR got garbage and the following
+       "ljmp $KERNEL_CS, ..." raised #GP, then #DF, then a triple fault.
+       GDT index 2 is the flat 4GB kernel data segment, selector 0x10. */
+    mov $0x10, %ax
+    mov %ax, %ds
+    mov %ax, %es
+    mov %ax, %ss
+    mov %ax, %fs
+    mov %ax, %gs
+
     mov %cr0, %eax
     or  $1, %al
     mov %eax, %cr0

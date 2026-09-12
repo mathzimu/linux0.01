@@ -12,6 +12,16 @@
 .equ USER_DS, 0x23
 
 startup_32:
+    /* The data segment MUST be set before the first symbol reference.
+       setup.s hands control over with DS/ES/SS still holding its own
+       selector (0x1000); every absolute address in this file is resolved
+       through DS, so with a stale base "lgdt gdt_descr" read
+       0x10000+offset - the boot loader's staging area - and installed a
+       garbage descriptor in GDTR.  The following
+       "ljmp $KERNEL_CS, $flush_cs" then raised #GP, then #DF, then a
+       triple fault, and main() never ran.  setup.s now loads the kernel
+       data selector before the jump; this is kept as a belt-and-braces
+       reset for anyone calling startup_32 from a different context. */
     mov $KERNEL_DS, %ax
     mov %ax, %ds
     mov %ax, %es
@@ -21,6 +31,9 @@ startup_32:
 
     lea _end, %esp
     add $0x1000, %esp
+
+    xor %eax, %eax
+    mov %eax, %cr2
 
     call setup_paging
     call setup_idt
