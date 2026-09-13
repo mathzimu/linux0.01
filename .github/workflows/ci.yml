@@ -55,7 +55,11 @@ jobs:
         # pressure, and together they are most of the suite's runtime.
         # Pushes to main run everything.
         env:
-          TEST_HOLD: "2"
+          # TEST_HOLD is now a CEILING on waiting for the guest's welcome
+          # banner, not a fixed delay before typing: the harness types as
+          # soon as the shell is up, so a slow runner gets more time instead
+          # of losing every keystroke into a shell that does not exist yet.
+          TEST_HOLD: "60"
           TEST_TAIL: "4"
           TEST_SKIP_HEAVY: ${{ github.event_name == 'pull_request' && '1' || '0' }}
         run: make test

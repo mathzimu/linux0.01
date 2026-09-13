@@ -1,20 +1,33 @@
-ci: make a regression failure name the scenario, from anywhere
+test: wait for the guest to be ready instead of sleeping 2 seconds
 
-CI has been red since M3 and the diagnosis stalled on access, not on the
-kernel: the job-log endpoint needs admin rights ("Must have admin rights
-to Repository"), so from outside the repository all that is visible is
-"make test" failing after twelve minutes.  The step's annotation only
-says "Process completed with exit code 2", which is make reporting a
-failed recipe - the same thing for any failing scenario.
+CI's annotation finally said which scenarios failed, and the pattern was
+the answer:
 
-Annotations, unlike logs, are publicly readable, and a workflow command
-prints them.  regress.sh now emits
+    FAIL [hello] [pipe] [chdir] [spawn] [sig] [sysdemo] [bad]
+         [bigdir] [apps] [bigalloc]
 
-    ::error title=regression failure::FAIL [name] missing: "needle"
+the first eleven scenarios of the run (only `link` got lucky), while
+everything from `memcheck` onwards passed.  That is not a kernel
+behaviour - it is the harness typing into a shell that does not exist
+yet.  qemu-test.py waited a fixed --hold (2s on CI) and then started
+pressing keys; under TCG on a cold GitHub runner the first boots of a run
+take much longer than that, so every keystroke went nowhere and the
+scenario reported "missing" for its very first assertion.  Later runs in
+the same job were fast because the images were in the page cache by then.
 
-for every assertion that fails, plus one summary error, and writes a line
-into GITHUB_STEP_SUMMARY.  Both are guarded by GITHUB_ACTIONS, so local
-runs are unchanged.
+Fixes:
 
-This does not fix the failure - it makes the next run explain itself to
-anyone with a browser, including me.
+  * qemu-test.py waits for the guest's welcome banner ("Type 'help'") in
+    the serial capture before typing, with --hold demoted to a ceiling
+    (default 30s).  A slow machine now gets more time instead of losing
+    input;
+  * regress.sh passes --hold 30 by default, and CI sets TEST_HOLD=60 as
+    that ceiling (it used to be "type after 2 seconds");
+  * the earlier changes in this series stay: the settle floor of 20s and
+    the oom case moved to a 4MB machine, which were real robustness
+    problems even though they were not *the* failure.
+
+The annotations added in 0c67f1e are what made this diagnosable at all -
+the job log needs admin rights, the annotation does not.
+
+Verified locally: fast suite 20/20 with the ready-wait in place.

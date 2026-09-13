@@ -77,8 +77,19 @@ def main():
     ap.add_argument('--iso', help='bootable ISO')
     ap.add_argument('--hda', help='IDE disk image (MINIX fs)')
     ap.add_argument('--out', default='/tmp/qtest', help='output prefix')
-    ap.add_argument('--hold', type=float, default=1.2,
-                    help='seconds before typing keys')
+    ap.add_argument('--hold', type=float, default=30.0,
+                    help='MAXIMUM seconds to wait for the guest to be ready.  '
+                         'This used to be a fixed delay before typing keys, '
+                         'which is wrong under TCG: on a cold CI runner the '
+                         'boot takes far longer than on a warm machine, so the '
+                         'harness typed into a shell that did not exist yet and '
+                         'every keystroke was lost.  That is exactly how CI '
+                         'failed on the first ten scenarios of a run and passed '
+                         'the rest.')
+    ap.add_argument('--ready', default="Type 'help'",
+                    help='serial text meaning "the shell is up"; typing starts '
+                         'as soon as it appears in the capture (or --hold '
+                         'expires, in which case keys are typed anyway)')
     ap.add_argument('--keys', default='',
                     help='keystrokes to type (\\n = enter)')
     ap.add_argument('--tail', type=float, default=1.5,
@@ -139,7 +150,23 @@ def main():
             print('monitor socket never appeared', file=sys.stderr)
             sys.exit(1)
 
-        time.sleep(args.hold)
+        # Wait for the guest to actually be ready instead of sleeping a
+        # fixed amount: under TCG the first boot of a run can take tens of
+        # seconds (cold caches, a runner that just finished apt-get), and
+        # anything typed before the shell exists is lost for good.  The
+        # welcome banner is the readiness marker; --hold is only a ceiling.
+        ready_deadline = time.time() + args.hold
+        while time.time() < ready_deadline:
+            if os.path.exists(serial):
+                try:
+                    with open(serial, 'rb') as f:
+                        if args.ready.encode() in f.read():
+                            break
+                except OSError:
+                    pass
+            time.sleep(0.2)
+        time.sleep(0.4)                 # let the prompt settle
+
         if args.keys:
             # accept literal "\n" (from plain single-quoted CLI args) as well
             # as an actual newline (bash $'...\n') — unify both

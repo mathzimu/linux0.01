@@ -27,7 +27,7 @@ run_case() {
         FAIL=$((FAIL+1)); return 1
     fi
     out=$(python3 scripts/qemu-test.py --image Image --hda minix.img \
-             --hold "${TEST_HOLD:-1.2}" \
+             --hold "${TEST_HOLD:-30}" \
              --tail "${QEMU_TAIL:-${TEST_TAIL:-1.5}}" \
              --min-wait "${QEMU_MIN_WAIT:-0}" \
              --mem "${QEMU_MEM:-16M}" \
@@ -63,14 +63,14 @@ run_case2() {
         FAIL=$((FAIL+1)); return 1
     fi
     out=$(python3 scripts/qemu-test.py --image Image --hda minix.img \
-             --hold "${TEST_HOLD:-1.2}" --tail "${TEST_TAIL:-1.5}" \
+             --hold "${TEST_HOLD:-30}" --tail "${TEST_TAIL:-1.5}" \
              --mem "${QEMU_MEM:-16M}" \
              --type-delay "${TEST_TYPE_DELAY:-0.5}" \
              --min-wait "$minwait" --keys "$keys1" 2>/dev/null)
     printf '%s' "$out" > "$LOGDIR/$name.1.serial"
     out="$out
 $(python3 scripts/qemu-test.py --image Image --hda minix.img \
-             --hold "${TEST_HOLD:-1.2}" --tail "${TEST_TAIL:-1.5}" \
+             --hold "${TEST_HOLD:-30}" --tail "${TEST_TAIL:-1.5}" \
              --mem "${QEMU_MEM:-16M}" \
              --type-delay "${TEST_TYPE_DELAY:-0.5}" \
              --keys "$keys2" 2>/dev/null)"
