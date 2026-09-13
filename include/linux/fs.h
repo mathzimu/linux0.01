@@ -178,4 +178,10 @@ extern struct file file_table[NR_FILE];
 extern struct m_inode inode_table[NR_INODE];
 extern struct super_block super_block[NR_SUPER];
 
+/* The console as an open file (drivers/tty_io.c).  Tasks start with
+ * filp[0..2] pointing at it, so fd 0/1/2 go through the descriptor table
+ * like anything else — which is what makes `> file` and `| cmd` work.
+ * f_inode == NULL is the marker for "this is the console". */
+extern struct file tty_file;
+
 #endif

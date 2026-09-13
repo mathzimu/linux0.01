@@ -115,6 +115,37 @@ existence check (all tasks are uid 0)」。只要系统里只有 uid 0，这个�
 | 顺带（D） | `KERNEL_IMAGE_LIMIT`/`KERNEL_HEAP_START` 从 `0x2B000` 抬到 `0x30000`（`_end` 0x29E68，余量从 4.5KB 变成 25KB）——加功能前不必再和天花板搏斗 |
 | 兼容性调整 | `user/sysdemo.c` 原来在主进程里 `setuid(7)` 然后 `setuid(0)`：降权是**单向**的，第二句本来就失败，只是以前没人检查权限所以看不出来。现在把 uid 实验放进 fork 出的子进程，父进程继续以 root 演示 `chmod/chown` |
 
+## C1 — Ring3 shell 的管道与重定向 ✅ 已完成
+
+**动因**：`pipe()`（syscall 42）和 `dup2()`（63）从 0.01 对齐那一轮就实现了，`user/pipedemo.c`
+也一直在用——但**没有任何东西用它们把两个进程接起来**。Ring3 `/bin/sh` 只能跑单条命令，
+`>`、`<`、`|` 一个都不认。
+
+**先修的其实是内核**：`sys_read`/`sys_write` 把 fd 0/1/2 硬编码成控制台
+（`if (fd == 1 || fd == 2) { ...tty... }`），**从不查 fd 表**。这意味着 shell 无论怎么
+`dup2(fd, 1)` 都没用——内核照旧往屏幕上写。真实 Unix 里 0/1/2 只是"在 tty 上打开的文件"，
+所以这一轮把它们变成真正的描述符：
+
+| 改动 | 内容 |
+|------|------|
+| `drivers/tty_io.c` | 新增 `struct file tty_file`（`f_inode == NULL` 就是"这是控制台"的标记） |
+| `kernel/sched.c` | `sched_init` 给 `init_task.filp[0..2]` 装上它；fork 的 `f_count++` 与 exit 的关闭照常生效 |
+| `kernel/sys.c` | `sys_read`/`sys_write` 先查 `current->filp[fd]`：没有描述符或 `f_inode == NULL` → 走 tty 分支，否则走文件/管道分支。`close`/`dup2`/`exit` 里 `iput(f->f_inode)` 加 NULL 守卫（控制台没有 inode 可释放） |
+| 效果 | `dup2(file_fd, 1)` 之后 `write(1, ...)` 真的写进文件；同理 fd 0 可以被重定向到文件或管道读端 |
+
+**shell 侧**（`user/sh.c` 重写）：`line := pipeline`、`pipeline := command ('|' command)*`、
+`command := word+ redirection*`，支持 `<`、`>`、`>>`、最多 4 段管道。实现在 fork 出的子进程里
+`dup2` 接线，父进程只保留管道两端并在最后回收所有子进程（退出码取最后一段）。
+内建命令（`echo`/`cd`/`pwd`/`help`/`exit`）单独跑时在 shell 进程内执行（`cd` 才能生效），
+重定向通过"保存 fd → 应用 → 恢复"实现；内建出现在管道里则在子进程中执行，
+所以 `echo hi | wc` 也成立。
+
+顺带：`user/cat.c`、`user/wc.c` 学会 Unix 约定——没有文件名（或 `-`）就读 stdin；
+`scripts/qemu-test.py` 补上大写字母与 `| < > ( ) & * ...` 的 sendkey 映射（否则测试根本敲不出管道符）。
+
+**回归**：场景 20 `shpipe`——`echo ... > /p.txt`、`cat /q.txt >> /p.txt`、
+`cat /p.txt`、`wc < /p.txt`、`cat /p.txt | wc`，断言数值可手算（`2 4 23 -`）。
+
 
 ---
 
@@ -217,7 +248,7 @@ make Image                # 引导镜像
 # 运行/验证
 qemu-system-i386 -fda Image -hda minix.img -m 16M -boot a
 python3 scripts/qemu-test.py --image Image --hda minix.img --keys $'cmd\n'
-make test                   # 一键回归（scripts/regress.sh，19 个场景断言）
+make test                   # 一键回归（scripts/regress.sh，20 个场景断言）
 make check                  # 静态校验：内存地图 + 文档一致性 + lint 反向自测
 make check-layout           # 只校验内存地图（含 _end 未越界）
 make check-docs             # 只校验文档里引用的布局常量/场景数与源码一致

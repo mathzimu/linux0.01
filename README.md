@@ -31,7 +31,7 @@
 | **设备** | VGA 80×25 文本控制台、PS/2 键盘（含 Shift）、IDE 硬盘 PIO、COM1 串口镜像 |
 | **文件系统** | **MINIX v1 读写**（文件/目录增删、**硬链接、重命名、chroot**）、**权限模型**（owner/group/other + root，目录 x 位控制查找，Linux 0.01 规则）、LRU 块缓冲（脏块回写 + **每 5 秒定时回写**）、inode 缓存、相对路径 + `chdir` |
 | **系统调用** | **67 个，编号与 1991 Linux 0.01 完全一致**（含管道、`stat/fstat`、`signal`、`uid/gid`、`umask`、`uname`…） |
-| **Shell** | 内核态 26 条命令 + **Ring3 `/bin/sh`**（自建 cd/pwd/exit/help，其余走 `/bin/<name>`） |
+| **Shell** | 内核态 26 条命令 + **Ring3 `/bin/sh`**（内建 cd/pwd/echo/exit/help，其余走 `/bin/<name>`；支持 **`<` `>` `>>` 与 `\|` 管道**） |
 
 ---
 
@@ -333,7 +333,7 @@ exec: child 1 exit_code=7
 
 ## 🧪 自动化验证
 
-**一键回归**（19 个场景：exec / 管道 / chdir / 硬链接 / fork-waitpid / 信号 / 系统调用 / 内存隔离 / 目录扩容 / 基础应用 / 堆与缓存不重叠 / 启动自检 / 自定义信号处理器 / **Ring3 shell** / **定时回写** / **写时复制** / **按需调页** / **内存耗尽** / **文件权限**）：
+**一键回归**（20 个场景：exec / 管道 / chdir / 硬链接 / fork-waitpid / 信号 / 系统调用 / 内存隔离 / 目录扩容 / 基础应用 / 堆与缓存不重叠 / 启动自检 / 自定义信号处理器 / **Ring3 shell** / **定时回写** / **写时复制** / **按需调页** / **内存耗尽** / **文件权限** / **shell 管道与重定向**）：
 
 ```bash
 make test                    # 等价于 scripts/regress.sh

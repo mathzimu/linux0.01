@@ -59,9 +59,22 @@ long sys_write(unsigned int fd, const char *buf, unsigned long count)
 {
     long result;
     char c;
+    struct file *f;
 
-    if (fd == 1 || fd == 2) {
+    if (fd >= NR_OPEN)
+        return -1;
+
+    f = current->filp[fd];
+
+    /* No descriptor, or the console (f_inode == NULL): write to the tty.
+       fds 0..2 are pre-opened on the console for every task, but the
+       check stays tolerant so a task that closed them still behaves. */
+    if (!f || !f->f_inode) {
         unsigned long i;
+
+        if (fd == 0)
+            return -1;                  /* stdin is not writable */
+
         for (i = 0; i < count; i++) {
             c = get_fs_byte(buf + i);
             if (c == '\n')
@@ -71,13 +84,6 @@ long sys_write(unsigned int fd, const char *buf, unsigned long count)
         return count;
     }
 
-    if (fd == 0)
-        return -1;
-
-    if (fd >= NR_OPEN || !current->filp[fd])
-        return -1;
-
-    struct file *f = current->filp[fd];
     if (f->f_mode == 0)
         return -1;
     if (f->f_inode->i_pipe)
@@ -93,8 +99,15 @@ long sys_read(unsigned int fd, char *buf, unsigned long count)
 {
     long result;
     char c;
+    struct file *f;
 
-    if (fd == 0) {
+    if (fd >= NR_OPEN)
+        return -1;
+
+    f = current->filp[fd];
+
+    /* Console (or an fd nobody opened): read from the tty buffer. */
+    if (!f || !f->f_inode) {
         unsigned long i;
         for (i = 0; i < count; i++) {
             if (tty_table[0].read_cnt == 0) {
@@ -124,11 +137,6 @@ long sys_read(unsigned int fd, char *buf, unsigned long count)
         current->state = TASK_RUNNING;
         return i;
     }
-
-    if (fd >= NR_OPEN || !current->filp[fd])
-        return -1;
-
-    struct file *f = current->filp[fd];
     if (f->f_inode->i_pipe)
         return read_pipe(f->f_inode, buf, count);
     if (f->f_mode == 1)
@@ -146,8 +154,9 @@ int sys_open(const char *filename, int flag, int mode)
     struct file *f;
     struct m_inode *inode;
 
-    /* fds 0/1/2 are reserved for stdin/stdout/stderr (the tty), so
-       the first real file gets fd 3 — matching Unix convention. */
+    /* fds 0/1/2 already hold the console (tty_file), so the first file
+       opened gets fd 3 — matching Unix convention.  Closing 0/1/2 frees
+       the slot, exactly like a normal descriptor. */
     for (fd = 3; fd < NR_OPEN; fd++) {
         if (!current->filp[fd]) break;
     }
@@ -257,7 +266,7 @@ int sys_close(unsigned int fd)
 
     current->filp[fd] = NULL;
     f->f_count--;
-    if (f->f_count == 0) {
+    if (f->f_count == 0 && f->f_inode) {    /* NULL inode = the console */
         iput(f->f_inode);
     }
     return 0;
@@ -354,7 +363,7 @@ int sys_dup2(unsigned int oldfd, unsigned int newfd)
     if (current->filp[newfd]) {
         f = current->filp[newfd];
         f->f_count--;
-        if (f->f_count == 0)
+        if (f->f_count == 0 && f->f_inode)   /* NULL = console */
             iput(f->f_inode);
     }
     current->filp[newfd] = current->filp[oldfd];

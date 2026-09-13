@@ -205,12 +205,14 @@ int sys_exit(int ret)
 {
     int i;
 
-    /* Close every file this task has open, releasing inode refs. */
+    /* Close every file this task has open, releasing inode refs.  fds
+       0..2 hold the console (tty_file), whose f_inode is NULL — there is
+       no inode to release for those. */
     for (i = 0; i < NR_OPEN; i++) {
         struct file *f = current->filp[i];
         if (f) {
             f->f_count--;
-            if (f->f_count == 0)
+            if (f->f_count == 0 && f->f_inode)
                 iput(f->f_inode);
             current->filp[i] = NULL;
         }

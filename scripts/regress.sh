@@ -196,6 +196,21 @@ run_case perm "$BASE && make prog NAME=permtest" 'exec /bin/permtest\n' \
     'permtest: child B: /ptest/owned uid=1000 (want 1000)' \
     'permtest: PASS (permissions enforced in both directions)'
 
+# 场景 20: 管道与重定向（C1）—— Ring3 shell 用 pipe/dup2 连起两个进程
+#   `echo` / `<` / `>` / `>>` / `|` 全部走系统调用：pipe(42) 与 dup2(63) 早就
+#   实现了，但一直没人用它们把两个进程接起来。为了让 `>` 真的能改变 fd 1 的
+#   去向，内核这一轮把控制台也放进了 fd 表（fd 0/1/2 = tty_file），不再是
+#   sys_write 里的硬编码分支。
+#   数值是算得出来的：alpha beta gamma\n = 17B，delta\n = 6B，追加后 23B/2 行/4 词。
+run_case shpipe \
+    'rm -f minix.img && make user/sh.elf user/cat.elf user/wc.elf user/hello.elf && tools/mkminix minix.img user/sh.elf:sh user/cat.elf:cat user/wc.elf:wc user/hello.elf:hello' \
+    'exec /bin/sh\necho alpha beta gamma > /p.txt\necho delta > /q.txt\ncat /q.txt >> /p.txt\ncat /p.txt\nwc < /p.txt\ncat /p.txt | wc\nexit\n' \
+    'sh: supports < > >> and |' \
+    'alpha beta gamma' \
+    'delta' \
+    '2 4 23 -' \
+    'exec: child 1 exit_code=0'
+
 echo
 echo "================================"
 echo "  $PASS passed, $FAIL failed"

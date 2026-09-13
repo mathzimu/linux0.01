@@ -21,12 +21,29 @@ SENDKEY = {
     'h': 'h', 'i': 'i', 'j': 'j', 'k': 'k', 'l': 'l', 'm': 'm', 'n': 'n',
     'o': 'o', 'p': 'p', 'q': 'q', 'r': 'r', 's': 's', 't': 't', 'u': 'u',
     'v': 'v', 'w': 'w', 'x': 'x', 'y': 'y', 'z': 'z',
+    # Uppercase: QEMU's sendkey wants the shift- prefix.
+    'A': 'shift-a', 'B': 'shift-b', 'C': 'shift-c', 'D': 'shift-d',
+    'E': 'shift-e', 'F': 'shift-f', 'G': 'shift-g', 'H': 'shift-h',
+    'I': 'shift-i', 'J': 'shift-j', 'K': 'shift-k', 'L': 'shift-l',
+    'M': 'shift-m', 'N': 'shift-n', 'O': 'shift-o', 'P': 'shift-p',
+    'Q': 'shift-q', 'R': 'shift-r', 'S': 'shift-s', 'T': 'shift-t',
+    'U': 'shift-u', 'V': 'shift-v', 'W': 'shift-w', 'X': 'shift-x',
+    'Y': 'shift-y', 'Z': 'shift-z',
     '0': '0', '1': '1', '2': '2', '3': '3', '4': '4', '5': '5', '6': '6',
     '7': '7', '8': '8', '9': '9',
     ' ': 'spc', '\n': 'ret', '\b': 'backspace', '\t': 'tab',
     '-': 'minus', '=': 'equal', '[': 'bracket_left', ']': 'bracket_right',
     ';': 'semicolon', "'": 'apostrophe', '`': 'grave_accent',
     '\\': 'backslash', ',': 'comma', '.': 'dot', '/': 'slash',
+    # Shifted characters, spelled the way QEMU's HMP sendkey wants them.
+    # The Ring3 shell's pipeline test needs | < > to be typeable.
+    '!': 'shift-1', '@': 'shift-2', '#': 'shift-3', '$': 'shift-4',
+    '%': 'shift-5', '^': 'shift-6', '&': 'shift-7', '*': 'shift-8',
+    '(': 'shift-9', ')': 'shift-0', '_': 'shift-minus', '+': 'shift-equal',
+    '{': 'shift-bracket_left', '}': 'shift-bracket_right',
+    '|': 'shift-backslash', ':': 'shift-semicolon', '"': 'shift-apostrophe',
+    '~': 'shift-grave_accent', '<': 'shift-comma', '>': 'shift-dot',
+    '?': 'shift-slash',
 }
 
 

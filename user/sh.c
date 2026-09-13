@@ -1,4 +1,4 @@
-/* sh — a Ring3 user-mode shell (M2-2).
+/* sh — a Ring3 user-mode shell (M2-2, pipelines added in M4/C1).
  *
  * Until now the only shell was init/shell.c, which runs in Ring 0: it
  * drove the machine with direct printk/fork calls and never exercised
@@ -9,14 +9,43 @@
  *
  * Usage:  make prog NAME=sh    then   exec /bin/sh
  *
- * Builtins: cd, pwd, exit, help.  Anything else is looked up as
- * /bin/<name> and run as a child process.
+ * Grammar (deliberately small, but the real thing):
+ *
+ *     line   := pipeline
+ *     pipeline := command ( '|' command )*
+ *     command  := word+ redirection*
+ *     redirection := '<' file | '>' file | '>>' file
+ *
+ * Everything is done with the syscalls the kernel already had —
+ * pipe(42) and dup2(63) have been implemented since the 0.01 alignment
+ * work, but nothing had ever used them to connect two processes, so
+ * "|" and ">" are where they finally earn their keep:
+ *
+ *     echo hi > /f          cat /f            wc < /f
+ *     cat /hello.txt | wc   cat /a >> /b      help | wc
+ *
+ * Builtins: cd, pwd, echo, exit, help.  A builtin used on its own runs
+ * in the shell process (so cd persists) with its redirections applied
+ * and restored; a builtin inside a pipeline runs in the forked child,
+ * which is why `echo hi | wc` works.
  */
 
 #include "lib.h"
 
 #define LINE_MAX 128
 #define ARG_MAX  16
+#define MAX_CMDS 4
+
+struct cmd {
+    char *argv[ARG_MAX];
+    int argc;
+    char *in;                  /* < file            */
+    char *out;                 /* > or >> file      */
+    int append;                /* >> instead of >   */
+};
+
+static int want_exit;
+static int exit_code;
 
 /* Read one line from stdin into buf, echoing and handling backspace.
    Returns the length, or -1 at end of input.  The kernel's tty layer
@@ -49,68 +78,344 @@ static int read_line(char *buf, int size)
     }
 }
 
-static int parse_args(char *line, char **argv, int max)
+/* Put spaces around the metacharacters so a plain whitespace split can
+   tokenise "cat<a|b" the same way it tokenises "cat < a | b". */
+static void normalize(const char *in, char *out, int outsz)
 {
-    int argc = 0;
+    int i = 0;
 
-    while (*line && argc < max - 1) {
-        while (*line == ' ' || *line == '\t')
-            *line++ = '\0';
-        if (!*line)
-            break;
-        argv[argc++] = line;
-        while (*line && *line != ' ' && *line != '\t')
-            line++;
+    while (*in && i < outsz - 4) {
+        char c = *in++;
+
+        if (c == '<' || c == '>' || c == '|') {
+            out[i++] = ' ';
+            out[i++] = c;
+            if (c == '>' && *in == '>') {
+                out[i++] = '>';
+                in++;
+            }
+            out[i++] = ' ';
+        } else {
+            out[i++] = c;
+        }
     }
-    argv[argc] = NULL;
-    return argc;
+    out[i] = '\0';
 }
 
-/* Run /bin/<argv[0]> as a child and wait for it. */
-static int run_program(char **argv)
+/* Split `line` into commands.  Returns the number of commands (0 for an
+   empty line), or -1 on a syntax error.
+
+   The token buffer is deliberately STATIC: every argv[] and redirection
+   filename points into it, and those pointers have to stay valid after
+   this function returns (they are used by run_pipeline, which may run
+   after more stack activity).  A local buffer here dangles into a dead
+   frame — the first version did exactly that and the command name came
+   out as garbage, which is what `sh: echo???? exited with 127` was. */
+static char norm[LINE_MAX];
+
+static int parse_pipeline(char *line, struct cmd *cmds, int maxcmds)
+{
+    char *p;
+    int n = 0;
+
+    normalize(line, norm, sizeof(norm));
+
+    cmds[0].argc = 0;
+    cmds[0].in = cmds[0].out = NULL;
+    cmds[0].append = 0;
+
+    p = norm;
+    while (*p) {
+        char *word;
+
+        while (*p == ' ' || *p == '\t')
+            p++;
+        if (!*p)
+            break;
+
+        word = p;
+        while (*p && *p != ' ' && *p != '\t')
+            p++;
+        if (*p)
+            *p++ = '\0';
+
+        if (strcmp(word, "|") == 0) {
+            if (n + 1 >= maxcmds || cmds[n].argc == 0)
+                return -1;
+            n++;
+            cmds[n].argc = 0;
+            cmds[n].in = cmds[n].out = NULL;
+            cmds[n].append = 0;
+            continue;
+        }
+        if (strcmp(word, "<") == 0 || strcmp(word, ">") == 0 ||
+            strcmp(word, ">>") == 0) {
+            char *file;
+
+            while (*p == ' ' || *p == '\t')
+                p++;
+            if (!*p)
+                return -1;                  /* redirection without a file */
+            file = p;
+            while (*p && *p != ' ' && *p != '\t')
+                p++;
+            if (*p)
+                *p++ = '\0';
+
+            if (word[0] == '<') {
+                cmds[n].in = file;
+            } else {
+                cmds[n].out = file;
+                cmds[n].append = (word[1] == '>');
+            }
+            continue;
+        }
+
+        if (cmds[n].argc >= ARG_MAX - 1)
+            return -1;
+        cmds[n].argv[cmds[n].argc++] = word;
+    }
+
+    if (cmds[n].argc == 0)
+        return n == 0 ? 0 : -1;             /* "a |" or "| a" */
+    cmds[n].argv[cmds[n].argc] = NULL;
+    return n + 1;
+}
+
+/* Open the files a command asked for and point fd 0/1 at them.  Called
+   in the child (or around a builtin) so the shell's own fds survive. */
+static int apply_redirs(struct cmd *c)
+{
+    int fd;
+
+    if (c->in) {
+        fd = open(c->in, 0, 0);             /* O_RDONLY */
+        if (fd < 0) {
+            printf("sh: %s: cannot open\n", c->in);
+            return -1;
+        }
+        dup2(fd, 0);
+        if (fd != 0)
+            close(fd);
+    }
+
+    if (c->out) {
+        if (c->append) {
+            fd = open(c->out, 1, 0);        /* O_WRONLY */
+            if (fd >= 0)
+                lseek(fd, 0, 2);            /* SEEK_END: no O_APPEND here */
+        } else {
+            fd = creat(c->out, 0644);
+        }
+        if (fd < 0) {
+            printf("sh: %s: cannot create\n", c->out);
+            return -1;
+        }
+        dup2(fd, 1);
+        if (fd != 1)
+            close(fd);
+    }
+    return 0;
+}
+
+/* --- builtins ------------------------------------------------------ */
+
+static int is_builtin(const char *name)
+{
+    return strcmp(name, "cd") == 0 || strcmp(name, "pwd") == 0 ||
+           strcmp(name, "echo") == 0 || strcmp(name, "help") == 0 ||
+           strcmp(name, "exit") == 0;
+}
+
+/* Run a builtin; returns its exit status.  Runs in whatever process
+   calls it, so redirections must already be in place. */
+static int builtin_run(struct cmd *c)
+{
+    int i;
+
+    if (strcmp(c->argv[0], "echo") == 0) {
+        for (i = 1; i < c->argc; i++) {
+            if (i > 1)
+                write(1, " ", 1);
+            write(1, c->argv[i], (int)strlen(c->argv[i]));
+        }
+        write(1, "\n", 1);
+        return 0;
+    }
+    if (strcmp(c->argv[0], "help") == 0) {
+        printf("sh: builtins  cd <dir>  pwd  echo <text>  exit  help\n");
+        printf("sh: run       <program> [args]      (from /bin)\n");
+        printf("sh: redirect  < file   > file   >> file\n");
+        printf("sh: pipe      cmd1 | cmd2 | cmd3\n");
+        return 0;
+    }
+    if (strcmp(c->argv[0], "cd") == 0) {
+        if (c->argv[1] == NULL) {
+            printf("sh: usage: cd <dir>\n");
+            return 1;
+        }
+        if (chdir(c->argv[1]) < 0) {
+            printf("sh: cd: %s: no such directory\n", c->argv[1]);
+            return 1;
+        }
+        return 0;
+    }
+    if (strcmp(c->argv[0], "exit") == 0) {
+        want_exit = 1;
+        exit_code = c->argv[1] ? atoi(c->argv[1]) : 0;
+        return exit_code;
+    }
+    /* "pwd" never reaches here: it has no getcwd() to use and is turned
+       into "ls" by the callers (see run_one). */
+    return 127;
+}
+
+/* Build "/bin/<name>" and exec it, or report why not. */
+static void exec_program(struct cmd *c)
 {
     char path[64];
-    int pid;
-    unsigned long code = 0;
     int i = 0;
+    const char *s = c->argv[0];
 
     path[i++] = '/';
     path[i++] = 'b';
     path[i++] = 'i';
     path[i++] = 'n';
     path[i++] = '/';
-    {
-        const char *s = argv[0];
-        while (*s && i < (int)sizeof(path) - 1)
-            path[i++] = *s++;
-    }
+    while (*s && i < (int)sizeof(path) - 1)
+        path[i++] = *s++;
     path[i] = '\0';
+
+    execve(path, c->argv, NULL);
+    printf("sh: %s: cannot execute\n", path);
+    exit(127);
+}
+
+/* Run one command: builtin in place, anything else via fork+execve.
+   Returns the exit status. */
+static int run_one(struct cmd *c)
+{
+    int pid;
+    unsigned long code = 0;
+
+    if (is_builtin(c->argv[0]) && strcmp(c->argv[0], "pwd") != 0) {
+        int save0 = -1, save1 = -1, status;
+
+        if (c->in || c->out) {
+            save0 = dup(0);                 /* keep the shell's tty */
+            save1 = dup(1);
+            if (apply_redirs(c) < 0) {
+                if (save0 >= 0) { dup2(save0, 0); close(save0); }
+                if (save1 >= 0) { dup2(save1, 1); close(save1); }
+                return 1;
+            }
+        }
+        status = builtin_run(c);
+        if (save0 >= 0) { dup2(save0, 0); close(save0); }
+        if (save1 >= 0) { dup2(save1, 1); close(save1); }
+        return status;
+    }
 
     pid = fork();
     if (pid < 0) {
         printf("sh: fork failed\n");
-        return -1;
+        return 1;
     }
     if (pid == 0) {
-        /* Child: replace ourselves with the program.  If execve fails,
-           say so and exit non-zero so the parent can report it. */
-        execve(path, argv, NULL);
-        printf("sh: %s: cannot execute\n", path);
-        exit(127);
+        if (apply_redirs(c) < 0)
+            exit(1);
+        if (strcmp(c->argv[0], "pwd") == 0) {
+            c->argv[0] = "ls";
+            exec_program(c);
+        }
+        if (is_builtin(c->argv[0]))
+            exit(builtin_run(c));           /* e.g. echo inside a pipeline */
+        exec_program(c);
     }
 
     waitpid(pid, &code, 0);
     return (int)code;
 }
 
+/* Run a whole pipeline, wiring each stage to the next with pipe(2). */
+static int run_pipeline(struct cmd *cmds, int ncmds)
+{
+    int pids[MAX_CMDS];
+    int i, prev = -1;
+    int status = 0;
+
+    if (ncmds == 1)
+        return run_one(&cmds[0]);
+
+    for (i = 0; i < ncmds; i++) {
+        unsigned long fds[2];
+        int pid;
+
+        if (i < ncmds - 1) {
+            if (pipe(fds) < 0) {
+                printf("sh: pipe failed\n");
+                break;
+            }
+        }
+
+        pid = fork();
+        if (pid < 0) {
+            printf("sh: fork failed\n");
+            if (i < ncmds - 1) {
+                close((int)fds[0]);
+                close((int)fds[1]);
+            }
+            break;
+        }
+
+        if (pid == 0) {
+            /* child: stdin from the previous stage, stdout to the next */
+            if (prev >= 0) {
+                dup2(prev, 0);
+                close(prev);
+            }
+            if (i < ncmds - 1) {
+                close((int)fds[0]);
+                dup2((int)fds[1], 1);
+                close((int)fds[1]);
+            }
+            if (apply_redirs(&cmds[i]) < 0)
+                exit(1);
+            if (is_builtin(cmds[i].argv[0]) &&
+                strcmp(cmds[i].argv[0], "pwd") != 0)
+                exit(builtin_run(&cmds[i]));
+            exec_program(&cmds[i]);
+        }
+
+        pids[i] = pid;
+        if (i < ncmds - 1)
+            close((int)fds[1]);
+        if (prev >= 0)
+            close(prev);
+        prev = (i < ncmds - 1) ? (int)fds[0] : -1;
+    }
+
+    if (prev >= 0)
+        close(prev);
+
+    for (i = 0; i < ncmds; i++) {
+        unsigned long code = 0;
+
+        waitpid(pids[i], &code, 0);
+        status = (int)code;                 /* last stage wins */
+    }
+    return status;
+}
+
 int main(int argc, char *argv[])
 {
     char line[LINE_MAX];
-    char *args[ARG_MAX];
-    int n;
+    struct cmd cmds[MAX_CMDS];
+    int n, status;
 
     printf("sh: user-mode shell (Ring3), pid=%d\n", getpid());
-    printf("sh: builtins: cd pwd exit help; other names run /bin/<name>\n");
+    printf("sh: builtins: cd pwd echo exit help; other names run /bin/<name>\n");
+    printf("sh: supports < > >> and |  (type 'help')\n");
 
     for (;;) {
         write(1, "$ ", 2);
@@ -123,40 +428,20 @@ int main(int argc, char *argv[])
         if (n == 0)
             continue;
 
-        if (parse_args(line, args, ARG_MAX) == 0)
+        n = parse_pipeline(line, cmds, MAX_CMDS);
+        if (n < 0) {
+            printf("sh: syntax error\n");
+            continue;
+        }
+        if (n == 0)
             continue;
 
-        if (strcmp(args[0], "exit") == 0)
+        status = run_pipeline(cmds, n);
+        if (want_exit)
             break;
-
-        if (strcmp(args[0], "help") == 0) {
-            printf("sh: cd <dir>  pwd  exit  help  <program> [args...]\n");
-            continue;
-        }
-
-        if (strcmp(args[0], "pwd") == 0) {
-            /* No getcwd() in this kernel: prove chdir() worked by
-               listing the current directory instead. */
-            printf("sh: cwd listing follows\n");
-            args[0] = "ls";
-            run_program(args);
-            continue;
-        }
-
-        if (strcmp(args[0], "cd") == 0) {
-            if (args[1] == NULL) {
-                printf("sh: usage: cd <dir>\n");
-                continue;
-            }
-            if (chdir(args[1]) < 0)
-                printf("sh: cd: %s: no such directory\n", args[1]);
-            continue;
-        }
-
-        n = run_program(args);
-        if (n != 0)
-            printf("sh: %s exited with %d\n", args[0], n);
+        if (status != 0)
+            printf("sh: %s exited with %d\n", cmds[n - 1].argv[0], status);
     }
 
-    return 0;
+    return exit_code;
 }

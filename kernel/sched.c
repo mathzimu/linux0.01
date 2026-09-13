@@ -59,6 +59,12 @@ void sched_init(void)
        via fork, everyone else) starts with pwd = root. */
     init_task.pwd = iget(0x301, 1);
 
+    /* fds 0/1/2 are the console for every task (see drivers/tty_io.c).
+       They are ordinary descriptor-table entries, which is what lets a
+       shell dup2() a file onto stdout and get real redirection. */
+    init_task.filp[0] = init_task.filp[1] = init_task.filp[2] = &tty_file;
+    tty_file.f_count = 1;
+
     init_task.tss.ss0 = KERNEL_DS;
     init_task.tss.esp0 = (unsigned long)&_end + 0x1000;
     /* CRITICAL: the CPU loads CR3 from tss.cr3 on every task switch.
