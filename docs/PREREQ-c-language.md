@@ -300,7 +300,9 @@ do { \
 } while(0)
 ```
 
-**注意：** 本仓库 **没有** `move_to_user_mode()`。`main()` 直接调用 `shell_main()`，Shell 在内核态运行。若文档或 HLD 提到该宏，那是设计目标而非当前实现。
+**注意：** 本仓库 **没有** `move_to_user_mode()`。内核态 Shell 由 `main()` 直接调用 `shell_main()`；
+用户态则由 `execve`/`run_user_program` iret 进 Ring3（`exec /bin/sh` 起就是一个真正的 Ring3 shell）。
+若文档或 HLD 提到 `move_to_user_mode` 宏，那是设计目标而非当前实现。
 
 ### 4.3 连接器符号宏
 

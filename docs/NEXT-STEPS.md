@@ -13,8 +13,8 @@
 所以既不会缺页也不会报错）：
 
 1. `NR_BUFFERS = 512` → 缓冲区缓存位于 `~0x370000..0x3F2000`，
-   **压在用户堆 `[0x310000,0x3FE000)` 上**：用户 `malloc` 的字节与文件系统块缓冲是同一批物理页
-2. fork 的子进程用户栈锚点 `0x3E0000` **同样落在缓存区里**：
+   **压在用户堆 `[0x310000,0x3FE000)` 上**（M3 前布局）：用户 `malloc` 的字节与文件系统块缓冲是同一批物理页
+2. fork 的子进程用户栈锚点 `0x3E0000` **同样落在缓存区里**（M3 前布局）：
    Ring3 fork 会把用户栈副本直接写穿文件系统缓存
 
 **已完成**：
@@ -22,13 +22,14 @@
 - `include/memlayout.h`：内存地图唯一权威（内核 + 用户态共用）；
   `include/linux/memmap.h`：内核侧边界 + `STATIC_ASSERT`；
   `include/memlayout.inc`：汇编侧镜像（`-Iinclude` 后 `.include "memlayout.inc"`）
-- 用户区窗口重排：程序 `[0x200000,0x300000)` / 堆 `[0x310000,0x340000)` /
+- 用户区窗口重排（M3 前布局，M3 已整体废弃）：程序 `[0x200000,0x300000)` / 堆 `[0x310000,0x340000)` /
   fork 子进程栈 `(0x300000,0x340000]` / 缓冲区缓存 `[0x3BC000,0x400000)`（256 × 1KB）
 - `NR_BUFFERS` **由内存地图派生**（`include/linux/fs.h`），不再手工挑选；
   `buffer_init()` 装不下即 `panic`（不再静默重叠）
 - `mm/memcheck.c` + `mem_check()`：启动即校验（内核 `_end` 上限、缓存 vs 堆/栈/子进程栈、
   缓存条数、用户区有序、页分配器上限），不一致 → 打印完整内存地图并 panic
-- `get_free_page()` 加池上限守卫；`lib/malloc.c` 上界从 `memory_end-0x200000` 改为
+- `get_free_page()` 加池上限守卫（M3 已改为「耗尽返回 0」）；`lib/malloc.c` 上界从
+  `memory_end-0x200000`（M3 前的旧上界）改为
   `KERNEL_HEAP_END`（旧上界会伸进页分配器池）
 - `sys_execve()` 校验 ELF 入口与 LOAD 段必须落在用户程序镜像内（越界不再静默写内核区）
 - fork 的用户栈副本改到专属区并加上限检查（放不下 → fork 返回 -1，不再覆盖相邻区域）
@@ -40,6 +41,7 @@
 **M1 遗留（归入 M3）**：fork 仍是**代码段/堆共享 + 用户栈真实复制**，
 不是 POSIX 语义（子进程写堆父进程可见、并发 fork 的子进程栈会互相覆盖）。
 M1 只是把它限制在可检测/可控范围内，真正的修复是 M3 的 COW + 独立地址空间。
+→ **M3 已关闭**：见下文 M3 小节，回归场景 16 `cow` 验证「子进程的写对父进程不可见」。
 
 ## M2 — 用户态能力补齐 ✅ 已完成（M2-2 有一处架构性遗留，转 M3）
 
@@ -51,7 +53,7 @@ M1 只是把它限制在可检测/可控范围内，真正的修复是 M3 的 CO
 
 **M2-2 的架构性遗留（M3 的入口）**：`execve` 把 ELF 段按 vaddr 直接写进**恒等映射的物理页**。
 内核态 shell `exec /bin/x` 没事（父进程是内核），但用户态 shell fork 出子进程后让子进程
-execve，子进程就会把新镜像写进 0x200000 —— 那正是父 shell 正在执行的代码页。
+execve，子进程就会把新镜像写进 0x200000（M3 前的固定物理地址）—— 那正是父 shell 正在执行的代码页。
 现象：父 shell 恢复执行时 EIP 落在指令中间、CPL=3 空转（QEMU `info registers` 可见），
 串口输出恰好断在子程序最后一行。这不是 sh 的 bug，而是 M1 遗留（代码段/堆父子共享）
 在用户态的第一处硬伤：**只有每进程独立地址空间才能修**。
@@ -155,16 +157,18 @@ Ring3 用户态 + 编程工具链（`make prog NAME=xxx` → `exec /xxx`）、�
   放宽到 23，否则新 syscall 一律返回 -1
 
 ### 5. ~~内存隔离（内核，大工程）~~ ✅ 完成（`795364a`）
+> **⚠️ M3 已被取代**：下面这套「单页表 + `grant_user_pages` 改 U/S 位」的做法在 M3 整体删除，
+> 现在是「内核恒等映射全 0x03 + 每进程私有页表里的 PTE=0x07」。保留这段是因为其中的
+> PTE 标志教训（0x06 缺 P 位）和越权处理的行为仍然成立。
 - 页表 0 全部 PTE 由 0x07 改 **0x03（P+RW，无 U/S）** —— 0-4MB 默认内核专属
   （⚠️ 教训：0x06=0b110 没有 P 位，会整页 not-present，曾致启动即崩；
    内核页标志是 0x03，不是 0x06）
-- `grant_user_pages(from,size)`（mm/memory.c）：按页把 PTE 置 U/S 位
+- `grant_user_pages(from,size)`（mm/memory.c，M3 已删除）：按页把 PTE 置 U/S 位
   （|= 4 → 0x07），并重载 CR3 刷 TLB
-- 授权区域：启动时（main.c）堆+栈 [0x310000, 0x400000)；execve 时按
+- 授权区域（M3 前）：启动时（main.c）堆+栈 [0x310000, 0x400000)；execve 时按
   ELF 段尾授权程序区 [0x200000, max_end)；run_user_program 同
 - **效果**：Ring3 只能访问程序/堆/栈页；内核页（含 buffer cache、
-  任务页、页表）用户不可访问；越权访问 → page fault → do_no_page
-  panic（教学行为：非法访问即崩溃）
+  任务页、页表）用户不可访问；越权访问 → page fault → 终止肇事进程
 - 验证：`user/bad.c` 读 0x0 → `PAGE FAULT` → 肇事进程 SIGSEGV 终止（exit 139），
   内核继续运行（不再 panic）；hello/printf/ls/catfile/memtest/sigchld + 内建命令全回归
 
@@ -193,11 +197,15 @@ make prog NAME=xxx        # 编译 user/xxx.c 并注入
 make Image                # 引导镜像
 
 # 运行/验证
-qemu-system-i386 -fda Image -hda minix.img -m 4M -boot a
+qemu-system-i386 -fda Image -hda minix.img -m 16M -boot a
 python3 scripts/qemu-test.py --image Image --hda minix.img --keys $'cmd\n'
-make test                   # 一键回归（scripts/regress.sh，8 个核心场景断言）
+make test                   # 一键回归（scripts/regress.sh，18 个场景断言）
+make check                  # 静态校验：内存地图 + 文档一致性 + lint 反向自测
+make check-layout           # 只校验内存地图（含 _end 未越界）
+make check-docs             # 只校验文档里引用的布局常量/场景数与源码一致
+make check-docs-selftest    # 反向测试 check-docs（8 个坏样本必须被拦下）
 # 注意：QEMU writeback 会把测试中的脏块刷进 minix.img —— 测试前 rm -f minix.img && make minix.img
-#       （make test 每个场景自动重建干净盘）
+#       （make test 每个场景自动重建干净盘；定时回写已实现，场景 15 专门验证它）
 
 # 用户程序写法
 # user/xxx.c: #include "lib.h"; int main(int argc, char *argv[]) {...}
@@ -234,6 +242,7 @@ make test                   # 一键回归（scripts/regress.sh，8 个核心场
 | `include/memlayout.inc` | 汇编侧 `.equ` 镜像（与上面同步校验） |
 | `mm/memcheck.c` | `mem_check()`：启动自检，不一致即 panic + 地图 dump |
 | `scripts/check-layout.py` | 无编译器的静态地图校验（`make check-layout`） |
+| `scripts/check-docs.py` | 文档 vs 内存地图一致性校验（`make check-docs`）；`scripts/check-docs-selftest.sh` 反向测试它 |
 | `kernel/sys.c` | 系统调用实现（含 sys_execve） |
 | `kernel/process.c` | fork/waitpid/exit/do_signal |
 | `boot/head.s` | system_call 入口（syscall_cpl 检测）、sys_call_table、setup_paging（4 张内核页表恒等映射 0–16MB） |
@@ -265,7 +274,7 @@ make test                   # 一键回归（scripts/regress.sh，8 个核心场
   0x06=0b110 **没有 P 位**（曾致 0-4MB 全 not-present、启动即崩）；授权用户页
   用 `|= 4`（0x03→0x07）
 - **缓冲区缓存压在用户堆上**（M1）：`NR_BUFFERS=512` 时缓存 `[0x370000,0x3F2000)` 与
-  用户堆 `[0x310000,0x3FE000)` 重叠；Ring0 无视 PTE 的 U/S 位 → 用户 malloc 的字节
+  用户堆 `[0x310000,0x3FE000)`（M3 前布局）重叠；Ring0 无视 PTE 的 U/S 位 → 用户 malloc 的字节
   就是文件系统块缓冲，**写坏文件系统而毫无提示**。修复：缓存条数由内存地图派生 +
   静态断言 + `mem_check()` 启动自检 + `bigalloc` 回归用例
 - **fork 子进程用户栈落进缓存区**（M1）：旧锚点 `0x3E0000` 在缓存范围内，

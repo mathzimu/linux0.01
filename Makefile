@@ -181,7 +181,21 @@ test: Image
 check-layout:
 	python3 scripts/check-layout.py --kernel kernel/system
 
-.PHONY: check-layout
+# Documentation must not describe a memory map the kernel no longer has.
+# check-layout.py guards "code vs layout"; this guards "docs vs layout"
+# (M3 moved the user address space and several tutorial chapters had not
+# caught up).  See scripts/check-docs.py.
+check-docs:
+	python3 scripts/check-docs.py
+
+# Does check-docs actually fail when it should?  Eight probes.
+check-docs-selftest:
+	bash scripts/check-docs-selftest.sh
+
+# Everything that can be checked without booting QEMU.
+check: check-layout check-docs check-docs-selftest
+
+.PHONY: check check-layout check-docs check-docs-selftest
 
 tools/mkminix: tools/mkminix.c
 	$(HOST_CC) -O2 -Wall -o $@ $<

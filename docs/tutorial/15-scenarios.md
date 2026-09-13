@@ -15,11 +15,11 @@ setup.s
   far jmp 0x08:0x10800
 head.s startup_32
   段寄存器，栈=_end+0x1000
-  页目录+页表0（0–4MB），CR0.PG
+  页目录+4 张内核页表（恒等映射 0–16MB），CR0.PG
   IDT/GDT，call main
 main.c
-  mem_init → buffer_init → tty_init → sys_setup
-  sched_init（PIT+task0）→ sti → shell_main
+  mem_init → buffer_init → mem_check → tty_init → sys_setup
+  sched_init（PIT + task0 + 回写任务）→ sti → shell_main
 shell
   printk 欢迎语 → "$ "
 ```

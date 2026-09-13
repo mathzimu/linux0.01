@@ -43,11 +43,14 @@ while(1):
 
 ## 3. 用户态编程工具链（`user/`）
 
-- `make prog NAME=xxx`：编译 `user/xxx.c`（链接 0x200000）→ `user/xxx.elf` → `tools/mkminix` 注入 MINIX 镜像
-- 用户库 `user/lib.h/.c`：`printf`（宽度/精度/long）、`malloc/free`（0x310000–0x3FE000 bump+freelist）、
+- `make prog NAME=xxx`：编译 `user/xxx.c`（链接 `USER_PROG_START` = **0x08000000**）→ `user/xxx.elf` → `tools/mkminix` 注入 MINIX 镜像 `/bin/`
+- 用户库 `user/lib.h/.c`：`printf`（宽度/精度/long）、`malloc/free`（**0x08100000–0x08200000** bump+freelist，页由内核按需分配）、
   `opendir/readdir`、字符串/ctype/atoi/strtol；syscall 包装在 `include/unistd.h`
-- 示例：hello（argv）、catfile（读文件）、memtest（堆复用）、printf、ls、str、sigchld、pipedemo、sysdemo
-- crt.s：从 0x3FF004/0x3FF008 读 argc/argv，设 esp=0x3FF000，call main，`int 0x80` exit
+- 示例：hello（argv）、catfile、memtest、printf、ls、str、sigchld、pipedemo、sysdemo、
+  sigdemo（自定义信号处理器）、cowtest（COW）、demandtest（按需调页）、oomtest（内存耗尽）、sh（Ring3 shell）
+- crt.s：从 `USER_ARGC_ADDR`(0x083FF004)/`USER_ARGV_PTR_ADDR`(0x083FF008) 读 argc/argv，
+  设 esp=`USER_STACK_TOP`(0x083FF000)，call main，`int 0x80` exit
+- Ring3 shell：`exec /bin/sh` —— 内建 cd/pwd/exit/help，其余按 `/bin/<name>` fork+execve+waitpid
 
 ## 4. `lib/string.c`（内核侧）
 
@@ -63,8 +66,8 @@ while(1):
 
 ## 6. 内核 `lib/malloc.c`
 
-- bump：从 `_end+0x40000` 向上  
-- 上界约 `memory_end-0x200000`  
+- bump：从 `KERNEL_HEAP_START`(0x2B000) 向上
+- 上界 `KERNEL_HEAP_END`(0x2D000)（旧上界写成 `memory_end-0x200000`，会伸进页分配器池）
 - **无 free**；与页分配器独立（用户态 malloc 在 `user/lib.c`，带 free）
 
 ## 6. `lib/close.c`

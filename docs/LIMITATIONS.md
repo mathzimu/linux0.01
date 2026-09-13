@@ -73,7 +73,7 @@
 | macOS | Homebrew `i686-elf-gcc` + `i686-elf-binutils` 直接构建（Makefile 自动检测），或 Docker |
 | 运行 | QEMU `-fda Image` 或 `-cdrom kernel.iso`，内存 **16M**（内核页表恒等映射 16MB）；MINIX 测试盘 `make minix.img` + `-hda minix.img` |
 | 自动化 | `scripts/qemu-test.py` 无头驱动（串口文本 + sendkey；`--min-wait` 让需要观察周期性事件的用例不会被“输出静止”提前收尾），`scripts/regress.sh` **18 个场景**（`make test`），`scripts/ppm2png.py` 转截图 |
-| 静态校验（无需编译器） | `make check-layout` → `python3 scripts/check-layout.py`：内存地图有序/不重叠、用户区必须整体落在一个页目录项内、`memlayout.inc` 与 `memlayout.h` 一致、缓存装得进窗口、**用户区地址没有被硬编码到布局头之外**，已构建 `kernel/system` 时还校验链接期 `_end` 未越界 |
+| 静态校验（无需编译器） | `make check` = `check-layout` + `check-docs` + `check-docs-selftest`。`scripts/check-layout.py`：内存地图有序/不重叠、用户区必须整体落在一个页目录项内、`memlayout.inc` 与 `memlayout.h` 一致、缓存装得进窗口、**用户区地址没有被硬编码到布局头之外**，已构建 `kernel/system` 时还校验链接期 `_end` 未越界。`scripts/check-docs.py`：文档里的旧地址/旧宏必须带历史标注、`0x08xxxxxx` 必须是布局常量、场景数必须等于 `regress.sh` 实际条数、`-m` 参数必须与测试驱动一致 |
 
 ## 7. 与文档/设计稿的关系
 

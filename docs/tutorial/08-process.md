@@ -72,7 +72,7 @@ memcpy(child_sp, parent_sp, size)
 ```c
 p->tss.esp0 = (long)p + PAGE_SIZE;
 p->tss.ss0  = KERNEL_DS;
-p->tss.cr3  = read_cr3();      // 共享页表
+p->tss.cr3  = p->pg_dir ? p->pg_dir : kernel_pg_dir;   // M3: 自己的页目录
 p->tss.eflags = 0x202;         // IF=1
 // cs/ss/ds/... = KERNEL_*     // 本实现子进程从内核路径 resume
 tss_entry = 8 + nr*2;
@@ -80,6 +80,11 @@ ldt_entry = tss_entry + 1;
 set_tss_desc / set_ldt_desc
 p->tss.ldt = ldt_entry * 8;
 ```
+
+> **M3 起 `tss.cr3` 不再是 `read_cr3()`**：Ring3 的 fork 会先 `alloc_user_pgdir()` 建一份新页目录，
+> 再用 `copy_page_tables()` 把父进程的用户页挂成共享只读（写时复制）。硬件任务切换会从 TSS
+> 装载 CR3，所以子进程从第一次被调度起就运行在自己的地址空间里。内核任务（init、回写任务）
+> 的 `pg_dir = 0`，因此继续用 `kernel_pg_dir`。
 
 ## 3. `sys_exit`
 

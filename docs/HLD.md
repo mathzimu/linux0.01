@@ -53,16 +53,17 @@
 0x100000 ├──────────────────────┤  ← 1MB: Page Directory
          │   Page Directory     │ 4KB
 0x101000 ├──────────────────────┤
-         │   0-4MB Page Table   │ 4KB（仅 PDE[0]，恒等映射 0–4MB）
-0x102000 ├──────────────────────┤
-         │   Kernel Heap/Data   │
-         │                      │
-         │   Buffer Cache       │ 512KB（512 × 1KB）
-         │                      │
-         │   Process Data       │
-         │                      │
-0x400000 └──────────────────────┘  ← 4MB 上限（memory_end 截断）
+         │   4 Kernel Page Tbls │ 16KB（PDE[0..3]，恒等映射 0–16MB，全 0x03）
+0x105000 ├──────────────────────┤
+         │   Page Pool          │ 任务页 / 管道页 / **全部用户页**（16MB 下约 3700 页）
+         │   Buffer Cache       │ [0x3ADC00,0x3F0000)（256 × 1KB + 头）
+         │   mem_map            │ RAM 末尾几 KB
+0x400000 └──────────────────────┘
+         … 4MB 以上到 16MB 同样恒等映射、同样可分配
 ```
+
+> **M3**：用户内存不再有固定的物理地址。每个进程在自己的页目录里有一个 4MB 虚拟窗口
+> （PDE[32] = `0x08000000`–`0x08400000`），页由帧分配器按需提供、写时复制共享。
 
 ### 1.3 段描述符布局 (GDT)
 
@@ -223,7 +224,7 @@ Power On
   │   └── Switch to protected mode (set CR0.PE)
   │
   ├── Jump to head.s (0x10800)
-  │   ├── Set up page directory + page tables (identity map 0-4MB; see LIMITATIONS.md)
+  │   ├── Set up page directory + 4 kernel page tables (identity map 0-16MB)
   │   ├── Enable paging (set CR0.PG)
   │   ├── Set up IDT (256 interrupt gates)
   │   ├── Initialize kernel segments (CS=0x08, DS=0x10)
@@ -467,7 +468,7 @@ sys_call_table[NR_syscalls] = {
 
 ## 6. 成功验证标准
 
-1. **QEMU可引导**: `qemu-system-i386 -fda Image -m 4M -boot a` 成功启动
+1. **QEMU可引导**: `qemu-system-i386 -fda Image -m 16M -boot a` 成功启动
 2. **Shell提示符**: 显示 `$ ` 或 `> ` 等待输入
 3. **命令执行**: `echo hello` 输出 hello
 4. **进程列表**: `ps` 列出至少2个进程

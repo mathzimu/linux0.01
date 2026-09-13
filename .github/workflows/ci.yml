@@ -26,6 +26,14 @@ jobs:
         # cache that no longer fits *before* spending time on a build.
         run: python3 scripts/check-layout.py
 
+      - name: Check the docs against the memory map
+        # The docs are this repository's product: a tutorial chapter that
+        # still teaches the pre-M3 layout is a bug.  Also self-tests the
+        # checker itself (it must fail on the eight known-bad probes).
+        run: |
+          python3 scripts/check-docs.py
+          bash scripts/check-docs-selftest.sh
+
       - name: Build the kernel
         run: |
           make clean

@@ -6,7 +6,7 @@
 ### 阅读前
 
 1. 四份前置：`PREREQ-x86-asm.md` → `PREREQ-c-language.md` → `PREREQ-computer-arch.md` → `PREREQ-os-theory.md`
-2. 先读 [LIMITATIONS.md](LIMITATIONS.md)（Shell 在内核态、仅映射 0–4MB 等）
+2. 先读 [LIMITATIONS.md](LIMITATIONS.md)（两个 Shell、每进程独立地址空间、恒等映射 0–16MB 等）
 3. 本文 §1–§6 为引导与 main 详解；§7 起见 `docs/tutorial/`
 
 ---
@@ -63,7 +63,7 @@
   │    【head.s 执行】 (~0.1ms)
   │    ├─ 重设段寄存器为内核选择子
   │    ├─ 设置内核栈
-  │    ├─ 设置页目录和页表 (恒等映射 0-4MB)
+  │    ├─ 设置页目录和 4 张内核页表 (恒等映射 0-16MB)
   │    ├─ 启用分页 (CR0.PG=1)
   │    ├─ 设置 IDT (256 个中断门)
   │    ├─ 设置完整 GDT (137 个条目)
@@ -801,9 +801,14 @@ _idle:
 **为什么使用 CALL 而不是 JMP？**
 CALL 将返回地址压栈，main() 可以通过 RET 返回。但实际上 main() 不应该返回——如果返回了，CPU 进入 _idle 死循环。
 
-### 第 50-73 行：setup_paging — 分页设置
+### 第 63-104 行：setup_paging — 分页设置
 
 这是 head.s 中最重要的函数，建立内核的页表。
+
+> **M3 起这里的模型变了**：不再是「一个 PDE + 一张页表 + 用户页改 PTE 的 U/S 位」，
+> 而是 **4 张内核页表（PDE[0..3]，恒等映射 0–16MB，全部 0x03 supervisor-only）**，
+> 用户页由 `alloc_user_page()` 建在**每个进程自己页目录的 PDE[32]** 指向的页表里。
+> 下面按当前源码走一遍，旧实现（M3 前）的差异在核对框里标出。
 
 ```as
 setup_paging:
@@ -811,7 +816,7 @@ setup_paging:
     mov %eax, %cr3              # 设置 CR3 (页目录基址)
 ```
 
-**第 54-57 行：清空页目录和页表区域**
+**清空页目录**
 
 ```as
     mov $PGDIR, %edi            # EDI = 0x100000
@@ -820,44 +825,49 @@ setup_paging:
     rep stosl                   # 重复 STOSL 4096 次
 ```
 
-清空的区域：0x100000-0x103FFF。这里包括页目录（0x100000-0x100FFF）和 4 个页表（0x101000-0x104FFF 但只清空到 0x103FFF，4KB×4096=16KB）。
+清空的区域：0x100000-0x103FFF（页目录 4KB + 前 3 张页表；第 4 张在下一步填 PDE 时一并覆盖）。
+**M3 前**：这里同样清 16KB，但只用 PDE[0]，其余 12KB 是浪费的余量。
 
-**第 59-61 行：设置页目录条目**
+**设置页目录条目（4 个 PDE）**
 
 ```as
     mov $PGDIR, %edi            # EDI = 0x100000 (页目录)
-    lea (PGTBL0 + 0x07), %eax   # EAX = 0x101007
-    stosl                       # PDE[0] = 0x101007
+    lea (PGTBL0 + 0x03), %eax   # EAX = 0x101003
+    mov $KERNEL_PT_COUNT, %ecx  # ECX = 4
+1:  stosl                       # PDE[i] = 页表 i 的物理地址 | 0x03
+    add $0x1000, %eax           # 下一张页表
+    loop 1b
 ```
 
-**PDE[0] = 0x101007 的含义：**
+**PDE[0] = 0x101003 的含义：**
 - 0x101000 (Bit 31-12) = 页表 0 的物理地址
-- 0x007 (Bit 11-0) = 0111:
+- 0x003 (Bit 11-0) = 0011:
   - Bit 0 (P) = 1: 存在
   - Bit 1 (R/W) = 1: 可读写
-  - Bit 2 (U/S) = 1: 用户可访问——**PDE 保留 U/S 位，由每个 PTE 单独决定该页是否对 Ring3 开放**（内存隔离的控制点在 PTE）
+  - Bit 2 (U/S) = **0: 仅 Ring0**——内核恒等映射对 Ring3 完全不可见，这是内存隔离的**第一层**
+  - （M3 前写的是 0x101007：PDE 带 U/S，靠逐页改 PTE 的 U/S 位来授权用户页；现在内核 PDE 一律 0x03，用户访问权完全由进程私有页表里的 PTE=0x07 决定）
 
-**注意**：这里只设置了一个 PDE！只映射了 PDE[0]，覆盖 0-4MB 的地址空间。这就是为什么如果系统有超过 4MB 的 RAM，main.c 中的 `if (memory_end > 0x400000) memory_end = 0x400000` 会截断内存。
-
-**第 63-68 行：填充页表 0 的条目**
+**填充 4 张页表（4096 个 PTE，覆盖 0–16MB）**
 
 ```as
     mov $PGTBL0, %edi           # EDI = 0x101000 (页表 0)
     lea 0x03, %eax              # EAX = 0x000003 (第一个 PTE: P+RW, 无 U/S)
-    mov $0x400, %ecx            # ECX = 1024 (填充 1024 个 PTE)
+    mov $(KERNEL_PT_COUNT * 0x400), %ecx   # ECX = 4096 个 PTE
 1:  stosl                       # PTE = EAX, EDI += 4
     add $0x1000, %eax           # EAX += 4096 (下一个物理页)
-    loop 1b                     # 循环 1024 次
+    loop 1b                     # 循环 4096 次，恰好填满 0x101000-0x104FFF
 ```
 
 **填充意义（内存隔离）：**
 - PTE[0] = 0x000003 → 线性地址 0x000000 映射到物理页 0x000000（**0x03 = P+RW，无 U/S → 内核专属**）
 - PTE[1] = 0x001003 → 线性地址 0x001000 映射到物理页 0x001000
-- PTE[1023] = 0x3FF003 → 线性地址 0x3FF000 映射到物理页 0x3FF000
-- **默认全 0x03：内核恒等映射全部只有 Ring0 能访问**。原实现里用户程序/堆/栈页在启动（`grant_user_pages` 授权堆+栈 0x310000-0x400000）和 `execve`（授权程序区 0x200000 起）时把对应 PTE 置为 0x07（P+RW+U/S）；Ring3 访问未授权页 → page fault → `do_no_page` panic。
-- **M3 更新**：`setup_paging` 现在填 **4 张**内核页表（PDE[0..3]，恒等映射 0–16MB，仍全 0x03）；用户页不再改这些 PTE，而是由 `alloc_user_page()` 建在**每个进程自己的页目录**的 PDE[32] 指向的页表里（PTE=0x07）；`grant_user_pages` 已删除。越权访问仍然 page fault，但现在只杀肇事进程（按需调页/COW 也在同一个处理函数里）。
+- PTE[4095] = 0xFFF003 → 线性地址 0xFFF000 映射到物理页 0xFFF000（16MB 的最后一张页表末项）
+- **两层隔离**：① 内核恒等映射的 PDE/PTE 全是 0x03，Ring3 看不到内核和缓冲区缓存；
+  ② 用户页只存在于进程私有页目录的 PDE[32]（`0x08000000`–`0x08400000`），PTE=0x07。
+  Ring3 越权访问 → page fault → `do_no_page` **只杀肇事进程**（SIGSEGV，exit 139），内核继续运行。
+- **M3 前**：只有 PDE[0]/PTE 0x03，用户程序/堆/栈页靠 `grant_user_pages()` 把同一张页表的 PTE 改成 0x07 来授权；该函数已删除。
 
-**恒等映射**：所有线性地址等于物理地址。
+**恒等映射**：所有线性地址等于物理地址（内核侧）。
 
 **第 70-73 行：启用分页**
 
@@ -1338,7 +1348,7 @@ extern int sys_setup(void);     // 文件系统挂载 (fs/minix.c)
 
 ```c
     if (ext_kb == 0)
-        memory_end = 0x400000;  // 4MB 默认
+        memory_end = PHYS_MEM_TOP;   // INT 15h 没给值：按恒等映射上限算
     else
         memory_end = (1 << 20) + ((unsigned long)ext_kb << 10);
 ```
@@ -1350,38 +1360,44 @@ extern int sys_setup(void);     // 文件系统挂载 (fs/minix.c)
 - `memory_end` = 1MB + 扩展内存 = 总物理内存
 
 ```c
-    if (memory_end > 0x400000)
-        memory_end = 0x400000;   // 只映射了前 4MB
-    memory_end &= 0xFFFFF000;    // 对齐到页边界
-    if (memory_end < 0x300000)
-        memory_end = 0x400000;   // 最少 4MB
+    if (memory_end > KERNEL_IDENTITY_TOP)
+        memory_end = KERNEL_IDENTITY_TOP;   // 内核页表只映射了 16MB
+    memory_end &= 0xFFFFF000;               // 对齐到页边界
+    if (memory_end < MEMORY_END_MINIMUM)
+        memory_end = MEMORY_END_MINIMUM;    // 少于 4MB 装不下缓冲区缓存
 ```
 
-**为什么限制 4MB？** head.s 中只设置了一个页目录条目（PDE[0]），映射了 0-4MB 的地址空间。超过 4MB 的物理内存无法访问。
+**为什么是 16MB？** head.s 中 `KERNEL_PT_COUNT = 4` 个页目录条目（PDE[0..3]），每张页表覆盖 4MB，
+所以内核恒等映射 0–16MB；超过 16MB 的物理内存无法访问。QEMU 因此统一用 `-m 16M`。
+**M3 前**：只有一个 PDE[0]，上限 4MB，`memory_end` 会被截断到 0x400000。
 
-**第 32-33 行：计算内核内存区域**
+**第 41-44 行：计算内核内存区域**
 
 ```c
-    memory_start = (unsigned long) &_end;
-    memory_start += 0x1000;     // 内核映像结束 + 1 页（留给栈）
+    phys_mem_start = (unsigned long) &_end;
+    phys_mem_start += 0x1000;     // 内核映像结束 + 1 页（留给栈）
 ```
 
-**第 35-47 行：子系统初始化**
+**第 44-55 行：子系统初始化**
 
 ```c
-    mem_init(memory_start, memory_end);     // ① 内存管理器
-    buffer_init(memory_end - 0x100000);     // ② 缓冲区缓存
+    mem_init(phys_mem_start, phys_mem_end);  // ① 内存管理器（页帧池）
+    buffer_init((long)BUFFER_CACHE_TOP);     // ② 缓冲区缓存，锚在缓存窗口顶端
+    mem_check();                             // ③ 内存地图自检，不一致就 panic
 
-    tty_init();                             // ③ TTY (终端)
+    tty_init();                              // ④ TTY (终端)
 
-    if (sys_setup() < 0)                    // ④ 文件系统
+    if (sys_setup() < 0)                     // ⑤ 文件系统
         printk("Warning: no root filesystem found\n");
 
-    sched_init();                           // ⑤ 调度器
+    sched_init();                            // ⑥ 调度器（含回写任务）
 
-    sti();                                  // ⑥ 开中断
-    shell_main();                           // ⑦ 启动 Shell（内核态，不返回）
+    sti();                                   // ⑦ 开中断
+    shell_main();                            // ⑧ 启动内核态 Shell（不返回）
 ```
+
+> **两处与旧版不同**：`buffer_init` 的参数是**缓存结束地址**（旧代码传 `memory_end - 0x100000`，
+> 那让缓存落在用户程序镜像区里）；M1 起还多了一层 `mem_check()` 启动自检。
 
 **重要：** 这里**没有** `move_to_user_mode()` / `fork()`。Shell 与内核共享 Ring 0。系统调用入口（`int 0x80`）已实现，但 Shell 多数路径直接调用 `printk` / `schedule` / `sys_exit`；用户程序则经 `execve`/`run_user_program` iret 切到 **Ring3** 运行（见 09-syscalls / 13-shell-lib）。
 

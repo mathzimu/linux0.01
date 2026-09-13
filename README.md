@@ -42,7 +42,7 @@
 ```bash
 sudo apt install -y build-essential gcc-multilib qemu-system-x86 xorriso
 make && make iso
-qemu-system-i386 -cdrom kernel.iso -m 4M -boot d
+qemu-system-i386 -cdrom kernel.iso -m 16M -boot d
 ```
 
 ### macOS（Homebrew）
@@ -50,7 +50,7 @@ qemu-system-i386 -cdrom kernel.iso -m 4M -boot d
 ```bash
 brew install qemu xorriso i686-elf-gcc i686-elf-binutils
 make            # Makefile 自动检测 i686-elf-* 交叉工具链
-qemu-system-i386 -fda Image -m 4M -boot a
+qemu-system-i386 -fda Image -m 16M -boot a
 ```
 
 ### Docker（平台无关）
@@ -58,7 +58,7 @@ qemu-system-i386 -fda Image -m 4M -boot a
 ```bash
 docker build -t linux-0.01-builder .
 docker run --rm -v $(pwd):/kernel -w /kernel linux-0.01-builder make clean all iso
-qemu-system-i386 -cdrom kernel.iso -m 4M -boot d
+qemu-system-i386 -cdrom kernel.iso -m 16M -boot d
 ```
 
 ### 构建产物
@@ -339,12 +339,21 @@ exec: child 1 exit_code=7
 make test                    # 等价于 scripts/regress.sh
 ```
 
-**静态内存地图校验**（纯 Python，不需要编译器，CI 里在构建之前先跑）：
+**静态校验**（纯 Python，不需要编译器，CI 里在构建之前先跑）：
 
 ```bash
+make check                   # 下面三件的合集
 make check-layout            # 区域重叠/硬编码地址/缓存装不下 → 非零退出
 python3 scripts/check-layout.py --kernel kernel/system   # 另校验链接期 _end
+make check-docs              # 文档里引用的布局常量/场景数/QEMU 内存与源码一致
+make check-docs-selftest     # 反向测试：8 个已知坏样本必须被 check-docs 拦下
 ```
+
+> `check-docs` 存在的原因：M3 把用户地址空间从固定物理地址搬到每进程窗口后，代码全改了、
+> 几章教程没改——在**教学仓库**里，教一个内核已经没有的内存模型是最严重的文档 bug。
+> 规则很简单：旧地址/旧宏只允许出现在**带历史标注**（`M3 前`、`历史`、`原实现`…）的行里，
+> 文档里出现的 `0x08xxxxxx` 必须是 `include/memlayout.h` 里的常量，场景数必须等于
+> `scripts/regress.sh` 实际跑的条数。
 
 手动无头验证（串口捕获 + sendkey 注入，输出精确文本到 stdout）：
 
