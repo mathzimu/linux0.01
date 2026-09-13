@@ -1155,6 +1155,7 @@ int sys_execve(const char *filename, char **argv, char **envp)
     unsigned long max_end = 0;         /* end of the program image */
     unsigned long new_pgdir = 0, old_pgdir;
     unsigned long tail_pa;
+    struct m_inode *exe_inode = NULL;
     char argv_buf[16][64];
     unsigned long argv_ptr[16];
     int fd, argc = 0, i;
@@ -1211,8 +1212,12 @@ int sys_execve(const char *filename, char **argv, char **envp)
         goto fail;
     }
 
+    /* Fresh region table for the new image (the old one describes the
+       image we are replacing). */
+    current->nr_exe_regions = 0;
+
     for (i = 0; i < phnum && i < 16; i++) {
-        unsigned long p_type, p_offset, p_vaddr, p_filesz, p_memsz;
+        unsigned long p_type, p_offset, p_vaddr, p_filesz, p_memsz, p_flags;
 
         if (sys_lseek(fd, (long)(phoff + i * phentsize), 0) < 0)
             goto fail_as;
@@ -1226,6 +1231,7 @@ int sys_execve(const char *filename, char **argv, char **envp)
         p_vaddr = rd32(ph + 8);
         p_filesz = rd32(ph + 16);
         p_memsz = rd32(ph + 20);
+        p_flags = rd32(ph + 24);
 
         /* Nothing to load (ld emits a zero-length PT_LOAD for the header
            page); it would otherwise trip the bounds check below. */
@@ -1265,49 +1271,38 @@ int sys_execve(const char *filename, char **argv, char **envp)
             goto fail_as;
         }
 
-        /* One frame per page the segment covers: the file's bytes are
-           read into it, the rest of the page stays zero (that is the
-           BSS).  Pages the file does not cover at all — a segment whose
-           memsz runs past filesz over one or more whole pages — are
-           mapped now but left zero without being read; a process that
-           wants them demands them in on first touch (do_no_page). */
-        {
-            unsigned long va, seg_end = p_vaddr + p_memsz;
-            unsigned long file_end = p_vaddr + p_filesz;
+        /* B3: record where this segment's bytes live instead of copying
+           them.  The pages are created on first fault and filled from
+           the file (see page_in_image() in mm/memory.c), which is what
+           makes an image page evictable: the file is its backing store,
+           so no swap area is needed to reclaim program text. */
+        if (current->nr_exe_regions < NR_EXE_REGIONS && p_memsz) {
+            struct exe_region *r =
+                &current->exe_regions[current->nr_exe_regions];
+            unsigned long page = p_vaddr & ~(PAGE_SIZE - 1);
+            unsigned long back = p_vaddr - page;
 
-            for (va = p_vaddr & ~(PAGE_SIZE - 1); va < seg_end;
-                 va += PAGE_SIZE) {
-                unsigned long pa, copy_from, copy_len, dst_off;
-                unsigned long page_lo = va;
-                unsigned long page_hi = va + PAGE_SIZE;
-
-                if (page_hi <= p_vaddr || page_lo >= file_end)
-                    continue;                  /* pure BSS page: demand paged */
-
-                pa = alloc_user_page(new_pgdir, va);
-                if (!pa) {
-                    printk("execve: out of memory loading the image\n");
-                    goto fail_as;
-                }
-
-                copy_from = (page_lo > p_vaddr) ? page_lo : p_vaddr;
-                copy_len = (page_hi < file_end) ? (page_hi - copy_from)
-                                                : (file_end - copy_from);
-                dst_off = copy_from & (PAGE_SIZE - 1);
-
-                if (copy_len) {
-                    if (sys_lseek(fd, (long)(p_offset + (copy_from - p_vaddr)),
-                                  0) < 0)
-                        goto fail_as;
-                    if (sys_read(fd, (char *)(pa + dst_off), copy_len) !=
-                        (long)copy_len)
-                        goto fail_as;
-                }
-            }
+            r->va = page;
+            r->file_off = (p_offset >= back) ? (p_offset - back) : 0;
+            r->filesz = p_filesz + back;
+            r->memsz = p_memsz + back;
+            r->flags = p_flags;
+            current->nr_exe_regions++;
+        } else if (p_memsz) {
+            printk("execve: more than %d LOAD segments; the image cannot be "
+                   "paged back in\n", NR_EXE_REGIONS);
+            goto fail_as;
         }
 
         if (p_vaddr + p_memsz > max_end)
             max_end = p_vaddr + p_memsz;
+    }
+
+    /* Hold the executable: it is the backing store for every image page
+       from here on (and iput() it in sys_exit / the next execve). */
+    if (current->filp[fd] && current->filp[fd]->f_inode) {
+        exe_inode = current->filp[fd]->f_inode;
+        exe_inode->i_count++;
     }
     sys_close(fd);
     fd = -1;
@@ -1410,6 +1405,13 @@ int sys_execve(const char *filename, char **argv, char **envp)
     current->brk = USER_HEAP_START;
     current->start_stack = USER_STACK_TOP;
 
+    /* The image we are replacing: drop its file reference (the old
+       pages are freed below) and adopt the new one. */
+    if (current->exe_inode)
+        iput(current->exe_inode);
+    current->exe_inode = exe_inode;
+    exe_inode = NULL;
+
     /* The old image (or, for a freshly exec'd child, the fork()ed copy
        of the parent's) can go now: nothing below uses it any more, and
        the tail/argv writes above went into the NEW space. */
@@ -1440,6 +1442,8 @@ int sys_execve(const char *filename, char **argv, char **envp)
 fail_as:
     if (fd >= 0)
         sys_close(fd);
+    if (exe_inode)
+        iput(exe_inode);            /* never adopted */
     if (new_pgdir)
         free_user_space(new_pgdir);
     return -1;

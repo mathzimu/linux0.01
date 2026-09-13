@@ -55,6 +55,12 @@ int sys_fork(void)
     p->root = current->root;
     if (p->root)
         p->root->i_count++;
+    /* The executable is the backing store for every image page, so the
+       child needs its own reference too (B3).  The region table itself
+       was copied by "*p = *current" and describes the same file. */
+    p->exe_inode = current->exe_inode;
+    if (p->exe_inode)
+        p->exe_inode->i_count++;
 
     /* remember the parent (task[] index) for sys_getppid */
     for (i = 0; i < NR_TASKS; i++)
@@ -226,6 +232,12 @@ int sys_exit(int ret)
     if (current->root) {
         iput(current->root);
         current->root = NULL;
+    }
+    /* and the executable that backed our image pages (B3) */
+    if (current->exe_inode) {
+        iput(current->exe_inode);
+        current->exe_inode = NULL;
+        current->nr_exe_regions = 0;
     }
 
     /* The init task (task[0]) must never leave task[]: with an empty

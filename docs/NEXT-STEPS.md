@@ -162,6 +162,33 @@ existence check (all tasks are uid 0)」。只要系统里只有 uid 0，这个�
 | 一处踩坑 | 第一版把"等数据"写成 `(status & (BSY\|DRQ)) == (BSY\|DRQ)`——**错的**：传输期间驱动器是 BSY=0、DRQ=1（原代码的 `!BSY && DRQ` 才对），结果每次读都超时、开机直接找不到根文件系统。等待原语改成 `(status & mask) == value` 后正常 |
 | 观测 | `memstat` 增加 `mem: N disk interrupts (IRQ14)`，能直接看到中断真的在发生（开机读出超级块 + `ls` + `cat` 之后是 10 次） |
 
+## B3 — 按需调页的另外半截：页回收 ✅ 已完成
+
+**动因**：M3 的按需调页只解决了"什么时候给页"，没解决"页不够时怎么办"——池子一空就只能
+OOM 杀进程。而且 `execve` 仍然是**预先**把整个镜像拷进新页，缺页处理只服务 BSS/堆/栈。
+
+**两部分**：
+
+| 项 | 内容 |
+|----|------|
+| ① 文件成为镜像页的后备存储 | `execve` 不再拷贝 LOAD 段，只把段的位置记进 `task_struct.exe_regions[]`（va / file_off / filesz / memsz / ELF flags），并持有可执行文件 inode（`exe_inode`，fork 继承、exit iput）。第一次取指就缺页，`page_in_image()` 用 `file_read()` 把这一页从磁盘读进新帧——`file_read` 走平坦的 FS 段写目标，所以直接写物理页即可，不需要任何用户映射。`memstat` 显示 `N image pages read back from the executable`（跑一次 `exec /bin/hello` 是 2 页） |
+| ② 回收器 `try_to_free_page()` | `get_free_page()` 在池子空时先尝试回收，**优先选真正能释放帧的页**：全零页（丢弃，下次访问重新变成零页）、只读镜像页（丢弃，下次取指从文件读回）；写时复制的共享页只解除本进程映射（帧留给另一个 owner，`mem_count` 递减），并且**只作为兜底**——因为它不产生空闲帧。私有脏堆/栈页没有后备存储（本内核没有交换区），一律不碰 |
+| 扫描范围 | 遍历 `task[]` 里每个进程的用户页表（申请不到页的进程往往不是持有可回收页的那个），游标轮转避免总挑同一个 |
+| 观测 | `memstat` 增加 `N pages evicted, M COW mappings dropped`，前 10 次回收打印一行 `evict: zero/text page 0x... from pid=N` |
+
+**踩坑（值得记下来）**：第一版把"COW 共享页"当成首选回收对象，于是每次分配都消耗掉一次
+回收、却**一个空闲帧都没换到**，`get_free_page()` 重扫仍然为空 → 6 个子进程全部卡死、
+父进程的管道屏障永远等不到（4MB 下 25 秒零进展）。改成"能释放帧的优先、COW 解除映射兜底"
+之后，约 1280 页的需求稳稳跑在 695 个帧上。
+
+**另一个顺手修掉的真隐患**：缺页分配原先"先建映射、后填内容"，而填充（从磁盘读）会睡眠——
+这期间那一页在回收器眼里就是"全零的只读正文页"，可能被别的进程的缺页抢走并复用，导致
+写进别人的帧。现在改成 `get_free_page()` → 填充 → `map_user_page()`，未映射的帧对回收器不可见。
+
+**回归**：场景 22 `evict`（`QEMU_MEM=4M`）：父进程 + 6 个子进程各占 512KB 零 BSS + 256KB
+私有堆，子进程触碰完用管道屏障驻留造成真实峰值，父进程随后校验自己的数据再杀掉它们。
+断言 6 个子进程都活着、PASS、退出码 0——没有回收时这里会 OOM 杀进程，这三条都不会出现。
+
 
 ---
 
@@ -264,7 +291,7 @@ make Image                # 引导镜像
 # 运行/验证
 qemu-system-i386 -fda Image -hda minix.img -m 16M -boot a
 python3 scripts/qemu-test.py --image Image --hda minix.img --keys $'cmd\n'
-make test                   # 一键回归（scripts/regress.sh，21 个场景断言）
+make test                   # 一键回归（scripts/regress.sh，22 个场景断言）
 make check                  # 静态校验：内存地图 + 文档一致性 + lint 反向自测
 make check-layout           # 只校验内存地图（含 _end 未越界）
 make check-docs             # 只校验文档里引用的布局常量/场景数与源码一致

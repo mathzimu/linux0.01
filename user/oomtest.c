@@ -13,10 +13,11 @@
 
 #define KID_BYTES (768 * 1024)
 #define MAX_KIDS  40
+#define MAX_CHUNKS 64
 
 int main(void)
 {
-    int kids = 0, i, pid, status;
+    int kids = 0, i, pid, held;
     unsigned char *p;
     unsigned long j;
 
@@ -28,35 +29,53 @@ int main(void)
         if (pid == 0) {
             /* Touch the whole allocation so every page really exists
                (first touch: demand paging, and each written page is a
-               private copy because it is shared with the parent). */
+               private copy because it is shared with the parent).
+               The pattern is deliberately NON-ZERO: a page that is still
+               all zeros is reclaimable by the eviction path added in B3
+               (see user/evicttest.c), and then this test would never
+               reach exhaustion.  Writing 0xAA makes every page a dirty
+               private page, which has no backing store and cannot be
+               reclaimed — which is the point of *this* test. */
             p = (unsigned char *)malloc(KID_BYTES);
             if (!p)
                 exit(1);
             for (j = 0; j < KID_BYTES; j += 4096)
-                p[j] = (unsigned char)j;
+                p[j] = 0xAA;
 
             /* Hold it: this is what consumes the pool. */
             for (;;)
                 pause();
         }
         kids++;
+
+        /* Progress, one line per child: the test harness stops a run
+           after ~1.5s of silence, and the memory-touching below is long
+           enough to look like silence (B3 made it longer still, because
+           image pages are no longer pre-loaded). */
+        printf("oomtest: child %d holding %dKB\n", kids, KID_BYTES / 1024);
     }
 
     printf("oomtest: %d children are holding memory\n", kids);
 
-    /* Try to allocate more than can possibly be left: the fault handler
-       runs out of pages and kills the task doing the touching, which is
-       this one.  Expect the kernel's "out of memory" message and then
-       SIGSEGV's exit status (139) for this process. */
-    p = (unsigned char *)malloc(KID_BYTES);
-    if (p) {
+    /* Now eat whatever is left, in non-evictable chunks, until an
+       allocation cannot be satisfied at all.  This is the deterministic
+       part: 64 chunks is 48MB on a 16MB machine, so the pool *must* run
+       out and the fault that finds no frame is this process's own — the
+       kernel kills it (exit 139) and everything else keeps running. */
+    held = 0;
+    for (i = 0; i < MAX_CHUNKS; i++) {
+        p = (unsigned char *)malloc(KID_BYTES);
+        if (!p) {
+            printf("oomtest: malloc refused after %d chunks\n", held);
+            break;
+        }
         for (j = 0; j < KID_BYTES; j += 4096)
-            p[j] = 1;
-        printf("oomtest: UNEXPECTED - %dKB still allocatable with %d kids\n",
-               KID_BYTES / 1024, kids);
+            p[j] = 0x55;
+        held++;
+        printf("oomtest: parent holds %dKB, %d children still alive\n",
+               held * (KID_BYTES / 1024), kids);
     }
 
     printf("oomtest: done\n");
-    (void)status;
     return 0;
 }

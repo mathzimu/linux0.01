@@ -29,7 +29,9 @@
 | 内核堆 | `lib/malloc.c` 的 bump 分配器，区间 `[KERNEL_HEAP_START, KERNEL_HEAP_END)` = `[0x30000,0x40000)`；越界返回 NULL（此前上界写成 `memory_end-0x200000`，会伸进页分配器池）。M4 把映像上限从 `0x2B000` 抬到 `0x30000`——此前只剩 4.5KB 余量，加一个功能就会撞线 |
 | 页分配器 | `get_free_page()` 从 mem_map 顺序扫描第一个空闲页并清零；`mem_init()` 保留内核页表页、`buffer_init()` 保留缓存页、`mem_map` 自身保留；**没有硬上限**，耗尽时返回 0，缺页处理据此打印 OOM 并只杀肇事进程（回归场景 18） |
 | 剩余页池 | 16MB 下约 3700 页（`memstat` 可查）；任务页/管道页/所有用户页共用 |
-| COW / 按需调页 | **已实现**（M3）：用户页首次访问才分配（`do_no_page` 按区域校验后建页）；fork 让父子共享只读页并在 PTE 上打软件 COW 位，写缺页时 `un_wp_page` 复制。区域外的访问仍然杀进程 |
+| COW / 按需调页 | **已实现**（M3/B3）：用户页首次访问才分配（`do_no_page` 按区域校验后建页）；fork 让父子共享只读页并在 PTE 上打软件 COW 位，写缺页时 `un_wp_page` 复制。区域外的访问仍然杀进程 |
+| 页回收（B3） | `get_free_page()` 在池子空时调用 `try_to_free_page()`：**全零页**与**只读镜像页**可丢弃（后者下次取指由 `page_in_image()` 从可执行文件读回——文件就是它的后备存储），**COW 共享页**只解除映射（帧留给另一个 owner）且仅作兜底（不产生空闲帧）；私有脏堆/栈页没有交换区，不回收。`memstat` 报 `pages evicted` / `COW mappings dropped` |
+| 程序镜像 | `execve` **不再预拷贝** LOAD 段：把段位置记进 `exe_regions[]` 并持有可执行文件 inode，缺页时才从文件读进新帧（`N image pages read back from the executable` 可见）。镜像页因此天然可回收，无需交换区 |
 | 用户堆 | `user/lib.c` 的 first-fit + bump（`[0x08100000,0x08200000)`，1MB），页由内核按需提供；`sys_brk` 只记录 `task_struct.brk`，堆边界由用户库自己管 |
 | fork 的用户栈 | 与父进程**共享只读页 + 写时复制**，不再有独立「子进程栈区」，也没有栈大小上限（受限于物理页） |
 
@@ -73,7 +75,7 @@
 | 目标 | i386 32-bit freestanding |
 | macOS | Homebrew `i686-elf-gcc` + `i686-elf-binutils` 直接构建（Makefile 自动检测），或 Docker |
 | 运行 | QEMU `-fda Image` 或 `-cdrom kernel.iso`，内存 **16M**（内核页表恒等映射 16MB）；MINIX 测试盘 `make minix.img` + `-hda minix.img` |
-| 自动化 | `scripts/qemu-test.py` 无头驱动（串口文本 + sendkey，含大写与 `\| < > ( ) & *` 等需要 shift 的键；`--min-wait` 让需要观察周期性事件的用例不会被“输出静止”提前收尾），`scripts/regress.sh` **21 个场景**（`make test`），`scripts/ppm2png.py` 转截图 |
+| 自动化 | `scripts/qemu-test.py` 无头驱动（串口文本 + sendkey，含大写与 `\| < > ( ) & *` 等需要 shift 的键；`--mem` 可缩小客户机内存以制造内存压力；`--min-wait` 让需要观察周期性事件的用例不会被“输出静止”提前收尾），`scripts/regress.sh` **22 个场景**（`make test`，其中 `evict` 用 `QEMU_MEM=4M` 跑），`scripts/ppm2png.py` 转截图 |
 | 静态校验（无需编译器） | `make check` = `check-layout` + `check-docs` + `check-docs-selftest`。`scripts/check-layout.py`：内存地图有序/不重叠、用户区必须整体落在一个页目录项内、`memlayout.inc` 与 `memlayout.h` 一致、缓存装得进窗口、**用户区地址没有被硬编码到布局头之外**，已构建 `kernel/system` 时还校验链接期 `_end` 未越界。`scripts/check-docs.py`：文档里的旧地址/旧宏必须带历史标注、`0x08xxxxxx` 必须是布局常量、场景数必须等于 `regress.sh` 实际条数、`-m` 参数必须与测试驱动一致 |
 
 ## 7. 与文档/设计稿的关系

@@ -89,6 +89,9 @@ def main():
                          '(for tests that must observe a periodic event)')
     ap.add_argument('--extra', default='', help='extra qemu args')
     ap.add_argument('--qemu', default='qemu-system-i386')
+    ap.add_argument('--mem', default='16M',
+                    help='guest RAM; 4M makes memory pressure easy to reach '
+                         '(page-reclamation tests)')
     args = ap.parse_args()
 
     mon = args.out + '.mon'
@@ -97,7 +100,7 @@ def main():
         if os.path.exists(f):
             os.unlink(f)
 
-    cmd = [args.qemu, '-m', '16M', '-vga', 'std', '-display', 'none',
+    cmd = [args.qemu, '-m', args.mem, '-vga', 'std', '-display', 'none',
            '-serial', 'file:%s' % serial,
            '-monitor', 'unix:%s,server,nowait' % mon]
     if args.image:

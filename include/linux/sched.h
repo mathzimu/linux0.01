@@ -110,6 +110,32 @@ struct tss_struct {
 
 struct m_inode;              /* forward decl: pwd points into the FS */
 
+/* Program image regions, as they came out of the ELF file (B3).
+ *
+ * Until B3 execve() copied every LOAD segment into fresh pages up front.
+ * Now it only records where the bytes live: an image page is read in on
+ * its first fault, which also means a page can be *thrown away* when
+ * memory gets tight and read back later — the file is the backing store,
+ * so no swap area is needed for the program text.
+ *
+ *   va       page-aligned start of the segment in the user window
+ *   file_off file offset of the byte at `va`
+ *   filesz   bytes of the segment that exist in the file
+ *   memsz    bytes the segment occupies (the tail is zero-filled = BSS)
+ */
+#define NR_EXE_REGIONS 4
+
+struct exe_region {
+    unsigned long va;
+    unsigned long file_off;
+    unsigned long filesz;
+    unsigned long memsz;
+    unsigned long flags;       /* ELF p_flags: PF_X 1, PF_W 2, PF_R 4.
+                                  Only a non-writable region's pages can be
+                                  thrown away — a data page may have been
+                                  modified since it was read. */
+};
+
 struct task_struct {
     long state;
     long counter;
@@ -143,6 +169,12 @@ struct task_struct {
     unsigned long pg_dir;
     unsigned long start_code, end_code, start_data, end_data;
     unsigned long brk, start_stack;
+    /* The executable this image came from (held reference) plus the
+     * region table above: together they are the backing store that lets
+     * an image page be evicted and paged back in. */
+    struct m_inode *exe_inode;
+    struct exe_region exe_regions[NR_EXE_REGIONS];
+    int nr_exe_regions;
     struct desc_struct ldt[3];
 };
 

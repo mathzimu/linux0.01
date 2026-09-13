@@ -133,6 +133,10 @@ void mem_init(unsigned long start_mem, unsigned long end_mem)
        right after this function. */
 }
 
+/* Reclaim a page so get_free_page() has something to hand out (defined
+   further down, next to the eviction policy it implements). */
+static int try_to_free_page(void);
+
 unsigned long get_free_page(void)
 {
     unsigned long addr;
@@ -147,9 +151,32 @@ unsigned long get_free_page(void)
         return addr;
     }
 
-    /* Out of memory.  Since M3 the pool is not fenced off from user
-       memory any more, so this is a normal condition rather than the
-       "allocator walked into the user image" panic it used to be. */
+    /* Nothing free.  Before giving up, try to *reclaim* something: a
+       clean page can be dropped and paged back in later (B3).
+       One eviction is not always enough: dropping a page that somebody
+       else also maps returns no frame at all, so retry a bounded number
+       of times — each pass has fewer shared pages to pick and will
+       eventually reach one whose frame really comes back. */
+    for (i = 0; i < 32; i++) {
+        int j;
+
+        if (!try_to_free_page())
+            break;
+
+        for (j = 0; j < max_map_nr; j++) {
+            if (mem_map[j] != 0)
+                continue;
+            mem_map[j] = 1;
+            addr = LOW_MEM + (unsigned long)j * PAGE_SIZE;
+            memset((char *)addr, 0, PAGE_SIZE);
+            return addr;
+        }
+    }
+
+    /* Out of memory, and nothing more is reclaimable.  Since M3 the pool
+       is not fenced off from user memory any more, so this is a normal
+       condition rather than the "allocator walked into the user image"
+       panic it used to be. */
     return 0;
 }
 
@@ -173,7 +200,160 @@ void free_page(unsigned long addr)
     mem_map[i]--;
 }
 
+/* --- reclaiming pages (B3) -----------------------------------------
+ *
+ * Demand paging without eviction is only half a memory manager: once the
+ * frame pool is empty there is nothing to do but kill somebody.  With the
+ * executable recorded as the backing store for image pages, three classes
+ * of page can be reclaimed *safely*, which is what this scanner does:
+ *
+ *   1. an all-zero page — drop it and let the next touch re-create a zero
+ *      page (a freshly grown heap or .bss is mostly this);
+ *   2. a copy-on-write page that somebody else also maps (mem_map count
+ *      is 2 or more) — just unmap it here; the other owner keeps the
+ *      frame, and a later write faults it back as a private copy;
+ *   3. a page of a *non-writable* image region (program text) — drop it;
+ *      the next instruction fetch faults it back in from the executable.
+ *
+ * Anything else (a dirty anonymous heap/stack page) has no backing store
+ * in this kernel — there is no swap area — so it is left alone.  That is
+ * the honest boundary of what B3 buys: text, zeros and shares.
+ *
+ * The scan walks every task's user page table, because a process that
+ * cannot allocate is usually not the one holding reclaimable pages.
+ */
+
+unsigned long nr_evicted = 0;      /* frames actually returned to the pool */
+unsigned long nr_unmapped = 0;     /* COW shares dropped, frame kept      */
+
 /* --- per-process address spaces ------------------------------------ */
+
+static unsigned long evict_cursor = 0;   /* round-robin over task slots */
+
+/* Is this user address inside a non-writable image region of `t`? */
+static int is_clean_text(struct task_struct *t, unsigned long va)
+{
+    int i;
+
+    if (!t->exe_inode)
+        return 0;
+    for (i = 0; i < t->nr_exe_regions; i++) {
+        struct exe_region *r = &t->exe_regions[i];
+
+        if (va < r->va || va >= r->va + r->memsz)
+            continue;
+        return (r->flags & 2) == 0;      /* PF_W clear = never modified */
+    }
+    return 0;
+}
+
+static int page_is_zero(unsigned long pa)
+{
+    unsigned long *p = (unsigned long *)pa;
+    int i;
+
+    for (i = 0; i < (int)(PAGE_SIZE / sizeof(unsigned long)); i++)
+        if (p[i])
+            return 0;
+    return 1;
+}
+
+/* Try to free one page.  Returns 1 if a frame was returned to the pool
+   (or a mapping dropped), 0 if there was nothing to reclaim.
+ *
+ * Policy, in order of preference:
+ *   1. an all-zero page — reclaiming it costs a memset to bring back;
+ *   2. a clean text page — costs a disk read to bring back;
+ *   3. a COW share — costs nothing to drop, but returns no frame, so it
+ *      is only used when nothing better exists.
+ * Zero pages come first for a reason: the first version scanned in address
+ * order, which always found the image (text) pages at the bottom of the
+ * window, so every fault evicted text and the next fault read it back
+ * from disk — a page-replacement test on a 4MB machine spent its time
+ * waiting for the drive instead of exercising the mm.
+ */
+static unsigned long evict_trace = 0;
+
+static int try_to_free_page(void)
+{
+    int pass, n;
+    unsigned long fallback_pa = 0;
+    unsigned long *fallback_pt = NULL;
+    struct task_struct *fallback_t = NULL;
+
+    for (pass = 0; pass < 2; pass++) {
+        for (n = 0; n < NR_TASKS; n++) {
+            struct task_struct *t = task[(evict_cursor + n) % NR_TASKS];
+            unsigned long *pt;
+            int i;
+
+            if (!t || !t->pg_dir || t->pg_dir == kernel_pg_dir)
+                continue;
+            pt = user_pt(t->pg_dir);
+            if (!pt)
+                continue;
+
+            for (i = 0; i < 1024; i++) {
+                unsigned long pte = pt[i];
+                unsigned long pa, va;
+
+                if (!(pte & PTE_PRESENT) || !(pte & PTE_USER))
+                    continue;
+                pa = pte & PT_MASK;
+                va = USER_BASE + (unsigned long)i * PAGE_SIZE;
+
+                if (pass == 0 && !(pte & PTE_COW) && page_is_zero(pa)) {
+                    pt[i] = 0;
+                    free_page(pa);
+                    nr_evicted++;
+                    evict_cursor = (evict_cursor + n + 1) % NR_TASKS;
+                    if (t == current)
+                        write_cr3(current->pg_dir);
+                    if (evict_trace++ < 10)
+                        printk("evict: zero page 0x%lx from pid=%lu\n",
+                               va, t->pid);
+                    return 1;
+                }
+
+                if (pass == 1 && !(pte & PTE_COW) && is_clean_text(t, va)) {
+                    pt[i] = 0;
+                    free_page(pa);
+                    nr_evicted++;
+                    evict_cursor = (evict_cursor + n + 1) % NR_TASKS;
+                    if (t == current)
+                        write_cr3(current->pg_dir);
+                    if (evict_trace++ < 10)
+                        printk("evict: text page 0x%lx from pid=%lu\n",
+                               va, t->pid);
+                    return 1;
+                }
+
+                if (pte & PTE_COW && !fallback_pt) {
+                    fallback_pt = &pt[i];
+                    fallback_pa = pa;
+                    fallback_t = t;
+                }
+            }
+        }
+    }
+
+    /* Nothing freeable: fall back to unmapping a shared page so that at
+       least the *next* write to it takes the COW path with a private
+       frame.  If several processes share it, one of them may still be
+       able to keep going. */
+    if (fallback_pt) {
+        *fallback_pt = 0;
+        nr_unmapped++;
+        if (fallback_t == current)
+            write_cr3(current->pg_dir);
+        if (evict_trace++ < 10)
+            printk("evict: dropped COW mapping (pid=%lu, frame 0x%lx kept)\n",
+                   fallback_t->pid, fallback_pa);
+        return 1;
+    }
+    return 0;
+}
+
 
 /* A fresh address space: one page directory plus one page table for the
  * user window, with the shared kernel identity entries filled in and no
@@ -373,6 +553,57 @@ unsigned long load_flat_image(const unsigned char *image, unsigned long len,
     return pgdir;
 }
 
+/* --- paging an image page back in (B3) ----------------------------- */
+
+/* Copy the part of an image page that lives in the executable into the
+ * freshly allocated frame `pa` (a physical address, reached through the
+ * kernel's identity map).
+ *
+ * `file_read()` writes its output with put_fs_byte(), i.e. through the
+ * flat FS segment, so a physical address is a perfectly good destination
+ * here — no user mapping is involved and none is needed.
+ *
+ * Returns 1 if the page was filled from the file, 0 if it is the zero
+ * tail of a segment (BSS), -1 if the address is not part of the image.
+ * The frame is already zeroed, so "0" needs no work. */
+static int page_in_image(unsigned long va, unsigned long pa)
+{
+    struct task_struct *t = current;
+    int i;
+
+    if (!t || !t->exe_inode)
+        return -1;
+
+    for (i = 0; i < t->nr_exe_regions; i++) {
+        struct exe_region *r = &t->exe_regions[i];
+        unsigned long delta, n;
+        struct file f;
+
+        if (va < r->va || va >= r->va + r->memsz)
+            continue;
+
+        delta = va - r->va;
+        if (delta >= r->filesz)
+            return 0;                    /* BSS: the zero page is correct */
+
+        n = r->filesz - delta;
+        if (n > PAGE_SIZE)
+            n = PAGE_SIZE;
+
+        f.f_mode = 0;
+        f.f_flags = 0;
+        f.f_count = 1;
+        f.f_inode = t->exe_inode;
+        f.f_pos = r->file_off + delta;
+
+        if (file_read(t->exe_inode, &f, (char *)pa, (int)n) != (int)n)
+            return -1;
+        nr_page_ins++;
+        return 1;
+    }
+    return -1;
+}
+
 /* --- page fault ---------------------------------------------------- */
 
 /* Counters behind the shell's `memstat` command (init/shell.c).  They are
@@ -382,6 +613,7 @@ unsigned long nr_page_faults = 0;      /* every fault that reached us */
 unsigned long nr_demand_pages = 0;     /* pages handed out on first touch */
 unsigned long nr_cow_breaks = 0;       /* pages copied to break a COW share */
 unsigned long nr_oom = 0;              /* faults that found no free page */
+unsigned long nr_page_ins = 0;         /* image pages read back from the file */
 
 /* How many pages are free right now, and how many are mapped into the
  * calling task's address space. */
@@ -408,7 +640,10 @@ void mm_report(void)
     printk("mem: %lu page faults, %lu demand pages, %lu COW breaks, "
            "%lu out-of-memory\n",
            nr_page_faults, nr_demand_pages, nr_cow_breaks, nr_oom);
-    printk("mem: %lu disk interrupts (IRQ14)\n", hd_interrupt_count());
+    printk("mem: %lu image pages read back from the executable, "
+           "%lu disk interrupts (IRQ14)\n", nr_page_ins, hd_interrupt_count());
+    printk("mem: %lu pages evicted, %lu COW mappings dropped\n",
+           nr_evicted, nr_unmapped);
 }
 
 /* mm/page.s passes (error_code, eip, cr2).  Three cases matter:
@@ -448,8 +683,24 @@ void do_no_page(unsigned long error_code, unsigned long eip, unsigned long addre
     }
 
     if (pgdir && user_addr_ok(address, 1)) {
-        if (alloc_user_page(pgdir, address & PT_MASK)) {
+        unsigned long va = address & PT_MASK;
+        unsigned long pa = get_free_page();     /* still unmapped here */
+
+        if (pa) {
             nr_demand_pages++;
+            /* Fill the frame BEFORE mapping it.  A page that is mapped
+               but not yet filled looks like an all-zero (or clean text)
+               page to the eviction scanner, and another task's fault
+               under memory pressure could reclaim it while this one is
+               still copying into it.  Unmapped, it is invisible.
+
+               Program-image pages come from the executable: this is both
+               the first touch (execve no longer pre-loads the image) and
+               the re-fault after an eviction. */
+            if (va >= USER_PROG_START && va < USER_PROG_END)
+                (void)page_in_image(va, pa);
+
+            map_user_page(pgdir, va, pa, PTE_PRESENT | PTE_RW | PTE_USER);
             write_cr3(pgdir);       /* the missing entry was cached as absent */
             return;
         }

@@ -15,6 +15,8 @@ mkdir -p "$LOGDIR"
 #   prep-cmd : 准备干净盘的命令（须生成 minix.img）
 #   keys     : 注入的按键（支持字面 \n 或真换行）
 #   needle...: 断言——serial 输出须包含每个子串（出现才算过）
+#   环境变量：QEMU_MEM（默认 16M）、QEMU_MIN_WAIT（默认 0，重压力场景需要更长
+#   的总窗口——驱动默认的静默/总时长上限只有 10 秒）、QEMU_TAIL。
 run_case() {
     local name="$1" prep="$2" keys="$3"
     shift 3
@@ -24,7 +26,10 @@ run_case() {
         FAIL=$((FAIL+1)); return 1
     fi
     out=$(python3 scripts/qemu-test.py --image Image --hda minix.img \
-             --hold "${TEST_HOLD:-1.2}" --tail "${TEST_TAIL:-1.5}" \
+             --hold "${TEST_HOLD:-1.2}" \
+             --tail "${QEMU_TAIL:-${TEST_TAIL:-1.5}}" \
+             --min-wait "${QEMU_MIN_WAIT:-0}" \
+             --mem "${QEMU_MEM:-16M}" \
              --extra "${TEST_EXTRA:-}" \
              --keys "$keys" 2>/dev/null)
     printf '%s' "$out" > "$LOGDIR/$name.serial"
@@ -55,11 +60,13 @@ run_case2() {
     fi
     out=$(python3 scripts/qemu-test.py --image Image --hda minix.img \
              --hold "${TEST_HOLD:-1.2}" --tail "${TEST_TAIL:-1.5}" \
+             --mem "${QEMU_MEM:-16M}" \
              --min-wait "$minwait" --keys "$keys1" 2>/dev/null)
     printf '%s' "$out" > "$LOGDIR/$name.1.serial"
     out="$out
 $(python3 scripts/qemu-test.py --image Image --hda minix.img \
              --hold "${TEST_HOLD:-1.2}" --tail "${TEST_TAIL:-1.5}" \
+             --mem "${QEMU_MEM:-16M}" \
              --keys "$keys2" 2>/dev/null)"
     printf '%s' "$out" > "$LOGDIR/$name.serial"
     for needle in "$@"; do
@@ -176,12 +183,15 @@ run_case demand "$BASE && make prog NAME=demandtest" \
     'mem: ' \
     'COW breaks'
 
-# 场景 18: 内存耗尽（M3）—— 分配不到页是正常情况，不是内核 panic
-#   一堆子进程各占住几百页私有页，直到 16MB 池见底：缺页处理打印 OOM 并只杀
-#   肇事进程，内核继续跑。用例最后再执行一次 ls —— 内核活着、文件系统可用。
+# 场景 18: 内存耗尽（M3/B3）—— 分配不到页是正常情况，不是内核 panic
+#   40 个子进程各要 768KB **不可回收**的私有脏页（写 0xAA；写成 0 会被 B3 的
+#   回收器当零页收走，见场景 22），合计 30MB，16MB 的机器必然装不下。缺页处理
+#   打印 OOM 并只杀肇事进程：子进程成批倒下，父进程跑完全程（done）并返回 0，
+#   内核与文件系统照常工作（后面的 ls 能列出 hello.txt）。
 run_case oom "$BASE && make prog NAME=oomtest" 'exec /bin/oomtest\nls\n' \
     'children are holding memory' \
     'PAGE FAULT: out of memory for pid=' \
+    'oomtest: done' \
     'hello.txt'
 
 # 场景 19: 文件权限模型（M4）—— mode/uid/gid 终于会被检查
@@ -220,6 +230,21 @@ run_case diskio "$BASE && make minix.img" 'wtest\ncat /hello.txt\nmemstat\n' \
     'wtest: wrote 37 bytes to /hello.txt' \
     'Minimal Linux 0.01 write path works!' \
     'disk interrupts (IRQ14)'
+
+# 场景 22: 内存压力下的页回收（B3）
+#   故意在 4MB（约 695 个空闲页）下要 ~770 页：父进程 + 4 个子进程各占
+#   512KB 零 BSS + 128KB 私有堆。零页与只读正文页可回收（丢弃后按需重建/
+#   回读），私有脏页不可回收——所以系统必须靠回收撑过去，而且每个进程最后
+#   都要能读回自己的数据。断言里带上内核的 `evict:` 轨迹行：回收真的发生了。
+#   子进程用 alarm(3) 自己退场（期望 rc=142）；若被 OOM 杀掉会是 139，
+#   测试会打印 FAIL。没有回收时这里必然失败。
+QEMU_MEM=4M QEMU_MIN_WAIT=45 run_case evict "$BASE && make prog NAME=evicttest" \
+    'exec /bin/evicttest\n' \
+    'evicttest: forked 2 children' \
+    'evicttest: 2 children survived to their own timeout' \
+    'evict: ' \
+    'evicttest: PASS (integrity kept across eviction)' \
+    'exec: child 1 exit_code=0'
 
 echo
 echo "================================"

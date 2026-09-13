@@ -140,7 +140,14 @@ def main():
     regress = os.path.join(ROOT, 'scripts', 'regress.sh')
     if os.path.exists(regress):
         for line in open(regress, encoding='utf-8'):
-            if re.match(r'^\s*run_case2?\s', line):
+            # A case may be invoked with environment assignments in front of
+            # it ("QEMU_MEM=4M run_case evict ..."), so match anywhere in the
+            # line rather than anchoring at the start — but skip comments,
+            # which document the usage ("# run_case <name> ...") and are not
+            # invocations.
+            if line.lstrip().startswith('#'):
+                continue
+            if re.search(r'(^|\s)run_case2?\s+\S', line):
                 ncases += 1
         note('regress.sh runs %d scenarios' % ncases)
 

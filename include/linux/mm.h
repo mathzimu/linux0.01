@@ -51,6 +51,9 @@ extern unsigned long nr_page_faults;
 extern unsigned long nr_demand_pages;
 extern unsigned long nr_cow_breaks;
 extern unsigned long nr_oom;
+extern unsigned long nr_page_ins;
+extern unsigned long nr_evicted;
+extern unsigned long nr_unmapped;
 void mm_report(void);
 
 /* Shared by the ELF loader (kernel/sys.c) and the embedded-program entry
