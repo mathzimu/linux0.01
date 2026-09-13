@@ -38,6 +38,7 @@ run_case() {
     for needle in "$@"; do
         if ! printf '%s' "$out" | grep -qF "$needle"; then
             echo "FAIL [$name]  missing: \"$needle\"  (see $LOGDIR/$name.serial)"
+            gha_error "FAIL [$name] missing: \"$needle\""
             echo "---- tail $LOGDIR/$name.serial ----"
             tail -15 "$LOGDIR/$name.serial" 2>/dev/null
             echo "--------------------------------"
@@ -77,6 +78,7 @@ $(python3 scripts/qemu-test.py --image Image --hda minix.img \
     for needle in "$@"; do
         if ! printf '%s' "$out" | grep -qF "$needle"; then
             echo "FAIL [$name]  missing: \"$needle\"  (see $LOGDIR/$name.serial)"
+            gha_error "FAIL [$name] missing: \"$needle\""
             echo "---- tail $LOGDIR/$name.serial ----"
             tail -15 "$LOGDIR/$name.serial" 2>/dev/null
             echo "--------------------------------"
@@ -94,6 +96,23 @@ $(python3 scripts/qemu-test.py --image Image --hda minix.img \
 # 低于 ~0.2 秒实测会丢键（8042 只有一字节缓冲，guest 跟不上就丢整条命令），
 # 所以宁可拆成两集。
 HEAVY_CASES=" autosync oom evict "
+
+# CI 可观测性：GitHub Actions 会把 `::error::` 开头的行变成**注解**（annotations），
+# 那是公开可读的——而作业日志接口需要 admin 权限。CI 红的时候，如果失败场景名
+# 只在日志里，本地没权限的人就只能干看着（这次就是这样：CI 从 M3 起一直是红的，
+# 只知道 `make test` 失败，不知道是哪一条）。所以失败路径同时发注解 + 写 step
+# summary，运行页面上直接能看到 `FAIL [name] missing "needle"`。
+gha_error() {
+    if [ -n "${GITHUB_ACTIONS:-}" ]; then
+        echo "::error title=regression failure::$*"
+    fi
+}
+
+gha_note() {
+    if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+        echo "$*" >> "$GITHUB_STEP_SUMMARY"
+    fi
+}
 
 is_heavy_skipped() {
     if [ "${TEST_SKIP_HEAVY:-0}" != "1" ]; then
@@ -287,4 +306,8 @@ echo
 echo "================================"
 echo "  $PASS passed, $FAIL failed"
 echo "================================"
+gha_note "### regression: $PASS passed, $FAIL failed"
+if [ "$FAIL" -ne 0 ]; then
+    gha_error "$FAIL scenario(s) failed - see the annotations above"
+fi
 [ "$FAIL" -eq 0 ]
