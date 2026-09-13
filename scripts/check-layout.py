@@ -269,16 +269,26 @@ def main():
         note('USER_HEAP_START 0x%x is not page aligned (fine, but the '
              'granted region gets rounded up)' % L['USER_HEAP_START'])
 
-    # the argv block must live inside the stack's tail page
-    if not (L['USER_STACK_TOP'] < L['USER_ARGC_ADDR'] < L['USER_ARGV_STR_TOP']):
-        fail('argc/argv block [0x%x, 0x%x) is not inside the stack tail page'
-             % (L['USER_ARGC_ADDR'], L['USER_ARGV_STR_TOP']))
-    if L['USER_ARGV_STR_TOP'] != top:
-        fail('USER_ARGV_STR_TOP 0x%x should be the identity map top 0x%x'
-             % (L['USER_ARGV_STR_TOP'], top))
+    # The argv block, the sigreturn stub and the strings all live in the
+    # stack's tail page, in a fixed order: argc/argv slots at the bottom
+    # (above the stack top), strings and stub higher up, and the granted
+    # part of the page stops before the page allocator's bitmap at the top
+    # of RAM.
+    if not (L['USER_STACK_TOP'] < L['USER_ARGC_ADDR'] < L['USER_ARGV_ADDR']
+            < L['USER_ARGV_STR_TOP']):
+        fail('the argc/argv block does not fit above the stack top '
+             '([0x%x, 0x%x))' % (L['USER_ARGC_ADDR'], L['USER_ARGV_STR_TOP']))
+    if L['USER_SIGRETURN_ENTRY'] < L['USER_ARGV_STR_TOP']:
+        fail('USER_SIGRETURN_ENTRY 0x%x overlaps the argv string area that '
+             'packs down from 0x%x'
+             % (L['USER_SIGRETURN_ENTRY'], L['USER_ARGV_STR_TOP']))
+    if not (L['USER_SIGRETURN_ENTRY'] + 20 <= L['USER_TAIL_TOP'] <= top):
+        fail('the sigreturn stub does not fit below USER_TAIL_TOP 0x%x '
+             '(stub at 0x%x, RAM top 0x%x)'
+             % (L['USER_TAIL_TOP'], L['USER_SIGRETURN_ENTRY'], top))
 
-    # the child stack copy must sit between heap and parent stack
-    if not (L['USER_HEAP_START'] < L['CHILD_USER_STACK_TOP'] < L['USER_STACK_TOP']):
+    # the child stack copy must sit between heap and the cache floor
+    if not (L['USER_HEAP_START'] < L['CHILD_USER_STACK_TOP'] <= L['USER_STACK_TOP']):
         fail('CHILD_USER_STACK_TOP 0x%x is not inside the heap/stack window'
              % L['CHILD_USER_STACK_TOP'])
 
@@ -315,19 +325,23 @@ def main():
         fail('NR_BUFFERS = %d exceeds NR_BUFFERS_MAX = %d' % (nrbuf, nrbuf_max))
 
     # struct buffer_head is 32 bytes on i386; budget 64 to stay honest if
-    # a field is ever added.
+    # a field is ever added.  The cache grows DOWN from BUFFER_CACHE_TOP.
     bh_size = 64
     cache_bytes = nrbuf * (1024 + bh_size)
-    cache_start = top - cache_bytes
+    cache_top = L.get('BUFFER_CACHE_TOP')
+    if cache_top is None:
+        fail('include/memlayout.h does not define BUFFER_CACHE_TOP')
+        return report()
+    cache_start = cache_top - cache_bytes
     if cache_start < floor:
         fail('buffer cache [0x%x, 0x%x) grows below BUFFER_CACHE_FLOOR 0x%x '
              '— NR_BUFFERS=%d does not fit the window [0x%x, 0x%x); this is '
              'the original corruption bug'
-             % (cache_start, top, floor, nrbuf, floor, top))
+             % (cache_start, cache_top, floor, nrbuf, floor, cache_top))
     else:
         note('buffer cache: %d buffers, [0x%x, 0x%x), %d bytes clear of the '
              'floor (0x%x)'
-             % (nrbuf, cache_start, top, cache_start - floor, floor))
+             % (nrbuf, cache_start, cache_top, cache_start - floor, floor))
 
     # --- 4. kernel-side boundaries from linux/memmap.h --------------
     memmap_path = os.path.join(ROOT, 'include', 'linux', 'memmap.h')
