@@ -256,6 +256,10 @@ void do_timer(void);
  * ret_from_sys_call in boot/head.s and the UFRAME_* offsets in
  * kernel/process.c. */
 void do_signal(unsigned char *kf);
+/* Same delivery, but from the timer interrupt's frame: this is what lets
+ * a task that never makes another system call still be killed (or get its
+ * alarm).  Called from timer_interrupt in boot/head.s. */
+void do_signal_from_intr(unsigned long *iframe);
 
 #endif
 #endif

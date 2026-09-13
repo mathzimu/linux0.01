@@ -268,6 +268,17 @@ QEMU_MEM=4M QEMU_MIN_WAIT=45 run_case evict "$BASE && make prog NAME=evicttest" 
     'evicttest: PASS (integrity kept across eviction)' \
     'exec: child 1 exit_code=0'
 
+# 场景 23: 信号投递时机（B2'）—— 不进内核的进程也必须能被信号带走
+#   内核原先只在**系统调用返回**时投递信号，于是纯计算循环里的进程既杀不掉、
+#   也等不到 alarm（B3 的内存压力测试正是被这一点卡住的：卡在缺页循环里的
+#   子进程收不到任何信号）。现在定时器中断返回路径上也会投递。
+#   期望：设置 alarm(1) 后进入无系统调用的死循环，约 1 秒后以 142
+#   （128+SIGALRM）退出；修复前这里会永远挂住、连 exit_code 都不会出现。
+run_case spinkill "$BASE && make prog NAME=spintest" 'exec /bin/spintest\nls\n' \
+    'installing alarm(1), then spinning with no syscalls' \
+    'exec: child 1 exit_code=142' \
+    'hello.txt'
+
 echo
 echo "================================"
 echo "  $PASS passed, $FAIL failed"

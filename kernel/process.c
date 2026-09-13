@@ -404,6 +404,59 @@ int sys_pause(void)
     return 0;
 }
 
+/* Signal delivery from the timer interrupt (see boot/head.s).
+ *
+ * Signals used to be delivered only on system call return, so a task that
+ * never entered the kernel again could not be stopped: a compute loop
+ * ignored SIGKILL, and an alarm would not fire until the next syscall.
+ * B3's memory-pressure tests ran straight into this — a child stuck in a
+ * page-fault loop (pure memory writes, no syscalls) would not die.
+ *
+ * Linux delivers on interrupt return as well; this is that path.  The
+ * timer frame holds the same registers as the syscall frame but pushed by
+ * `pushal`, i.e. in a different order, so it is copied into a canonical
+ * syscall-shaped buffer, handed to do_signal(), and the two fields a
+ * handler delivery may rewrite (eip and the user esp) are copied back.
+ *
+ * Frame (index in longs from the interrupt frame base):
+ *   0 edi  1 esi  2 ebp  3 (saved esp)  4 ebx  5 edx  6 ecx  7 eax
+ *   8 gs   9 fs  10 es  11 ds  12 eip  13 cs  14 eflags
+ *   15 user esp  16 ss          (15/16 exist only for a Ring3 interrupt)
+ */
+void do_signal_from_intr(unsigned long *iframe)
+{
+    unsigned long canon[16];
+
+    if (!current || !current->signal)
+        return;
+    if ((iframe[13] & 3) != 3)
+        return;                        /* Ring0: no user context to rewrite */
+
+    canon[0]  = iframe[4];             /* ebx */
+    canon[1]  = iframe[6];             /* ecx */
+    canon[2]  = iframe[5];             /* edx */
+    canon[3]  = iframe[1];             /* esi */
+    canon[4]  = iframe[0];             /* edi */
+    canon[5]  = iframe[2];             /* ebp */
+    canon[6]  = iframe[7];             /* eax */
+    canon[7]  = iframe[8];             /* gs  */
+    canon[8]  = iframe[9];             /* fs  */
+    canon[9]  = iframe[10];            /* es  */
+    canon[10] = iframe[11];            /* ds  */
+    canon[11] = iframe[12];            /* eip */
+    canon[12] = iframe[13];            /* cs  */
+    canon[13] = iframe[14];            /* eflags */
+    canon[14] = iframe[15];            /* user esp */
+    canon[15] = iframe[16];            /* ss  */
+
+    do_signal((unsigned char *)canon);
+
+    /* A custom handler is entered by rewriting the frame; a fatal default
+       action never returns from do_signal() at all. */
+    iframe[12] = canon[11];
+    iframe[15] = canon[14];
+}
+
 /* ------------------------------------------------------------------
  * Signal delivery with custom handlers (Linux 0.01 kernel/signal.c
  * semantics, adapted to this kernel's system_call frame).

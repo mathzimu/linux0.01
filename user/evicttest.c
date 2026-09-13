@@ -107,14 +107,15 @@ int main(void)
 
             printf("evicttest: child %d ok and holding\n", getpid());
 
-            /* Hold the pages, then leave on our own.  The alarm is not a
-               convenience: signals in this kernel are delivered on
-               *system call* return, so a SIGKILL sent while a child is
-               buried in a pure memory-writing fault loop is not acted on
-               until that loop ends.  Letting each child time itself out
-               sidesteps that entirely — and the expected exit status
+            /* Hold the pages, then leave on our own.  Each child times
+               itself out with alarm() and the expected exit status
                (128+SIGALRM = 142) is a precise check: anything else
-               (139 = killed by SIGSEGV on a failed fault) is a failure. */
+               (139 = killed by SIGSEGV on a failed fault) is a failure.
+               The loop below still makes a periodic syscall because it is
+               long: signals are delivered on syscall return *and* on
+               timer-interrupt return now (see do_signal_from_intr), but
+               the syscall also keeps the touch loop interruptible while it
+               is still running. */
             alarm(3);
             for (;;)
                 pause();

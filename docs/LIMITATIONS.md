@@ -42,7 +42,7 @@
 | 调度 | O(N) counter + priority，硬件 `ljmp` TSS 切换（`schedule()` 不预改 current，由 `switch_to` 内 `xchg`） |
 | fork | 复制 task_struct + 内核栈帧；新建地址空间并把用户页挂成 COW 共享；`f_count++`；pid == task[] 槽位 |
 | exit | 先切回内核页目录并 `free_user_space()` 释放地址空间（页按引用计数递减），再转为 **TASK_ZOMBIE**（保留 task[] 槽与任务页，发 SIGCHLD 唤醒父）；由父 `waitpid` 回收（退出码经 `*stat_addr` 传出 + 释放任务页）；init(task[0]) 保持空闲锚点不退出 |
-| 信号 | **投递已实现**：`sys_kill` 置位 + 唤醒 TASK_INTERRUPTIBLE；`ret_from_sys_call` 调用 `do_signal`；默认动作 SIGINT/SIGQUIT/SIGKILL/SIGPIPE/SIGALRM → exit(128+sig)，其余忽略；**`signal()` syscall**（SIG_DFL/SIG_IGN/SIGKILL 不可捕获）——SIGCHLD 忽略时子进程由调度器自动回收，waitpid 返回 ECHILD |
+| 信号 | **投递已实现**，两个时机：`ret_from_sys_call`（系统调用返回）**和 `timer_interrupt` 返回路径**（`do_signal_from_intr()` 把中断帧规范化后交给 `do_signal`）——所以纯计算循环里的进程最坏一个 tick 也会被 SIGKILL/alarm 带走。`sys_kill` 置位 + 唤醒 TASK_INTERRUPTIBLE；默认动作 SIGINT/SIGQUIT/SIGKILL/SIGPIPE/SIGALRM → exit(128+sig)，其余忽略；**`signal()` syscall**（SIG_DFL/SIG_IGN/SIGKILL 不可捕获）——SIGCHLD 忽略时子进程由调度器自动回收，waitpid 返回 ECHILD |
 | 用户态 | **自定义信号处理器已实现**（M2-1，见 §1）；**Ring3 `/bin/sh` 可以跑子程序了**（M3）：子进程 execve 装进自己的新地址空间，父 shell 的代码页不受影响；fork 的写时复制让父子内存真正隔离（回归场景 14/16） |
 
 ## 4. 文件系统
@@ -75,7 +75,7 @@
 | 目标 | i386 32-bit freestanding |
 | macOS | Homebrew `i686-elf-gcc` + `i686-elf-binutils` 直接构建（Makefile 自动检测），或 Docker |
 | 运行 | QEMU `-fda Image` 或 `-cdrom kernel.iso`，内存 **16M**（内核页表恒等映射 16MB）；MINIX 测试盘 `make minix.img` + `-hda minix.img` |
-| 自动化 | `scripts/qemu-test.py` 无头驱动（串口文本 + sendkey，含大写与 `\| < > ( ) & *` 等需要 shift 的键；`--mem` 缩小客户机内存以制造压力；`--type-delay` 调打字速度；`--min-wait` 让需要观察周期性事件的用例不被“输出静止”提前收尾），`scripts/regress.sh` **22 个场景**（`make test`；`make test-fast` / `TEST_SKIP_HEAVY=1` 跳过 autosync/oom/evict 三个重场景，CI 的 PR 跑快集），`scripts/ppm2png.py` 转截图 |
+| 自动化 | `scripts/qemu-test.py` 无头驱动（串口文本 + sendkey，含大写与 `\| < > ( ) & *` 等需要 shift 的键；`--mem` 缩小客户机内存以制造压力；`--type-delay` 调打字速度；`--min-wait` 让需要观察周期性事件的用例不被“输出静止”提前收尾），`scripts/regress.sh` **23 个场景**（`make test`；`make test-fast` / `TEST_SKIP_HEAVY=1` 跳过 autosync/oom/evict 三个重场景，CI 的 PR 跑快集），`scripts/ppm2png.py` 转截图 |
 | 回归耗时 | 全集在本机容器内（TCG，无 KVM，与 CI 同模式）实测 **约 10.5 分钟**，而 CI 作业预算 30 分钟（含 apt/构建/静态检查）。时间几乎都花在 harness 按键上（每字符 `TEST_TYPE_DELAY` 默认 0.5 秒）——**不要靠压低它省时间**：低于 ~0.2 秒实测会丢键（8042 只有一个字节的输出缓冲，guest 跟不上就整条命令丢掉），所以拆成快集/全集而不是压速度 |
 | 静态校验（无需编译器） | `make check` = `check-layout` + `check-docs` + `check-docs-selftest`。`scripts/check-layout.py`：内存地图有序/不重叠、用户区必须整体落在一个页目录项内、`memlayout.inc` 与 `memlayout.h` 一致、缓存装得进窗口、**用户区地址没有被硬编码到布局头之外**，已构建 `kernel/system` 时还校验链接期 `_end` 未越界。`scripts/check-docs.py`：文档里的旧地址/旧宏必须带历史标注、`0x08xxxxxx` 必须是布局常量、场景数必须等于 `regress.sh` 实际条数、`-m` 参数必须与测试驱动一致 |
 

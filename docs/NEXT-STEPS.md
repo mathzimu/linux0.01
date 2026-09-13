@@ -189,6 +189,25 @@ OOM 杀进程。而且 `execve` 仍然是**预先**把整个镜像拷进新页�
 私有堆，子进程触碰完用管道屏障驻留造成真实峰值，父进程随后校验自己的数据再杀掉它们。
 断言 6 个子进程都活着、PASS、退出码 0——没有回收时这里会 OOM 杀进程，这三条都不会出现。
 
+## B2' — 信号投递时机：中断返回路径 ✅ 已完成
+
+**动因**：`do_signal` 只在 `ret_from_sys_call`（系统调用返回）被调用。于是**再也不进内核的
+进程杀不掉**：纯计算循环收不到 SIGKILL，`alarm` 也不会响。这不是理论问题——B3 的内存压力
+测试正是被它卡住的：卡在"纯内存写"缺页循环里的子进程，`kill` 和 `alarm` 都得等它下次做
+系统调用才生效（当时只能改测试绕开）。
+
+| 项 | 内容 |
+|----|------|
+| 改动 | `boot/head.s` 的 `timer_interrupt` 在 `call do_timer` 之后、`popal` 之前，把中断帧指针交给新函数；`kernel/process.c` 的 `do_signal_from_intr()` 负责适配 |
+| 为什么要"适配" | 两个入口的帧**顺序不同**：`system_call` 按自定义顺序压栈（ebx 在最低地址），`timer_interrupt` 用 `pushal`（edi 在最低地址）。适配器把中断帧拷进一个"规范化"的 16 字缓冲（布局与 syscall 帧一致），交给 `do_signal()`，再把可能被改写的两个字段（eip、用户 esp）写回 |
+| 安全性 | 只对 `cs & 3 == 3`（Ring3 上下文）投递；Ring0 中断帧没有 ss/esp，读了就是垃圾。定时中断里做 `sys_exit`/`schedule` 在本内核本来就是既有行为（`do_timer` 也会切任务） |
+| 效果 | 最坏一个 tick（10ms）送达。Linux 正是这么做的（`do_signal` 同时挂在 `ret_from_intr` 与 `ret_from_sys_call` 上） |
+| 回归 | 场景 23 `spinkill`（`user/spintest.c`）：`alarm(1)` 之后进入**不含任何系统调用**的死循环，必须约 1 秒后以 142（128+SIGALRM）退出。**反向验证过**：把补丁 stash 掉重跑，进程永远转下去、连 `exit_code` 都不出现 |
+| 顺带 | `user/evicttest.c` 里那条"本内核只在系统调用返回时投递信号"的注释同步更新；它循环里的周期性 `times()` 保留（让长循环更早可中断），但不再是"能不能被杀掉"的前提 |
+
+**下一步的自然延伸**：`sigaction`/`sigprocmask`/`sigsuspend`（处理器运行期间屏蔽自身、
+可重启的系统调用等），以及把投递点也补到缺页返回路径上（现在靠 tick 兜底，最坏 10ms 延迟）。
+
 
 ---
 
@@ -291,7 +310,7 @@ make Image                # 引导镜像
 # 运行/验证
 qemu-system-i386 -fda Image -hda minix.img -m 16M -boot a
 python3 scripts/qemu-test.py --image Image --hda minix.img --keys $'cmd\n'
-make test                   # 一键回归（scripts/regress.sh，22 个场景断言）
+make test                   # 一键回归（scripts/regress.sh，23 个场景断言）
 make check                  # 静态校验：内存地图 + 文档一致性 + lint 反向自测
 make check-layout           # 只校验内存地图（含 _end 未越界）
 make check-docs             # 只校验文档里引用的布局常量/场景数与源码一致

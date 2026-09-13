@@ -158,6 +158,20 @@ timer_interrupt:
     mov $0x20, %al
     outb %al, $0x20
     call do_timer
+
+    /* Deliver pending signals to the interrupted task.  Without this, a
+       process that never makes a system call (a compute loop, or a child
+       stuck in a page-fault loop) could not be killed and would never see
+       its alarm: ret_from_sys_call only runs on the syscall path.  %esp
+       points at the interrupt frame, which do_signal_from_intr() adapts to
+       the layout do_signal() expects.  It may switch away for good (a
+       fatal default action calls sys_exit), which is fine here: the rest
+       of this stub only runs if the task is ever resumed. */
+    movl %esp, %eax
+    pushl %eax
+    call do_signal_from_intr
+    addl $4, %esp
+
     popal
     pop %gs
     pop %fs
