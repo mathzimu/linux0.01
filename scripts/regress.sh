@@ -21,6 +21,7 @@ run_case() {
     local name="$1" prep="$2" keys="$3"
     shift 3
     local out
+    if is_heavy_skipped "$name"; then return 0; fi
     if ! eval "$prep" >/dev/null 2>&1; then
         echo "FAIL [$name]  setup failed: $prep"
         FAIL=$((FAIL+1)); return 1
@@ -30,6 +31,7 @@ run_case() {
              --tail "${QEMU_TAIL:-${TEST_TAIL:-1.5}}" \
              --min-wait "${QEMU_MIN_WAIT:-0}" \
              --mem "${QEMU_MEM:-16M}" \
+             --type-delay "${TEST_TYPE_DELAY:-0.5}" \
              --extra "${TEST_EXTRA:-}" \
              --keys "$keys" 2>/dev/null)
     printf '%s' "$out" > "$LOGDIR/$name.serial"
@@ -54,6 +56,7 @@ run_case2() {
     local name="$1" prep="$2" keys1="$3" minwait="$4" keys2="$5"
     shift 5
     local out
+    if is_heavy_skipped "$name"; then return 0; fi
     if ! eval "$prep" >/dev/null 2>&1; then
         echo "FAIL [$name]  setup failed: $prep"
         FAIL=$((FAIL+1)); return 1
@@ -61,12 +64,14 @@ run_case2() {
     out=$(python3 scripts/qemu-test.py --image Image --hda minix.img \
              --hold "${TEST_HOLD:-1.2}" --tail "${TEST_TAIL:-1.5}" \
              --mem "${QEMU_MEM:-16M}" \
+             --type-delay "${TEST_TYPE_DELAY:-0.5}" \
              --min-wait "$minwait" --keys "$keys1" 2>/dev/null)
     printf '%s' "$out" > "$LOGDIR/$name.1.serial"
     out="$out
 $(python3 scripts/qemu-test.py --image Image --hda minix.img \
              --hold "${TEST_HOLD:-1.2}" --tail "${TEST_TAIL:-1.5}" \
              --mem "${QEMU_MEM:-16M}" \
+             --type-delay "${TEST_TYPE_DELAY:-0.5}" \
              --keys "$keys2" 2>/dev/null)"
     printf '%s' "$out" > "$LOGDIR/$name.serial"
     for needle in "$@"; do
@@ -80,6 +85,24 @@ $(python3 scripts/qemu-test.py --image Image --hda minix.img \
     done
     echo "PASS [$name]"
     PASS=$((PASS+1))
+}
+
+# 重场景开关：TEST_SKIP_HEAVY=1 时跳过最慢的几个（内存压力、双阶段等待），
+# 给 PR 用快集；推送到 main 时跑全集。全集在本机（Docker，同样是 TCG 无 KVM）
+# 实测约 10.5 分钟，而 CI 作业超时是 20 分钟——大部分时间其实花在"敲键盘"上
+# （harness 每字符默认等 TEST_TYPE_DELAY=0.5 秒）。不要靠压低打字速度省时间：
+# 低于 ~0.2 秒实测会丢键（8042 只有一字节缓冲，guest 跟不上就丢整条命令），
+# 所以宁可拆成两集。
+HEAVY_CASES=" autosync oom evict "
+
+is_heavy_skipped() {
+    if [ "${TEST_SKIP_HEAVY:-0}" != "1" ]; then
+        return 1
+    fi
+    case " $HEAVY_CASES " in
+        *" $1 "*) echo "SKIP [$1] (heavy; TEST_SKIP_HEAVY=1)"; return 0 ;;
+    esac
+    return 1
 }
 
 BASE='rm -f minix.img'
@@ -164,7 +187,6 @@ run_case usersh "$SH_PREP" 'exec /bin/sh\nhello a b\nexit\n' \
 run_case2 autosync "$BASE && make minix.img" 'touch /syncmark\n' 8 'ls\n' \
     'syncmark' \
     'sync:'
-
 # 场景 16: 写时复制（M3）—— fork 后子进程的写必须对父进程不可见
 #   M1/M2 时子进程与父进程共享代码段/堆，子进程写进去的值父进程直接看得见；
 #   现在两侧共享只读页，首次写各自复制。父进程四个变量的值必须原封不动。

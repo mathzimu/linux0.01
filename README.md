@@ -336,7 +336,8 @@ exec: child 1 exit_code=7
 **一键回归**（22 个场景：exec / 管道 / chdir / 硬链接 / fork-waitpid / 信号 / 系统调用 / 内存隔离 / 目录扩容 / 基础应用 / 堆与缓存不重叠 / 启动自检 / 自定义信号处理器 / **Ring3 shell** / **定时回写** / **写时复制** / **按需调页** / **内存耗尽** / **文件权限** / **shell 管道与重定向** / **中断驱动磁盘** / **内存压力下的页回收**）：
 
 ```bash
-make test                    # 等价于 scripts/regress.sh
+make test                    # 等价于 scripts/regress.sh（22 个场景，TCG 下约 10.5 分钟）
+make test-fast               # 快集：跳过 autosync/oom/evict 三个重场景（CI 的 PR 跑这个）
 ```
 
 **静态校验**（纯 Python，不需要编译器，CI 里在构建之前先跑）：

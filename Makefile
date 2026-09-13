@@ -173,8 +173,15 @@ minix.img: tools/mkminix user/hello.elf
 
 # One-shot regression suite (see scripts/regress.sh): builds a clean
 # MINIX disk per scenario, boots QEMU, and asserts the serial output.
+# The full run takes ~10 minutes under TCG (no KVM) on a dev machine -
+# most of it spent typing keys at the harness's safe 0.5s/character - so
+# `test-fast` skips the three heavy cases (autosync, oom, evict) for PR
+# runs.  See scripts/regress.sh for TEST_SKIP_HEAVY / TEST_TYPE_DELAY.
 test: Image
 	scripts/regress.sh
+
+test-fast: Image
+	TEST_SKIP_HEAVY=1 scripts/regress.sh
 
 # Static memory-map verification.  Needs no compiler, so it can run
 # before (or without) a build; see scripts/check-layout.py.
@@ -231,4 +238,4 @@ run-cd: kernel.iso
 debug: Image
 	qemu-system-i386 -fda Image -m 16M -boot a -s -S
 
-.PHONY: all clean run run-cd debug iso docker-build test
+.PHONY: all clean run run-cd debug iso docker-build test test-fast

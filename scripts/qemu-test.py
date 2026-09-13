@@ -71,7 +71,6 @@ def type_text(sock, text, delay=0.5):
         hmp(sock, 'sendkey %s' % SENDKEY[ch], wait=0.05)
         time.sleep(delay)
 
-
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--image', help='floppy image (Image)')
@@ -92,6 +91,13 @@ def main():
     ap.add_argument('--mem', default='16M',
                     help='guest RAM; 4M makes memory pressure easy to reach '
                          '(page-reclamation tests)')
+    ap.add_argument('--type-delay', type=float, default=0.5,
+                    help='seconds between keystrokes.  This dominates the '
+                         'runtime of the whole suite (a 20-character command '
+                         'costs 11s at the default), so it is worth lowering: '
+                         'the console drains the 8042 buffer on every IRQ, so '
+                         'faster typing is safe as long as nothing is dropped. '
+                         'regress.sh passes TEST_TYPE_DELAY.')
     args = ap.parse_args()
 
     mon = args.out + '.mon'
@@ -138,7 +144,7 @@ def main():
             # accept literal "\n" (from plain single-quoted CLI args) as well
             # as an actual newline (bash $'...\n') — unify both
             keys = args.keys.replace('\\n', '\n')
-            type_text(sock, keys)
+            type_text(sock, keys, delay=args.type_delay)
             # Instead of a fixed wait, poll the serial capture until it stops
             # growing (output settled).  This is much more robust when QEMU
             # runs under TCG (no KVM, as on CI) where commands are slower.

@@ -8,7 +8,11 @@ on:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # The full suite takes ~10 minutes under TCG (no KVM) on a dev
+    # machine, and this budget also has to cover apt-get, the build and
+    # the static checks.  Keep real headroom: a timeout here is a flaky
+    # red build, not a real failure.
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -46,9 +50,14 @@ jobs:
       - name: Run regression suite (make test)
         # Without KVM the virtual CPU runs under TCG, so give the
         # key-injection / serial-capture windows more slack than locally.
+        # Pull requests run the fast subset: the three heavy cases
+        # (autosync / oom / evict) need multi-second waits and real memory
+        # pressure, and together they are most of the suite's runtime.
+        # Pushes to main run everything.
         env:
           TEST_HOLD: "2"
           TEST_TAIL: "4"
+          TEST_SKIP_HEAVY: ${{ github.event_name == 'pull_request' && '1' || '0' }}
         run: make test
 
       - name: Upload serial logs on failure
