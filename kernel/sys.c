@@ -99,7 +99,12 @@ long sys_read(unsigned int fd, char *buf, unsigned long count)
                     schedule();
                 tty_table[0].read_waiter = NULL;
                 current->state = TASK_RUNNING;
-                continue;  // Don't i--, just retry
+                /* Retry this pass.  "continue" alone is not enough: a
+                   for-loop still runs its i++ step, so the loop would end
+                   with i == count and return 1 having read nothing (the
+                   caller's buffer keeps whatever it held). */
+                i--;
+                continue;
             }
             c = tty_table[0].read_buf[tty_table[0].read_tail];
             tty_table[0].read_tail = (tty_table[0].read_tail + 1) % TTY_BUF_SIZE;
