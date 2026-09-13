@@ -16,8 +16,8 @@ case "$NAME" in
     rm -f minix.img && make prog NAME=evicttest >/dev/null 2>&1
     ;;
   oom)
-    MEM=16M
-    MINWAIT=0
+    MEM=4M
+    MINWAIT=45
     KEYS='exec /bin/oomtest\nls\n'
     GREP='oomtest:|out of memory|hello.txt'
     rm -f minix.img && make prog NAME=oomtest >/dev/null 2>&1

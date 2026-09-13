@@ -148,7 +148,11 @@ def main():
             # Instead of a fixed wait, poll the serial capture until it stops
             # growing (output settled).  This is much more robust when QEMU
             # runs under TCG (no KVM, as on CI) where commands are slower.
-            settle_window = max(args.tail, args.min_wait + 3.0, 10)
+            # The floor used to be 10s, which was too tight: a scenario whose
+            # workload keeps printing for longer than that got cut off on a
+            # slower runner (CI's oom case did exactly that).  Cases that
+            # need a known-long window pass --min-wait.
+            settle_window = max(args.tail, args.min_wait + 3.0, 20)
             last = 0
             if os.path.exists(serial):
                 last = os.path.getsize(serial)

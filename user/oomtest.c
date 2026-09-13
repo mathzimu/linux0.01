@@ -7,13 +7,19 @@
  * pages and pipes, so exhaustion is expected: the faulting task is killed
  * (its parent can reap it) and fork() reports failure.  The kernel itself
  * must stay alive — this program forks children that each hold on to a
- * few hundred private pages until the 16MB pool is gone, then reports.
+ * few hundred private pages until the pool is gone, then reports.
+ *
+ * It runs on a small machine on purpose: the regression scenario boots
+ * with 4MB (~695 free frames), so six children holding 768KB each already
+ * overflow it.  The earlier version needed forty children on a 16MB
+ * machine and took tens of seconds — long enough that CI's settle window
+ * cut the run off, which is a test bug, not a kernel bug.
  */
 #include "lib.h"
 
 #define KID_BYTES (768 * 1024)
-#define MAX_KIDS  40
-#define MAX_CHUNKS 64
+#define MAX_KIDS  6
+#define MAX_CHUNKS 8
 
 int main(void)
 {

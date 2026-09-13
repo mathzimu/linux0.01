@@ -206,11 +206,15 @@ run_case demand "$BASE && make prog NAME=demandtest" \
     'COW breaks'
 
 # 场景 18: 内存耗尽（M3/B3）—— 分配不到页是正常情况，不是内核 panic
-#   40 个子进程各要 768KB **不可回收**的私有脏页（写 0xAA；写成 0 会被 B3 的
-#   回收器当零页收走，见场景 22），合计 30MB，16MB 的机器必然装不下。缺页处理
-#   打印 OOM 并只杀肇事进程：子进程成批倒下，父进程跑完全程（done）并返回 0，
-#   内核与文件系统照常工作（后面的 ls 能列出 hello.txt）。
-run_case oom "$BASE && make prog NAME=oomtest" 'exec /bin/oomtest\nls\n' \
+#   用 4MB 机器（约 695 个空闲页）+ 6 个子进程各占 768KB **不可回收**的私有脏页
+#   （写 0xAA；写成 0 会被 B3 的回收器当零页收走，见场景 22），合计 4.6MB，
+#   必然装不下。缺页处理打印 OOM 并只杀肇事进程：子进程成批倒下，父进程跑完
+#   全程（done）并返回 0，内核与文件系统照常工作（后面的 ls 能列出 hello.txt）。
+#   ⚠️ 这条曾经跑在 16MB 上要 40 个子进程、耗时几十秒——CI 的 runner 更慢，
+#   总窗口一到就被截断，于是 CI 红而本地绿。现在改用小内存 + 显式窗口，
+#   工作量小了十几倍，任何 runner 上都稳。
+QEMU_MEM=4M QEMU_MIN_WAIT=45 run_case oom "$BASE && make prog NAME=oomtest" \
+    'exec /bin/oomtest\nls\n' \
     'children are holding memory' \
     'PAGE FAULT: out of memory for pid=' \
     'oomtest: done' \
