@@ -51,6 +51,12 @@ struct minix_dir_entry {
 #define S_IWUSR 00200
 #define S_IXUSR 00100
 
+/* Access masks for permission() — Linux 0.01's fs/namei.c uses the same
+ * numbering (MAY_EXEC 1, MAY_WRITE 2, MAY_READ 4). */
+#define MAY_EXEC  1
+#define MAY_WRITE 2
+#define MAY_READ  4
+
 struct buffer_head {
     char *b_data;
     unsigned long b_blocknr;
@@ -137,6 +143,13 @@ int write_pipe(struct m_inode *inode, char *buf, int count);
 int sys_pipe(unsigned long *fildes);
 void iput(struct m_inode *inode);
 struct m_inode *namei(const char *pathname);
+
+/* Permission checking (fs/namei.c).  The kernel used to store i_mode,
+ * i_uid and i_gid without ever consulting them: every task is uid 0 in
+ * the default setup, so "who may do what" simply never came up.  These
+ * are the Linux 0.01 rules, including root's blanket override. */
+int permission(struct m_inode *inode, int mask);
+int suser(void);
 void sync_inodes(int dev);
 int dir_lookup(struct m_inode *dir, const char *name, int namelen,
                unsigned short *ino_out);

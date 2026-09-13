@@ -70,7 +70,8 @@
    stub 项与 0.01 自身的 -ENOSYS 一致）
 5. **MINIX FS 已打通读写**：挂 `minix.img`（`make minix.img`）后 `ls`/`cat` 可用，
    `wtest`+`sync` 演示写回；支持目录/文件创建删除、**硬链接（ln）、重命名（mv）、
-   chdir 相对路径、chroot、管道（pipe）**
+   chdir 相对路径、chroot、管道（pipe）**；**权限模型**照 Linux 0.01 的
+   owner/group/other + root 规则实现（目录的 x 位控制能否查找，新建文件归属创建者）
 6. **修复过的内核级 bug**（读源码时留意注释）：schedule 预改 current 导致 ljmp 被跳过；
    `init_task.tss.cr3=0` 导致切回父进程 CR3 归零；exit 释放自身任务页的 use-after-free；
    `sys_open` 从 fd 0 分配撞上 stdin；getblk 复用缓冲未摘旧哈希链的链环死循环；

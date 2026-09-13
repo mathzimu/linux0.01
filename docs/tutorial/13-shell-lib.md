@@ -66,8 +66,8 @@ while(1):
 
 ## 6. 内核 `lib/malloc.c`
 
-- bump：从 `KERNEL_HEAP_START`(0x2B000) 向上
-- 上界 `KERNEL_HEAP_END`(0x2D000)（旧上界写成 `memory_end-0x200000`，会伸进页分配器池）
+- bump：从 `KERNEL_HEAP_START`(0x30000) 向上
+- 上界 `KERNEL_HEAP_END`(0x40000)（旧上界写成 `memory_end-0x200000`，会伸进页分配器池）
 - **无 free**；与页分配器独立（用户态 malloc 在 `user/lib.c`，带 free）
 
 ## 6. `lib/close.c`

@@ -51,6 +51,49 @@ static int name_eq(const char *de_name, const char *name, int namelen)
     return 1;
 }
 
+/* ------------------------------------------------------------------
+ * Permissions (Linux 0.01 fs/namei.c, same rules and same masks)
+ *
+ * Until now i_mode/i_uid/i_gid were stored but never consulted: the
+ * only task in the system was uid 0, so "who may do what" never came
+ * up.  The moment a program calls setuid() to drop privileges that
+ * stops being true, and the filesystem has to answer the question.
+ *
+ *   - euid == file owner        -> the owner triad (bits 6..8)
+ *   - egid == file group        -> the group triad (bits 3..5)
+ *   - otherwise                 -> the other triad (bits 0..2)
+ *   - root (euid 0) overrides everything, as in 0.01
+ *   - a deleted inode (no links) is inaccessible even to root: its data
+ *     zones are already gone
+ * ------------------------------------------------------------------ */
+
+int suser(void)
+{
+    return current->euid == 0;
+}
+
+int permission(struct m_inode *inode, int mask)
+{
+    int mode;
+
+    if (!inode)
+        return 0;
+
+    mode = inode->i_mode;
+
+    if (inode->i_dev && !inode->i_nlinks)
+        return 0;                       /* unlinked: nobody, not even root */
+
+    if (current->euid == inode->i_uid)
+        mode >>= 6;
+    else if (current->egid == inode->i_gid)
+        mode >>= 3;
+
+    if ((mode & mask & 7) == mask)
+        return 1;
+    return suser();
+}
+
 static int find_entry(struct m_inode *dir, const char *name, int namelen,
                       unsigned short *res_inode)
 {
@@ -81,7 +124,12 @@ static int find_entry(struct m_inode *dir, const char *name, int namelen,
    current->root if chroot() was called (else the fs root); relative
    paths ("a/b", "b") start at current->pwd.  The empty string means
    the current directory.  Returns an inode with a held reference
-   (caller must iput it) or NULL. */
+   (caller must iput it) or NULL.
+
+   Every directory that is *traversed* (not the final component) must be
+   executable by the caller: that is what makes a directory's x bit mean
+   "you may look inside", and it is checked here so that every syscall
+   gets it for free, exactly as 0.01's dir_namei() did. */
 struct m_inode *namei(const char *pathname)
 {
     struct m_inode *inode;
@@ -126,7 +174,11 @@ struct m_inode *namei(const char *pathname)
         if (namelen == 1 && name[0] == '.') {
             if (*p == '\0')
                 return inode;          /* "." -> this directory */
-            continue;                  /* "./x" keeps walking from here */
+            if (!permission(inode, MAY_EXEC)) {
+                iput(inode);           /* "./x" keeps walking from here */
+                return NULL;
+            }
+            continue;
         }
 
         if (find_entry(inode, name, namelen, &ino) < 0) {
@@ -138,6 +190,12 @@ struct m_inode *namei(const char *pathname)
         if (!inode) return NULL;
 
         if (*p == '\0') return inode;
+
+        /* not the last component: it must be a usable directory */
+        if (!(inode->i_mode & S_IFDIR) || !permission(inode, MAY_EXEC)) {
+            iput(inode);
+            return NULL;
+        }
     }
 
     return inode;

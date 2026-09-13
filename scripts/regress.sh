@@ -184,6 +184,18 @@ run_case oom "$BASE && make prog NAME=oomtest" 'exec /bin/oomtest\nls\n' \
     'PAGE FAULT: out of memory for pid=' \
     'hello.txt'
 
+# 场景 19: 文件权限模型（M4）—— mode/uid/gid 终于会被检查
+#   i_mode/i_uid/i_gid 存了很久却从没被用过：系统里只有 uid 0，"谁能做什么"
+#   这个问题不出现。permtest 用两个 setuid(1000) 的子进程验证两个方向：
+#   越权操作全部被拒、root 放宽权限后同样的操作又能成功，且自己创建的文件
+#   属于自己（uid=1000）。任一方向反了都会打印 FAILED 并让最终断言失败。
+run_case perm "$BASE && make prog NAME=permtest" 'exec /bin/permtest\n' \
+    'permtest: --- phase A: unprivileged child (should be denied) ---' \
+    'permtest:   denied  open(secret, O_RDONLY)           ok' \
+    'permtest:   denied  creat(/ptest/newfile)            ok' \
+    'permtest: child B: /ptest/owned uid=1000 (want 1000)' \
+    'permtest: PASS (permissions enforced in both directions)'
+
 echo
 echo "================================"
 echo "  $PASS passed, $FAIL failed"

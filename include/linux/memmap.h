@@ -30,17 +30,23 @@
  *
  * The real figure is the link-time _end, which mem_check() and
  * scripts/check-layout.py both verify against this limit.  Note how much
- * bigger the bss is than the linked binary: the image on disk is ~80KB,
- * while _end lands near 0x29E68 (~168KB) because of the static tables
+ * bigger the bss is than the linked binary: the image on disk is ~93KB,
+ * while _end lands near 0x2Axxx (~170KB) because of the static tables
  * (page allocator bitmap, inode/file tables, tty buffers).  Sizing this
  * from the binary alone is exactly the mistake this constant used to
- * contain. */
-#define KERNEL_IMAGE_LIMIT  0x002B000
+ * contain.
+ *
+ * Raised from 0x2B000 to 0x30000 when the permission model landed: the
+ * check had been down to ~4KB of headroom, which is not enough to add a
+ * feature without tripping over it.  Everything below KERNEL_LOW_MEM is
+ * free for the taking — the heap just has to stay under 1MB, where the
+ * page tables and the frame pool begin. */
+#define KERNEL_IMAGE_LIMIT  0x0030000
 
 /* Cheap non-page kernel heap (lib/malloc.c): grows up from
  * KERNEL_HEAP_START, must stop before the rest of the low 1MB. */
-#define KERNEL_HEAP_START   0x002B000
-#define KERNEL_HEAP_END     0x002D000
+#define KERNEL_HEAP_START   0x0030000
+#define KERNEL_HEAP_END     0x0040000
 
 /* Page-allocator pool: task pages, pipe pages and — since M3 — every
  * user page.  It is simply "whatever mem_map still reports as free":

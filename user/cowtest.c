@@ -19,7 +19,8 @@ static int bss_counter;                 /* .bss: another one */
 
 int main(void)
 {
-    int pid, status;
+    int pid;
+    unsigned long status;
     int *heap = (int *)malloc(sizeof(int));
     int stack_marker = 7;
 

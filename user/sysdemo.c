@@ -11,7 +11,8 @@ int main(void)
     struct stat st;
     struct utsname uts;
     struct tms tm;
-    int fd;
+    unsigned long status;
+    int fd, pid;
 
     if (stat("/hello.txt", (unsigned long *)&st) == 0)
         printf("stat /hello.txt: ino=%d size=%d mode=0%o nlink=%d\n",
@@ -25,10 +26,24 @@ int main(void)
 
     printf("uid=%d euid=%d gid=%d egid=%d\n",
            getuid(), geteuid(), getgid(), getegid());
-    if (setuid(7) == 0)
-        printf("setuid(7) ok -> uid=%d\n", getuid());
-    if (setuid(0) == 0)
-        printf("setuid(0) ok -> uid=%d\n", getuid());
+
+    /* Dropping privileges is a one-way trip: setuid(7) while euid==0 sets
+       uid=euid=suid=7, so the setuid(0) after it must be refused.  Do the
+       experiment in a child so this process is still root for the
+       chmod/chown at the end (which the permission model now enforces:
+       only the owner or root may change a file's mode). */
+    pid = fork();
+    if (pid == 0) {
+        if (setuid(7) == 0)
+            printf("child: setuid(7) ok -> uid=%d\n", getuid());
+        if (setuid(0) == 0)
+            printf("child: setuid(0) ok -> uid=%d\n", getuid());
+        else
+            printf("child: setuid(0) refused (no longer root) -> uid=%d\n",
+                   getuid());
+        exit(0);
+    }
+    waitpid(pid, &status, 0);
 
     printf("umask(022) old=0%o\n", umask(022));
 
@@ -60,8 +75,15 @@ int main(void)
         close(fd);
     }
 
-    chmod("/hello.txt", 0600);
-    chown("/hello.txt", 1, 2);
-    printf("chmod/chown ok\n");
+    /* Permission model (M4): as root these succeed; a non-owner would get
+       -1, which is what user/permtest.c verifies in both directions. */
+    if (chmod("/hello.txt", 0644) == 0)
+        printf("chmod /hello.txt 0644 ok\n");
+    else
+        printf("chmod /hello.txt failed\n");
+    if (chown("/hello.txt", 0, 0) == 0)
+        printf("chown /hello.txt 0:0 ok\n");
+    else
+        printf("chown /hello.txt failed\n");
     return 0;
 }

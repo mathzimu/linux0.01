@@ -98,13 +98,31 @@ execve，子进程就会把新镜像写进 0x200000（M3 前的固定物理地�
 **M3 让 M2-2 的遗留闭环**：Ring3 `/bin/sh` 现在可以真正 fork+execve 子程序
 （回归场景 14 `usersh` 默认跑），因为子进程的 execve 不再写进父进程正在执行的物理页。
 
+## M4 — 文件权限模型 + 映像余量 ✅ 已完成
+
+**动因**：`i_mode`/`i_uid`/`i_gid` 从第一天就存在，`chmod`/`chown`/`setuid` 也都能改它们，
+但**从来没有一处代码读过**——`sys_access()` 的注释直说了「Simplest permission model:
+existence check (all tasks are uid 0)」。只要系统里只有 uid 0，这个问题就不出现；
+一旦有程序 `setuid()` 降权（`user/sysdemo.c` 早就在做），文件系统就必须回答「谁能做什么」。
+
+| 项 | 内容 |
+|----|------|
+| 判定 | `permission(inode, mask)` + `suser()`（`fs/namei.c`，规则照搬 Linux 0.01）：euid==i_uid 取 owner 三位、egid==i_gid 取 group 三位、否则 other 三位；root 覆盖一切；**已删除的 inode（nlinks==0）连 root 都不给**。掩码 `MAY_EXEC/WRITE/READ` = 1/2/4，与 0.01 相同 |
+| 检查点 | `open`（按 O_RDONLY/O_WRONLY/O_RDWR/O_TRUNC 要 r 或 w）、`execve`（要 x）、`access`（真查 R/W/X，`F_OK` 仍只查存在）、`chdir`（目录要 x）、`creat`/`mkdir`/`unlink`/`rmdir`/`link`/`rename`（**父目录要 w**）、`chmod`（仅 owner 或 root）、`chown`（仅 root）、`utime`（owner 或可写） |
+| 路径遍历 | `namei()` 里每一级**被穿过**的目录都要 x（0.01 的 `dir_namei` 语义）：0700 目录对别人等于不存在，`stat`/`open`/`chdir` 全部 `-1`，连文件名都探测不到 |
+| 归属 | 新建文件/目录的 `i_uid/i_gid` 取 `current->euid/egid`（旧代码写死 0，等于"所有文件都是 root 的"） |
+| 回归 | 场景 19 `perm`（`user/permtest.c`）：两个 `setuid(1000)` 子进程，A 阶段 16 项越权操作必须全被拒、B 阶段 root 放宽后 11 项必须成功，且自己建的文件 uid==1000；任一方向反了都会打印 `*** FAILED` 并让断言失败 |
+| 顺带（D） | `KERNEL_IMAGE_LIMIT`/`KERNEL_HEAP_START` 从 `0x2B000` 抬到 `0x30000`（`_end` 0x29E68，余量从 4.5KB 变成 25KB）——加功能前不必再和天花板搏斗 |
+| 兼容性调整 | `user/sysdemo.c` 原来在主进程里 `setuid(7)` 然后 `setuid(0)`：降权是**单向**的，第二句本来就失败，只是以前没人检查权限所以看不出来。现在把 uid 实验放进 fork 出的子进程，父进程继续以 root 演示 `chmod/chown` |
+
 
 ---
 
 ## 当前状态（一句话）
 
 **67 个系统调用（编号与 1991 Linux 0.01 完全一致）**、23 条 Shell 命令的教学内核：
-进程生命周期完整（fork/execve/waitpid/信号/管道）、MINIX FS 增删改查 + 硬链接/重命名、
+进程生命周期完整（fork/execve/waitpid/信号/管道）、MINIX FS 增删改查 + 硬链接/重命名 +
+**权限模型**、
 Ring3 用户态 + 编程工具链（`make prog NAME=xxx` → `exec /xxx`）、内存隔离、chdir。
 
 ## Linux 0.01 功能对齐（`39f1b72`→`5426b8b`）
@@ -199,7 +217,7 @@ make Image                # 引导镜像
 # 运行/验证
 qemu-system-i386 -fda Image -hda minix.img -m 16M -boot a
 python3 scripts/qemu-test.py --image Image --hda minix.img --keys $'cmd\n'
-make test                   # 一键回归（scripts/regress.sh，18 个场景断言）
+make test                   # 一键回归（scripts/regress.sh，19 个场景断言）
 make check                  # 静态校验：内存地图 + 文档一致性 + lint 反向自测
 make check-layout           # 只校验内存地图（含 _end 未越界）
 make check-docs             # 只校验文档里引用的布局常量/场景数与源码一致

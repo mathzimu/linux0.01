@@ -26,7 +26,7 @@
 | 用户区（虚拟地址，每进程私有） | 窗口 `[0x08000000,0x08400000)` = **一个页目录项**：程序镜像 `0x08000000`、堆 `0x08100000`、保护空洞 `0x08200000`、栈下界 `0x08300000`、栈顶 `0x083FF000`、尾页 `[0x083FF000,0x08400000)`（argc/argv/sigreturn stub） |
 | 缓冲区缓存 | 在 `BUFFER_CACHE_FLOOR`(0x350000) 与 `BUFFER_CACHE_TOP`(0x3F0000) 之间向下生长：运行期为 `[0x3ADC00,0x3F0000)`（256 × 1KB + 256 × 32B 头，约 265KB）。**缓存的条数由内存地图派生**（`include/linux/fs.h`），不再手工挑选 |
 | **已修复：缓存/堆重叠** | 旧值 `NR_BUFFERS=512` 把缓存放到 `~0x370000`，**正好压在用户堆上**：Ring0 无视 PTE 的 U/S 位，用户 malloc 的字节与文件系统块缓冲会是同一批物理页，写坏文件系统而毫无提示。M1 用静态断言 + 启动自检 + 回归场景 11（`user/bigalloc.c`）守住；M3 之后用户页来自页帧池，缓存页在 mem_map 里是 USED，**结构上不可能重叠** |
-| 内核堆 | `lib/malloc.c` 的 bump 分配器，区间 `[KERNEL_HEAP_START, KERNEL_HEAP_END)` = `[0x2B000,0x2D000)`；越界返回 NULL（此前上界写成 `memory_end-0x200000`，会伸进页分配器池） |
+| 内核堆 | `lib/malloc.c` 的 bump 分配器，区间 `[KERNEL_HEAP_START, KERNEL_HEAP_END)` = `[0x30000,0x40000)`；越界返回 NULL（此前上界写成 `memory_end-0x200000`，会伸进页分配器池）。M4 把映像上限从 `0x2B000` 抬到 `0x30000`——此前只剩 4.5KB 余量，加一个功能就会撞线 |
 | 页分配器 | `get_free_page()` 从 mem_map 顺序扫描第一个空闲页并清零；`mem_init()` 保留内核页表页、`buffer_init()` 保留缓存页、`mem_map` 自身保留；**没有硬上限**，耗尽时返回 0，缺页处理据此打印 OOM 并只杀肇事进程（回归场景 18） |
 | 剩余页池 | 16MB 下约 3700 页（`memstat` 可查）；任务页/管道页/所有用户页共用 |
 | COW / 按需调页 | **已实现**（M3）：用户页首次访问才分配（`do_no_page` 按区域校验后建页）；fork 让父子共享只读页并在 PTE 上打软件 COW 位，写缺页时 `un_wp_page` 复制。区域外的访问仍然杀进程 |
@@ -53,6 +53,7 @@
 | 缓冲 | `getblk` 复用前回写脏块、并从旧哈希链摘除（避免链环死循环）；`iget` 复用脏 inode 槽前先写盘；**定时回写已实现**（M2-3）：`do_timer` 置标志并唤醒专用回写任务（`kernel/sync.c`，占最后一个任务槽，保持用户 pid 从 1 开始），每 5 秒 `sync_dev()` 一次，只在真的写了块时打印 `sync: N block(s) written back`。缓存条数 256（见 §2：条数由内存地图派生，写死会压到用户堆） |
 | Shell ls/cat | **已实现**，走 open/read/close 系统调用；`wtest` 演示写路径 |
 | 文件创建 | **已实现**：`sys_open(O_CREAT)`/`sys_creat`（touch）/ `sys_mkdir` 含 `.`/`..` 项、inode/zone 位图、父目录项；**删除**：`sys_unlink`/`sys_rmdir`（空目录校验、zone 回收、父 nlinks 递减）；**硬链接** `sys_link`（nlinks++）、**重命名** `sys_rename`（跨目录同设备）、**chroot**、**chdir 相对路径**、`stat/fstat`、`chmod/chown`、`lseek`/`dup`/`dup2` 可用 |
+| 权限模型 | **已实现**（M4）：`permission(inode, mask)`（`fs/namei.c`，规则与 Linux 0.01 相同：owner/group/other 三段 + root 覆盖 + 已删除 inode 谁也不能访问）。检查点：`open`（按 O_RDONLY/O_WRONLY/O_TRUNC 要 r/w）、`execve`（要 x）、`access`（真正的 R/W/X 检查，不再只查存在）、`chdir`（目录要 x）、创建/删除/链接/改名（父目录要 w）、`chmod`（仅 owner 或 root）、`chown`（仅 root）、`utime`（owner 或可写）。**路径遍历**中每一级目录都要 x（0.01 的 `dir_namei` 语义），所以 0700 目录对别人等于不存在。新建文件的 `i_uid/i_gid` 取 `current->euid/egid` |
 | 管道 | **已实现**（`sys_pipe`，fs/pipe.c 移植 0.01）：单页环形缓冲、sleep_on 阻塞、写端关闭 → 读 EOF、无读者写 → SIGPIPE；缓冲 4KB，写满阻塞（无 O_NONBLOCK） |
 | 系统调用 | **67 个，编号 = Linux 0.01**；stub 返回 -1 的与 0.01 自身 -ENOSYS 一致（break/mount/umount/ptrace/stty/gtty/ftime/prof/acct/phys/lock/ioctl/mpx/ulimit/ustat） |
 
@@ -72,7 +73,7 @@
 | 目标 | i386 32-bit freestanding |
 | macOS | Homebrew `i686-elf-gcc` + `i686-elf-binutils` 直接构建（Makefile 自动检测），或 Docker |
 | 运行 | QEMU `-fda Image` 或 `-cdrom kernel.iso`，内存 **16M**（内核页表恒等映射 16MB）；MINIX 测试盘 `make minix.img` + `-hda minix.img` |
-| 自动化 | `scripts/qemu-test.py` 无头驱动（串口文本 + sendkey；`--min-wait` 让需要观察周期性事件的用例不会被“输出静止”提前收尾），`scripts/regress.sh` **18 个场景**（`make test`），`scripts/ppm2png.py` 转截图 |
+| 自动化 | `scripts/qemu-test.py` 无头驱动（串口文本 + sendkey；`--min-wait` 让需要观察周期性事件的用例不会被“输出静止”提前收尾），`scripts/regress.sh` **19 个场景**（`make test`），`scripts/ppm2png.py` 转截图 |
 | 静态校验（无需编译器） | `make check` = `check-layout` + `check-docs` + `check-docs-selftest`。`scripts/check-layout.py`：内存地图有序/不重叠、用户区必须整体落在一个页目录项内、`memlayout.inc` 与 `memlayout.h` 一致、缓存装得进窗口、**用户区地址没有被硬编码到布局头之外**，已构建 `kernel/system` 时还校验链接期 `_end` 未越界。`scripts/check-docs.py`：文档里的旧地址/旧宏必须带历史标注、`0x08xxxxxx` 必须是布局常量、场景数必须等于 `regress.sh` 实际条数、`-m` 参数必须与测试驱动一致 |
 
 ## 7. 与文档/设计稿的关系

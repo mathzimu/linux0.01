@@ -43,6 +43,12 @@ int sys_chdir(const char *filename)
         iput(inode);
         return -1;
     }
+    /* cd'ing into a directory requires the x bit: without it the
+       directory cannot be searched, so it cannot become the cwd. */
+    if (!permission(inode, MAY_EXEC)) {
+        iput(inode);
+        return -1;
+    }
     if (current->pwd)
         iput(current->pwd);
     current->pwd = inode;
@@ -169,6 +175,13 @@ int sys_open(const char *filename, int flag, int mode)
             iput(dir);
             return -1;
         }
+        /* Creating an entry modifies the directory, so it needs write
+           permission on it — this is what stops a user from creating
+           files in someone else's 0755 directory. */
+        if (!permission(dir, MAY_WRITE)) {
+            iput(dir);
+            return -1;
+        }
         namelen = (int)strlen(name);
         if (dir_lookup(dir, name, namelen, &ino) == 0) {
             inode = iget(dir->i_dev, ino);     /* already exists */
@@ -182,6 +195,8 @@ int sys_open(const char *filename, int flag, int mode)
             }
             mode &= 0777 & ~current->umask;
             inode->i_mode = (unsigned short)(mode | 0x8000);  /* S_IFREG */
+            inode->i_uid = current->euid;      /* the file belongs to its creator */
+            inode->i_gid = (unsigned char)current->egid;
             inode->i_dirt = 1;
             if (dir_add_entry(dir, name, namelen,
                               (unsigned short)inode->i_num) < 0) {
@@ -194,6 +209,24 @@ int sys_open(const char *filename, int flag, int mode)
         }
     }
     if (!inode) return -1;
+
+    /* Opening an existing file needs the matching triad bit: read for
+       O_RDONLY, write for O_WRONLY/O_RDWR.  O_TRUNC is a write. */
+    {
+        int mask = 0;
+
+        if ((flag & 3) == O_RDONLY)
+            mask |= MAY_READ;
+        if ((flag & 3) == O_WRONLY || (flag & 3) == O_RDWR)
+            mask |= MAY_WRITE;
+        if (flag & O_TRUNC)
+            mask |= MAY_WRITE;
+
+        if (mask && !permission(inode, mask)) {
+            iput(inode);
+            return -1;
+        }
+    }
 
     if ((flag & O_TRUNC) && !(inode->i_mode & 0x4000))
         truncate_inode(inode);                 /* empty the file */
@@ -348,6 +381,10 @@ int sys_mknod(const char *filename, int mode)
         iput(dir);
         return -1;
     }
+    if (!permission(dir, MAY_WRITE)) {      /* creating modifies the dir */
+        iput(dir);
+        return -1;
+    }
     if (dir_lookup(dir, name, namelen, &ino) == 0) {
         iput(dir);
         return -1;              /* already exists */
@@ -368,10 +405,10 @@ int sys_mknod(const char *filename, int mode)
     }
 
     inode->i_mode = mode;
-    inode->i_uid = 0;
+    inode->i_uid = current->euid;
     inode->i_size = 0;
     inode->i_mtime = 0;
-    inode->i_gid = 0;
+    inode->i_gid = (unsigned char)current->egid;
     inode->i_nlinks = 1;
     inode->i_dirt = 1;
 
@@ -399,6 +436,10 @@ int sys_mkdir(const char *dirname, int mode)
     if (!dir)
         return -1;
     if (!(dir->i_mode & S_IFDIR)) {
+        iput(dir);
+        return -1;
+    }
+    if (!permission(dir, MAY_WRITE)) {      /* creating modifies the dir */
         iput(dir);
         return -1;
     }
@@ -443,10 +484,10 @@ int sys_mkdir(const char *dirname, int mode)
 
     inode->i_zone[0] = block;
     inode->i_mode = (unsigned short)((mode & 0777) | 0x4000);  /* S_IFDIR */
-    inode->i_uid = 0;
+    inode->i_uid = current->euid;
     inode->i_size = 2 * sizeof(struct minix_dir_entry);
     inode->i_mtime = 0;
-    inode->i_gid = 0;
+    inode->i_gid = (unsigned char)current->egid;
     inode->i_nlinks = 2;
     inode->i_dirt = 1;
 
@@ -483,6 +524,10 @@ int sys_unlink(const char *filename)
     if (!dir)
         return -1;
     if (!(dir->i_mode & S_IFDIR)) {
+        iput(dir);
+        return -1;
+    }
+    if (!permission(dir, MAY_WRITE)) {      /* removing modifies the dir */
         iput(dir);
         return -1;
     }
@@ -537,6 +582,10 @@ int sys_rmdir(const char *dirname)
     if (!dir)
         return -1;
     if (!(dir->i_mode & S_IFDIR)) {
+        iput(dir);
+        return -1;
+    }
+    if (!permission(dir, MAY_WRITE)) {      /* removing modifies the dir */
         iput(dir);
         return -1;
     }
@@ -639,6 +688,11 @@ int sys_chmod(const char *filename, int mode)
 
     if (!inode)
         return -1;
+    /* Only the owner (or root) may change a file's mode. */
+    if (current->euid != inode->i_uid && !suser()) {
+        iput(inode);
+        return -1;
+    }
     inode->i_mode = (unsigned short)((inode->i_mode & 0xF000) | (mode & 0777));
     inode->i_dirt = 1;
     iput(inode);
@@ -651,6 +705,11 @@ int sys_chown(const char *filename, int uid, int gid)
 
     if (!inode)
         return -1;
+    /* Giving a file away is root's privilege only (POSIX). */
+    if (!suser()) {
+        iput(inode);
+        return -1;
+    }
     inode->i_uid = (unsigned short)uid;
     inode->i_gid = (unsigned char)gid;
     inode->i_dirt = 1;
@@ -658,15 +717,25 @@ int sys_chown(const char *filename, int uid, int gid)
     return 0;
 }
 
-/* Simplest permission model: existence check (all tasks are uid 0). */
+/* access(path, mode): mode is a bitmask of R_OK(4)/W_OK(2)/X_OK(1), or
+   F_OK(0) for "does it exist".  Same masks as permission() uses. */
 int sys_access(const char *filename, int mode)
 {
     struct m_inode *inode = namei(filename);
+    int mask;
+    int ok;
 
     if (!inode)
         return -1;
+
+    mask = 0;
+    if (mode & 4) mask |= MAY_READ;
+    if (mode & 2) mask |= MAY_WRITE;
+    if (mode & 1) mask |= MAY_EXEC;
+
+    ok = mask ? permission(inode, mask) : 1;
     iput(inode);
-    return 0;
+    return ok ? 0 : -1;
 }
 
 int sys_utime(const char *filename, unsigned long *times)
@@ -676,6 +745,11 @@ int sys_utime(const char *filename, unsigned long *times)
     (void)times;
     if (!inode)
         return -1;
+    /* Owner, or anyone allowed to write the file (Linux 0.01 rule). */
+    if (current->euid != inode->i_uid && !permission(inode, MAY_WRITE)) {
+        iput(inode);
+        return -1;
+    }
     inode->i_mtime = jiffies / HZ;
     inode->i_dirt = 1;
     iput(inode);
@@ -871,6 +945,11 @@ int sys_link(const char *oldname, const char *newname)
         iput(dir);
         return -1;
     }
+    if (!permission(dir, MAY_WRITE)) {      /* linking modifies the dir */
+        iput(oldinode);
+        iput(dir);
+        return -1;
+    }
     namelen = (int)strlen(name);
     if (dir_lookup(dir, name, namelen, &ino) == 0) {   /* target exists */
         iput(oldinode);
@@ -909,6 +988,12 @@ int sys_rename(const char *oldname, const char *newname)
     dir_old = namei(olddir);
     if (!dir_old)
         return -1;
+    /* Renaming writes both directories: it removes an entry from one and
+       (possibly) adds one to the other. */
+    if (!permission(dir_old, MAY_WRITE)) {
+        iput(dir_old);
+        return -1;
+    }
     if (dir_lookup(dir_old, oldbase, n1, &ino) < 0) {
         iput(dir_old);
         return -1;
@@ -926,6 +1011,12 @@ int sys_rename(const char *oldname, const char *newname)
         return -1;
     }
     if (dir_new != dir_old && dir_old->i_dev != dir_new->i_dev) {
+        iput(oldinode);
+        iput(dir_old);
+        iput(dir_new);
+        return -1;
+    }
+    if (dir_new != dir_old && !permission(dir_new, MAY_WRITE)) {
         iput(oldinode);
         iput(dir_old);
         iput(dir_new);
@@ -1063,6 +1154,14 @@ int sys_execve(const char *filename, char **argv, char **envp)
 
     fd = sys_open(filename, 0, 0);
     if (fd < 0) {
+        return -1;
+    }
+
+    /* Executing a file needs the x bit (the open above already enforced
+       the r bit; POSIX would let --x through, this kernel does not —
+       see docs/LIMITATIONS.md). */
+    if (current->filp[fd] && !permission(current->filp[fd]->f_inode, MAY_EXEC)) {
+        sys_close(fd);
         return -1;
     }
 
