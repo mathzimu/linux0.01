@@ -63,7 +63,7 @@
 |------|------|
 | 控制台 | VGA 文本 0xB8000；**作为 fd 0/1/2 出现在描述符表里**（`struct file tty_file`，`f_inode == NULL` 即"控制台"），所以 `dup2` 能把 stdout 换成文件或管道——重定向是靠这一点成立的，而不是靠 `sys_write` 里的硬编码分支 |
 | 键盘 | PS/2 扫描码 + Shift；IRQ 处理时**排空 8042 输出缓冲**（快速连击不丢键） |
-| 硬盘 | IDE PIO 读写；从 PIC 启动时 mask=0xFF，读写路径为轮询 |
+| 硬盘 | IDE PIO 读写；**中断驱动**（B2）：`hd_init()` 打开 IRQ14（从片掩码 0xFF→0xBF，此前整片屏蔽、`hd_interrupt_handler` 是死代码），发命令的任务 `sleep_on(&hd_wait)` 让出 CPU，由 IRQ14 唤醒；`jiffies` 截止时间 + 定时器保证"丢中断"只是超时而不是死机；开机阶段（`sti()` 之前）中断未开、`jiffies` 不走，此时退回有界轮询。因为任务会在驱动里睡眠，整次操作由 `hd_lock` 串行化。`memstat` 会打印累计 IRQ14 次数 |
 | 串口 | **COM1 已实现**：控制台输出镜像，供 `-serial file:` 无头测试捕获精确文本 |
 
 ## 6. 构建与运行
@@ -73,7 +73,7 @@
 | 目标 | i386 32-bit freestanding |
 | macOS | Homebrew `i686-elf-gcc` + `i686-elf-binutils` 直接构建（Makefile 自动检测），或 Docker |
 | 运行 | QEMU `-fda Image` 或 `-cdrom kernel.iso`，内存 **16M**（内核页表恒等映射 16MB）；MINIX 测试盘 `make minix.img` + `-hda minix.img` |
-| 自动化 | `scripts/qemu-test.py` 无头驱动（串口文本 + sendkey，含大写与 `\| < > ( ) & *` 等需要 shift 的键；`--min-wait` 让需要观察周期性事件的用例不会被“输出静止”提前收尾），`scripts/regress.sh` **20 个场景**（`make test`），`scripts/ppm2png.py` 转截图 |
+| 自动化 | `scripts/qemu-test.py` 无头驱动（串口文本 + sendkey，含大写与 `\| < > ( ) & *` 等需要 shift 的键；`--min-wait` 让需要观察周期性事件的用例不会被“输出静止”提前收尾），`scripts/regress.sh` **21 个场景**（`make test`），`scripts/ppm2png.py` 转截图 |
 | 静态校验（无需编译器） | `make check` = `check-layout` + `check-docs` + `check-docs-selftest`。`scripts/check-layout.py`：内存地图有序/不重叠、用户区必须整体落在一个页目录项内、`memlayout.inc` 与 `memlayout.h` 一致、缓存装得进窗口、**用户区地址没有被硬编码到布局头之外**，已构建 `kernel/system` 时还校验链接期 `_end` 未越界。`scripts/check-docs.py`：文档里的旧地址/旧宏必须带历史标注、`0x08xxxxxx` 必须是布局常量、场景数必须等于 `regress.sh` 实际条数、`-m` 参数必须与测试驱动一致 |
 
 ## 7. 与文档/设计稿的关系

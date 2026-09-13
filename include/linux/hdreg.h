@@ -45,4 +45,11 @@ void hd_out(unsigned int drive, unsigned int nsect,
             unsigned int sect, unsigned int head,
             unsigned int cyl, unsigned int cmd);
 
+/* Unmask IRQ14 so the drive's own interrupt can wake a sleeping task
+   (drivers/hd.c); called from main() before the first disk access. */
+void hd_init(void);
+
+/* How many IRQ14s have been taken — shown by the shell's `memstat`. */
+unsigned long hd_interrupt_count(void);
+
 #endif

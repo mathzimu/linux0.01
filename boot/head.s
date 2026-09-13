@@ -286,9 +286,14 @@ hd_interrupt:
     mov $KERNEL_DS, %ax
     mov %ax, %ds
     mov %ax, %es
+    /* End-of-interrupt: SLAVE first, then MASTER.  IRQ14 arrives through
+       the cascade (IRQ2), and the master's EOI must come after the slave
+       has released the line - the other order can lose a pending slave
+       interrupt.  This handler used to send them the wrong way round,
+       which went unnoticed because IRQ14 was masked off entirely. */
     mov $0x20, %al
-    outb %al, $0x20
     outb %al, $0xA0
+    outb %al, $0x20
     call hd_interrupt_handler
     popal
     pop %gs

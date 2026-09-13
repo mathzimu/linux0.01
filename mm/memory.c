@@ -3,6 +3,7 @@
 #include <linux/memmap.h>
 #include <linux/sched.h>
 #include <linux/head.h>
+#include <linux/hdreg.h>
 #include <signal.h>
 #include <string.h>
 #include <asm/system.h>
@@ -407,6 +408,7 @@ void mm_report(void)
     printk("mem: %lu page faults, %lu demand pages, %lu COW breaks, "
            "%lu out-of-memory\n",
            nr_page_faults, nr_demand_pages, nr_cow_breaks, nr_oom);
+    printk("mem: %lu disk interrupts (IRQ14)\n", hd_interrupt_count());
 }
 
 /* mm/page.s passes (error_code, eip, cr2).  Three cases matter:

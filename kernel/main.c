@@ -4,6 +4,7 @@
 #include <linux/memmap.h>
 #include <linux/fs.h>
 #include <linux/tty.h>
+#include <linux/hdreg.h>
 #include <asm/system.h>
 
 extern unsigned long _end;
@@ -60,6 +61,11 @@ void main(void)
        U/S bit of a global page table at boot. */
 
     tty_init();
+
+    /* Let the disk's own interrupt wake the task waiting for it.  This
+       only unmasks IRQ14; until sti() below, disk I/O falls back to the
+       bounded poll inside the driver (see drivers/hd.c). */
+    hd_init();
 
     if (sys_setup() < 0)
         printk("Warning: no root filesystem found\n");

@@ -211,6 +211,16 @@ run_case shpipe \
     '2 4 23 -' \
     'exec: child 1 exit_code=0'
 
+# 场景 21: 中断驱动磁盘（B2）
+#   IRQ14 此前被从片掩码整片屏蔽，hd_interrupt_handler 是死代码，读写全靠
+#   轮询。现在发命令的任务睡眠、由 IRQ14 唤醒，写路径要经得起"睡在驱动里"
+#   带来的并发（定时回写任务与用户任务同时做磁盘 I/O）。这里写一遍、读回来
+#   校验内容，再看 memstat 的 IRQ14 计数——标签本身也证明计数器接上了。
+run_case diskio "$BASE && make minix.img" 'wtest\ncat /hello.txt\nmemstat\n' \
+    'wtest: wrote 37 bytes to /hello.txt' \
+    'Minimal Linux 0.01 write path works!' \
+    'disk interrupts (IRQ14)'
+
 echo
 echo "================================"
 echo "  $PASS passed, $FAIL failed"

@@ -146,6 +146,22 @@ existence check (all tasks are uid 0)」。只要系统里只有 uid 0，这个�
 **回归**：场景 20 `shpipe`——`echo ... > /p.txt`、`cat /q.txt >> /p.txt`、
 `cat /p.txt`、`wc < /p.txt`、`cat /p.txt | wc`，断言数值可手算（`2 4 23 -`）。
 
+## B2 — 硬盘 I/O 中断化 ✅ 已完成
+
+**动因**：`drivers/hd.c` 一直是纯轮询——`hd_wait_drq()` 在 0x1F7 上最多自旋 100000 次，
+整个系统陪着等；`hd_interrupt_handler()` 是**空函数、而且永远不可能被调用**，
+因为 setup.s 把从片 PIC 整个屏蔽成 0xFF（IRQ8–15 全灭），IRQ14 根本没开。
+
+| 项 | 内容 |
+|----|------|
+| 打开中断 | `hd_init()`（`main()` 在第一次磁盘访问前调用）把从片掩码 0xFF→0xBF，只放开 IRQ14；主片的级联 IRQ2 本来就是开的 |
+| 睡眠等待 | `hd_wait_bits(mask, value, what)`：状态满足即返回，否则把当前任务挂到 `hd_wait` 上 `schedule()`；IRQ14 处理函数 `wake_up(&hd_wait)`。等待期间别的任务可以跑——这正是"为什么要中断"的教科书场景 |
+| 不会挂死 | 等待循环同时看 `jiffies` 截止时间（50 tick）和 `schedule()` 的定时器返回：**丢一个中断只是超时**，不是死机。开机路径中断还没开（`sys_setup` 在 `sti()` 之前读超级块），`jiffies` 也不走，此时 `hd_irq_enabled()` 判定为"轮询模式"，退回原来的有界自旋 |
+| 加锁 | 任务现在会在驱动里睡着，两个任务同时做磁盘 I/O 会交错发命令——原轮询版没有这个问题（也没处理过）。`hd_lock`/`hd_lock_q` 用 `cli` 保护的测试置位 + `sleep_on(&hd_lock_q)` 把整次操作（发命令 + 传数据）串行化 |
+| 顺带修 | `boot/head.s` 的 `hd_interrupt` **EOI 顺序反了**（先主片后从片）。IRQ14 是从片经级联 IRQ2 上来的，必须先给从片 EOI 再给主片，否则可能丢掉挂起的从片中断。以前 IRQ14 全屏蔽，这个错永远暴露不出来 |
+| 一处踩坑 | 第一版把"等数据"写成 `(status & (BSY\|DRQ)) == (BSY\|DRQ)`——**错的**：传输期间驱动器是 BSY=0、DRQ=1（原代码的 `!BSY && DRQ` 才对），结果每次读都超时、开机直接找不到根文件系统。等待原语改成 `(status & mask) == value` 后正常 |
+| 观测 | `memstat` 增加 `mem: N disk interrupts (IRQ14)`，能直接看到中断真的在发生（开机读出超级块 + `ls` + `cat` 之后是 10 次） |
+
 
 ---
 
@@ -248,7 +264,7 @@ make Image                # 引导镜像
 # 运行/验证
 qemu-system-i386 -fda Image -hda minix.img -m 16M -boot a
 python3 scripts/qemu-test.py --image Image --hda minix.img --keys $'cmd\n'
-make test                   # 一键回归（scripts/regress.sh，20 个场景断言）
+make test                   # 一键回归（scripts/regress.sh，21 个场景断言）
 make check                  # 静态校验：内存地图 + 文档一致性 + lint 反向自测
 make check-layout           # 只校验内存地图（含 _end 未越界）
 make check-docs             # 只校验文档里引用的布局常量/场景数与源码一致
