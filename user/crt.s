@@ -2,10 +2,10 @@
 .globl _start
 
 /* Minimal C runtime entry for execve-loaded programs.
-   The kernel publishes argc at USER_ARGC_ADDR and argv at USER_ARGV_ADDR
-   (just above the user stack top) and iret's to _start; we read them
-   from there and set up our own stack.  All three addresses come from
-   include/memlayout.inc so the assembler and the kernel cannot drift. */
+   The kernel publishes argc at USER_ARGC_ADDR and a pointer to the argv
+   array at USER_ARGV_PTR_ADDR (just above the user stack top) and iret's
+   to _start; we read them from there and set up our own stack.  The slot
+   and the array are separate addresses - see include/memlayout.h. */
 
 .include "memlayout.inc"
 
@@ -20,7 +20,7 @@ _start:
     cmpl $USER_PROG_START, %eax
     jne link_bad
 
-    movl USER_ARGV_ADDR, %ecx /* argv */
+    movl USER_ARGV_PTR_ADDR, %ecx /* argv: the pointer stored above the stack */
     movl USER_ARGC_ADDR, %edx /* argc */
     movl $USER_STACK_TOP, %esp
     pushl %ecx

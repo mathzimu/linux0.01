@@ -68,7 +68,8 @@ void mem_check(void)
         panic("mem_check: buffer cache not initialised");
     }
     if (cache_end > BUFFER_CACHE_TOP) {
-        printk("mem_check: cache end 0x%lx above RAM top 0x%lx\n",
+        printk("mem_check: cache ends at 0x%lx, above the cache top 0x%lx "
+               "(the user stack starts there)\n",
                cache_end, (unsigned long)BUFFER_CACHE_TOP);
         bad = 1;
     }
@@ -84,11 +85,11 @@ void mem_check(void)
                (unsigned long)USER_HEAP_START, (unsigned long)USER_HEAP_END);
         bad = 1;
     }
-    if (ranges_overlap(cache_start, cache_end, USER_STACK_TOP, USER_STACK_END)) {
-        printk("mem_check: buffer cache [0x%lx,0x%lx) overlaps user stack "
-               "[0x%lx,0x%lx)\n",
+    if (ranges_overlap(cache_start, cache_end, USER_STACK_FLOOR, USER_STACK_TOP)) {
+        printk("mem_check: buffer cache [0x%lx,0x%lx) overlaps the user stack "
+               "region [0x%lx,0x%lx)\n",
                cache_start, cache_end,
-               (unsigned long)USER_STACK_TOP, (unsigned long)USER_STACK_END);
+               (unsigned long)USER_STACK_FLOOR, (unsigned long)USER_STACK_TOP);
         bad = 1;
     }
     if (ranges_overlap(cache_start, cache_end,
@@ -99,14 +100,23 @@ void mem_check(void)
         bad = 1;
     }
 
-    /* 2b. The Ring3 sigreturn stub lives in the stack's tail page,
-           above the user stack, and must stay inside it. */
-    if (USER_SIGRETURN_STUB_ARG + 4 > USER_STACK_END ||
-        USER_SIGRETURN_ENTRY < USER_STACK_TOP) {
-        printk("mem_check: sigreturn stub area [0x%lx,0x%lx) outside the "
-               "stack tail page\n",
-               (unsigned long)USER_SIGRETURN_ENTRY,
-               (unsigned long)(USER_SIGRETURN_STUB_ARG + 4));
+    /* 2b. The Ring3 sigreturn stub and the argv block live in the stack's
+           tail page; both must stay inside the part of it that is granted
+           to Ring3 ([USER_STACK_FLOOR, USER_TAIL_TOP)). */
+    if (USER_SIGRETURN_ENTRY < USER_STACK_TOP ||
+        USER_SIGRETURN_ENTRY + 20 > USER_TAIL_TOP) {
+        printk("mem_check: sigreturn stub at 0x%lx is outside the granted "
+               "tail page\n", (unsigned long)USER_SIGRETURN_ENTRY);
+        bad = 1;
+    }
+    if (USER_ARGV_STR_TOP < USER_STACK_TOP || USER_ARGV_STR_TOP > USER_TAIL_TOP) {
+        printk("mem_check: argv string area top 0x%lx is outside the granted "
+               "tail page\n", (unsigned long)USER_ARGV_STR_TOP);
+        bad = 1;
+    }
+    if (USER_TAIL_TOP > IDENTITY_MAP_TOP) {
+        printk("mem_check: user tail page ends at 0x%lx, past the RAM top\n",
+               (unsigned long)USER_TAIL_TOP);
         bad = 1;
     }
 

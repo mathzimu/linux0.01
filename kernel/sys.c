@@ -1036,6 +1036,9 @@ static unsigned short rd16(const unsigned char *b)
 
 #define ELF_MAGIC 0x464C457F   /* \x7fELF */
 #define PT_LOAD 1
+/* The linker folds the ELF headers into the first LOAD segment, whose
+ * vaddr ends up one page below the program's link address. */
+#define ELF_HDR_MAX_SKIP PAGE_SIZE
 
 /* Every fixed user address below comes from include/memlayout.h; see
  * mm/memcheck.c for why they may not be sprinkled around any more. */
@@ -1098,13 +1101,37 @@ int sys_execve(const char *filename, char **argv, char **envp)
         p_filesz = rd32(ph + 16);
         p_memsz = rd32(ph + 20);
 
-        /* Reject anything that would be written outside the user program
-           image — a program linked below USER_PROG_START would have its
-           bytes copied on top of the page-allocator pool, and one that
-           runs long would be copied over the user heap. */
-        if (p_vaddr < USER_PROG_START ||
-            p_vaddr + p_filesz > USER_PROG_END ||
-            p_vaddr + p_memsz > USER_PROG_END) {
+        /* Nothing to load (ld emits a zero-length PT_LOAD for the header
+           page); it would otherwise trip the bounds check below. */
+        if (p_memsz == 0)
+            continue;
+
+        /* ld maps the ELF headers as the first LOAD segment, one page
+           below the link address (0x1ff000 for a program linked at
+           0x200000) with no sections in it.  That page is kernel memory
+           here - the page-allocator pool - so such a segment is dropped
+           entirely; a segment that merely starts below the image base is
+           trimmed to it.  Either way nothing is ever written outside
+           [USER_PROG_START, USER_PROG_END). */
+        if (p_vaddr + p_memsz <= USER_PROG_START)
+            continue;
+        if (p_vaddr < USER_PROG_START) {
+            unsigned long skip = USER_PROG_START - p_vaddr;
+            if (skip > ELF_HDR_MAX_SKIP) {
+                printk("execve: LOAD segment starts at 0x%lx, more than one "
+                       "page below the user program image\n", p_vaddr);
+                goto fail;
+            }
+            if (skip > p_filesz)
+                skip = p_filesz;
+            p_offset += skip;
+            p_vaddr += skip;
+            p_filesz -= skip;
+            p_memsz = (p_memsz > skip) ? (p_memsz - skip) : 0;
+        }
+        if (p_vaddr + p_filesz > USER_PROG_END ||
+            p_vaddr + p_memsz > USER_PROG_END ||
+            p_vaddr < USER_PROG_START) {
             printk("execve: LOAD segment [0x%lx,+0x%lx) outside user "
                    "program image [0x%lx,0x%lx)\n",
                    p_vaddr, p_memsz,
@@ -1168,7 +1195,7 @@ int sys_execve(const char *filename, char **argv, char **envp)
        program's own call frames), inside the tail page
        [USER_STACK_TOP, IDENTITY_MAP_TOP) laid out by include/memlayout.h:
          +0x04 argc, +0x08 argv-array pointer, +0x0C+ argv[]
-         strings packed down from IDENTITY_MAP_TOP --- */
+         strings packed down from USER_ARGV_STR_TOP --- */
     {
         char *sp = (char *)(USER_ARGV_STR_TOP - 1);
         unsigned long *uargv = (unsigned long *)USER_ARGV_ADDR;
@@ -1193,7 +1220,11 @@ int sys_execve(const char *filename, char **argv, char **envp)
         uargv[argc] = 0;
 
         *(unsigned long *)USER_ARGC_ADDR = (unsigned long)argc;
-        *(unsigned long *)USER_ARGV_ADDR = (unsigned long)uargv;
+        /* The pointer goes to its own slot, NOT to the array's address:
+           USER_ARGV_ADDR is the array itself, and storing the pointer
+           there would overwrite argv[0] - which is exactly what happened
+           while the two were the same constant. */
+        *(unsigned long *)USER_ARGV_PTR_ADDR = (unsigned long)uargv;
 
         /* --- iret into Ring3 at the ELF entry point --- */
         {

@@ -20,8 +20,8 @@ ifeq ($(shell uname -s),Linux)
   ASFLAGS = -32 -Iinclude
   CFLAGS  = -m32 -Wall -O0 -fstrength-reduce -fomit-frame-pointer \
             -nostdinc -Iinclude -fno-stack-protector -fno-builtin \
-            -ffreestanding
-  LDFLAGS = -m elf_i386 -T kernel.ld -e startup_32
+            -ffreestanding -fno-pic -fno-pie
+  LDFLAGS = -m elf_i386 -T kernel.ld -e startup_32 --no-pie
 else ifneq ($(shell command -v i386-elf-gcc 2>/dev/null),)
   # macOS with i386-elf-* cross-compiler
   AS      = i386-elf-as

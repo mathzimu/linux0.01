@@ -67,39 +67,55 @@
 #define USER_PROG_START     0x00200000
 #define USER_PROG_END       0x00300000
 
-/* User heap (user/lib.c malloc), the fork() child stack region and the
- * kernel buffer cache share the window between the program image and
- * the user stack.  The cache is placed at the top of RAM growing down,
- * the heap grows up from USER_HEAP_START, and the child stack occupies
- * its own slice in between, so no two of them may meet:
+/* User heap (user/lib.c malloc), the fork() child stack region, the
+ * kernel buffer cache and the user stack share the space above the
+ * program image.  Each has its own slice, and no two may meet:
  *
- *   [USER_HEAP_START, USER_HEAP_END)         malloc()
+ *   [USER_HEAP_START, USER_HEAP_END)              malloc()
  *   (CHILD_USER_STACK_END, CHILD_USER_STACK_TOP]  fork() child stack
- *   [BUFFER_CACHE_FLOOR, IDENTITY_MAP_TOP)   kernel buffer cache
+ *   [BUFFER_CACHE_FLOOR, BUFFER_CACHE_TOP)        kernel buffer cache
+ *   [USER_STACK_FLOOR, USER_STACK_TOP)            user stack (grows down)
  *
  * A smaller heap/stack slice buys a bigger cache. */
 #define USER_HEAP_START     0x00310000
 #define USER_HEAP_END       0x00340000
 
 /* fork() gives the child a copy of the parent's user stack with its top
- * here, growing down.  This must stay clear of the buffer cache — the
- * old anchor at 0x3E0000 sat inside the cache, so a Ring3 fork wrote
- * its child stack straight through the filesystem's block cache.
+ * here, growing down.  This must stay clear of the buffer cache.
  * kernel/process.c refuses to copy more than the region holds. */
 #define CHILD_USER_STACK_TOP 0x00340000
 #define CHILD_USER_STACK_END 0x00300000
 
-/* The buffer cache may not grow below this. */
 #define BUFFER_CACHE_FLOOR  0x00350000
+
+/* The user stack grows down from USER_STACK_TOP; USER_STACK_FLOOR is how
+ * deep it is allowed to go, which is also what bounds the buffer cache
+ * from above.  The window between them is the cache. */
+#define USER_STACK_FLOOR    0x003F0000
+#define BUFFER_CACHE_TOP    USER_STACK_FLOOR
 
 #define USER_STACK_TOP      0x003FF000
 #define USER_STACK_END      IDENTITY_MAP_TOP   /* stack grows down from TOP */
 
 /* execve publishes argc/argv just above the stack top (kernel/sys.c,
- * user/crt.s read them back):  0x3FF004 argc, 0x3FF008 argv array. */
+ * user/crt.s read them back):
+ *   0x3FF004  argc
+ *   0x3FF008  pointer to the argv array
+ *   0x3FF00C  the argv array itself
+ * The slot and the array are different addresses on purpose: writing the
+ * pointer must not clobber argv[0].
+ *
+ * The rest of the tail page is laid out so that nothing overlaps:
+ *   0x3FF00C .. ~0x3FF050   argv array (up to 16 entries)
+ *   0x3FF100                sigreturn stub (9 bytes, written on delivery)
+ *   below 0x3FF100          argv strings, packed DOWN from there
+ * mem_init() keeps the page allocator's bitmap (mem_map) in the last
+ * kilobytes of RAM, so the user-granted tail stops at USER_TAIL_TOP. */
 #define USER_ARGC_ADDR      (USER_STACK_TOP + 4)
-#define USER_ARGV_ADDR      (USER_STACK_TOP + 8)
-#define USER_ARGV_STR_TOP   IDENTITY_MAP_TOP   /* strings pack down from here */
+#define USER_ARGV_PTR_ADDR  (USER_STACK_TOP + 8)
+#define USER_ARGV_ADDR      (USER_STACK_TOP + 12)
+#define USER_ARGV_STR_TOP   0x003FF100
+#define USER_TAIL_TOP       0x003FF400
 
 /* --- signal delivery frame (kernel/process.c do_signal) -------------
  * A custom signal handler runs on the user stack, and when it returns
@@ -112,11 +128,14 @@
  *     return address at the top of the user stack (0x3FF000) would let
  *     a deep handler overwrite it, so the whole block is placed just
  *     below the interrupted esp instead (exactly what Linux does).
- *  2. The code that issues sigreturn cannot live in the kernel, so a
- *     tiny Ring3 stub is kept at a fixed address above the stack top —
- *     a page the kernel writes and the user can execute but not read
- *     (it holds a kernel-chosen function pointer).  The stub loads its
- *     target from USER_SIGRETURN_STUB_ARG and issues syscall 67.
+ *  2. The code that issues sigreturn cannot live in the kernel, so nine
+ *     bytes of Ring3 stub are written at USER_SIGRETURN_ENTRY, which sits
+ *     clear of both the argv array and the strings:
+ *         movl $USER_SIGRETURN_SYSCALL, %eax   (B8 43 00 00 00)
+ *         int  $0x80                           (CD 80)
+ *         jmp  .-2                             (EB FE)
+ *     The handler itself is entered by the kernel's iret, so the stub
+ *     only has to be the place the handler returns to.
  *
  * Block placed at [user_esp - 4 - SIGFRAME_BYTES, user_esp - 4):
  *     +4   signal number   <- the handler's argument
@@ -124,8 +143,7 @@
  *     -4   ... saved-context snapshot (struct user_regs, 80 bytes) ...
  *     -84
  * ------------------------------------------------------------------ */
-#define USER_SIGRETURN_ENTRY     (USER_STACK_TOP + 0x10)
-#define USER_SIGRETURN_STUB_ARG  (USER_STACK_TOP + 0x14)
+#define USER_SIGRETURN_ENTRY     0x003FF100
 #define SIGFRAME_BYTES           92   /* 8 for the header + 84 for the context */
 #define USER_SIGRETURN_SYSCALL   67
 

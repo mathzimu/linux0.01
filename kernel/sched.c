@@ -168,12 +168,26 @@ void schedule(void)
 
 void do_timer(void)
 {
+    int i;
+
     jiffies++;
 
-    /* alarm(2): deliver SIGALRM when the deadline passes */
-    if (current->alarm && (unsigned long)jiffies >= current->alarm) {
-        current->signal |= (1 << SIGALRM);
-        current->alarm = 0;
+    /* alarm(2): deliver SIGALRM when the deadline passes.  Every task is
+       checked, not just `current`: a task that called alarm() and then
+       blocked (the classic alarm(); pause(); idiom) is not current any
+       more, and checking only `current` would never deliver its alarm.
+       An interruptible task with a signal pending is made runnable, which
+       is what lets pause() return. */
+    for (i = 0; i < NR_TASKS; i++) {
+        struct task_struct *p = task[i];
+        if (!p || !p->alarm)
+            continue;
+        if ((unsigned long)jiffies < p->alarm)
+            continue;
+        p->signal |= (1 << SIGALRM);
+        p->alarm = 0;
+        if (p->state == TASK_INTERRUPTIBLE)
+            p->state = TASK_RUNNING;
     }
 
     /* Periodic write-back: only raise the flag and wake the sync task

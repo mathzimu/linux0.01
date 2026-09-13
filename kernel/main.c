@@ -43,21 +43,27 @@ void main(void)
 
     mem_init(phys_mem_start, phys_mem_end);
 
-    /* The cache is anchored at the top of usable RAM. */
-    buffer_init((long)(phys_mem_end - KERNEL_LOW_MEM));
+    /* Anchor the buffer cache explicitly: buffer_init() takes the address
+       the cache ends at.  It used to be called with memory_end-1MB, which
+       put the cache at [0x27C000, 0x300000) - inside the user program
+       image region. */
+    buffer_init((long)BUFFER_CACHE_TOP);
 
     /* Everything that carves up the 0..4MB identity map has now had its
        say: allocator, kernel heap, buffer cache and the fixed user
        regions.  Verify the map before anything can write through it. */
     mem_check();
 
-    /* Memory isolation: everything is supervisor-only by default.
-       Grant user-mode access to the fixed user regions — heap
-       [USER_HEAP_START, USER_HEAP_END) and stack
-       [USER_STACK_TOP, USER_STACK_END).  The program image at
-       USER_PROG_START is granted at exec time (kernel/sys.c). */
+    /* Memory isolation: everything is supervisor-only by default.  Grant
+       user-mode access to the fixed user regions — the heap
+       [USER_HEAP_START, USER_HEAP_END) and the stack
+       [USER_STACK_FLOOR, USER_TAIL_TOP).  The stack pages are where the
+       kernel later drops the argc/argv block and the sigreturn stub; the
+       very top of RAM stays supervisor-only because it holds the page
+       allocator's bitmap.  The program image at USER_PROG_START is
+       granted at exec time (kernel/sys.c). */
     grant_user_pages(USER_HEAP_START, USER_HEAP_END - USER_HEAP_START);
-    grant_user_pages(USER_STACK_TOP, USER_STACK_END - USER_STACK_TOP);
+    grant_user_pages(USER_STACK_FLOOR, USER_TAIL_TOP - USER_STACK_FLOOR);
 
     tty_init();
 

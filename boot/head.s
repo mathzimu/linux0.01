@@ -205,12 +205,24 @@ ret_from_sys_call:
     mov %eax, 24(%esp)
 
     /* deliver pending signals before returning to the caller.
-       current->signal lives at offset 12 of struct task_struct. */
+       current->signal lives at offset 12 of struct task_struct.
+       The frame base (the saved ebx slot, which is what kernel/process.c's
+       UFRAME_* offsets are relative to) is passed as the argument rather
+       than read from the syscall_esp global: a task that blocked inside
+       its syscall (pause, waitpid) resumes after other tasks have run
+       their own syscalls and overwritten that global, so the global no
+       longer describes this task's frame. */
     movl current, %ecx
     cmpl $0, 12(%ecx)
     je 3f
+    /* The frame base must be the LAST thing pushed so that it really is
+       the C function's first argument: pushing it before the saved eax
+       made do_signal() receive eax as its frame pointer. */
+    movl %esp, %ecx             /* frame base (the saved ebx slot) */
     pushl %eax                  /* preserve syscall return value */
+    pushl %ecx                  /* arg: this task's syscall frame */
     call do_signal
+    addl $4, %esp               /* drop the argument */
     popl %eax
 3:
     /* unwind: restore ebx..ebp (6), pop saved_eax into a slot, fixup */

@@ -58,9 +58,18 @@ void mem_init(unsigned long start_mem, unsigned long end_mem)
                 mem_map[j] = USED;
     }
 
-    /* The buffer cache and the fixed user regions are reserved by
-       buffer_init() and by the layout itself; mem_check() (called from
-       main right after) verifies that nothing can reach into them. */
+    /* Everything from USER_PROG_START up belongs to user space or to the
+       kernel buffer cache: the fixed user regions (program image, heap,
+       fork child stack, user stack), the cache, and the page allocator's
+       own bitmap at the very top.  The allocator must never hand any of
+       it out — without this, get_free_page() could reach a page inside
+       the user stack, and mem_check() rejects that at boot. */
+    {
+        int first = MAP_NR(USER_PROG_START);
+        int j;
+        for (j = first; j < max_map_nr; j++)
+            mem_map[j] = USED;
+    }
 }
 
 unsigned long get_free_page(void)

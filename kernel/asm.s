@@ -37,6 +37,12 @@ ltr:
  *     0 magic   4 retaddr   8 handler   12 signo
  *    16 eip   20 cs   24 eflags   28 esp   32 ss
  *    36 gs   40 fs   44 es   48 ds   52 eax
+ *    56 ebx  60 ecx  64 edx  68 esi  72 edi  76 ebp
+ *
+ * This routine REWRITES the frame and returns normally into
+ * ret_from_sys_call, which pops those slots and irets.  It must not
+ * redirect its own "ret" at the interrupted eip: that would leave the
+ * kernel executing user code in ring 0.
  * ==================================================================== */
 .globl sys_sigreturn
 sys_sigreturn:
@@ -51,7 +57,7 @@ sys_sigreturn:
     /* The frame carries the return address it was built with; compare
        against it rather than hard-coding the stub address here. */
     movl 4(%esi), %eax
-    cmpl $0x003FF010, %eax              /* USER_SIGRETURN_ENTRY */
+    cmpl $0x003FF100, %eax              /* USER_SIGRETURN_ENTRY */
     jne sig_bad
     movl 16(%esi), %eax                 /* eip */
     testl %eax, %eax
@@ -94,8 +100,19 @@ sys_sigreturn:
     movl 52(%esi), %eax
     movl %eax, 28(%esp)                 /* eax */
 
-    movl 16(%esi), %eax                 /* eip -> ret target */
-    movl %eax, 0(%esp)
+    /* The six registers ret_from_sys_call pops next. */
+    movl 56(%esi), %eax
+    movl %eax, 4(%esp)                  /* ebx */
+    movl 60(%esi), %eax
+    movl %eax, 8(%esp)                  /* ecx */
+    movl 64(%esi), %eax
+    movl %eax, 12(%esp)                 /* edx */
+    movl 68(%esi), %eax
+    movl %eax, 16(%esp)                 /* esi */
+    movl 72(%esi), %eax
+    movl %eax, 20(%esp)                 /* edi */
+    movl 76(%esi), %eax
+    movl %eax, 24(%esp)                 /* ebp */
 
     movl $0, %eax                       /* syscall "return value" (unused) */
     ret

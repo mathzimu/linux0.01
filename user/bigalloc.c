@@ -29,7 +29,7 @@ static int slurp(const char *path, char *dst, int cap)
 {
     int fd, n, total = 0;
 
-    fd = open(path, 0);
+    fd = open(path, 0, 0);
     if (fd < 0)
         return -1;
     while (total < cap) {

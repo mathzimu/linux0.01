@@ -358,8 +358,17 @@ int sys_waitpid(int pid, unsigned long *stat_addr, int options)
 
 int sys_pause(void)
 {
+    /* Sleep until a signal is pending.  schedule() returns when there is
+       nothing else to run (it halts once and returns), so a single
+       sleep/wake pair is not enough: the loop is what makes pause()
+       actually block.  do_timer() wakes an interruptible task whose
+       alarm has expired, which is how alarm(); pause(); works. */
     current->state = TASK_INTERRUPTIBLE;
-    schedule();
+    while (!current->signal) {
+        schedule();
+        current->state = TASK_INTERRUPTIBLE;
+    }
+    current->state = TASK_RUNNING;
     return 0;
 }
 
@@ -411,16 +420,21 @@ struct sig_context {
     unsigned long es;        /* 44 */
     unsigned long ds;        /* 48 */
     unsigned long eax;       /* 52 */
+    unsigned long ebx;       /* 56 */
+    unsigned long ecx;       /* 60 */
+    unsigned long edx;       /* 64 */
+    unsigned long esi;       /* 68 */
+    unsigned long edi;       /* 72 */
+    unsigned long ebp;       /* 76 */
 };
 
 /* Filled by deliver_signal(), consumed by sys_sigreturn (kernel/asm.s).
  * One slot is enough: only the current task is ever in a syscall. */
 struct sig_context sigreturn_frame;
 
-/* kernel/asm.s reserves exactly 56 bytes for sigreturn_frame and reads
- * it with literal offsets; a field added here without updating it would
- * silently corrupt the resumed context. */
-STATIC_ASSERT(sizeof(struct sig_context) == 56, sig_context_is_56_bytes);
+/* kernel/asm.s reads this with literal offsets; a field added here
+ * without updating it would silently corrupt the resumed context. */
+STATIC_ASSERT(sizeof(struct sig_context) == 80, sig_context_is_80_bytes);
 
 /* Snapshot of the interrupted context, mirrored for the handler to look
  * at.  The block is written just BELOW the interrupted user esp (see
@@ -459,27 +473,24 @@ struct user_regs {
 
 /* The Ring3 stub the handler returns into.  It cannot live in the
  * kernel, and user code cannot be loaded at a fixed address without
- * another build step, so the kernel writes these twelve bytes into the
- * one page above the user stack:
+ * another build step, so the kernel writes these nine bytes at
+ * USER_SIGRETURN_ENTRY:
  *
  *     movl $USER_SIGRETURN_SYSCALL, %eax    (B8 43 00 00 00)
  *     int  $0x80                            (CD 80)
- *     movl USER_SIGRETURN_STUB_ARG, %eax    (A1 14 F0 3F 00)
- *     jmp  *%eax                            (FF E0)
+ *     jmp  .-2                              (EB FE)
  *
- * where USER_SIGRETURN_STUB_ARG holds the handler the kernel chose.
- * That page is deliberately NOT user-readable (mm/memcheck.c): the
- * address beside the stub is a kernel-chosen value the user must not be
- * able to read or to change. */
+ * The handler is entered directly by the kernel's iret, so this stub is
+ * only the address the handler returns to.  It used to be 16 bytes and
+ * to load the handler from a slot right after itself - and the two
+ * overlapped, so installing the handler overwrote the stub's own
+ * instruction stream with the handler address (the CPU then executed
+ * 0x002000A9 as an immediate, read a wild address and killed the task
+ * with SIGSEGV). */
 static const unsigned char sigreturn_stub[] = {
     0xB8, USER_SIGRETURN_SYSCALL & 0xFF, 0x00, 0x00, 0x00,
     0xCD, 0x80,
-    0xA1, (USER_SIGRETURN_STUB_ARG) & 0xFF,
-    ((USER_SIGRETURN_STUB_ARG) >> 8) & 0xFF,
-    ((USER_SIGRETURN_STUB_ARG) >> 16) & 0xFF,
-    ((USER_SIGRETURN_STUB_ARG) >> 24) & 0xFF,
-    0xFF, 0xE0,
-    0xEB, 0xFE                    /* jmp .-2 : never fall off the end */
+    0xEB, 0xFE
 };
 
 STATIC_ASSERT(sizeof(sigreturn_stub) <= 20, sigreturn_stub_fits);
@@ -493,25 +504,29 @@ static void install_sigreturn_stub(void)
         put_fs_byte(sigreturn_stub[i], (char *)(USER_SIGRETURN_ENTRY + i));
 }
 
-static void deliver_signal(int sig, unsigned long handler)
+static void deliver_signal(int sig, unsigned long handler, unsigned char *kf)
 {
-    extern long syscall_esp;
-    unsigned char *kf = (unsigned char *)syscall_esp;
     unsigned long user_esp = *(unsigned long *)(kf + UFRAME_ESP);
     unsigned long frame = user_esp - 4 - SIGFRAME_BYTES;
     struct user_regs *uf;
 
     /* The signal block is written below the interrupted esp.  Keep it
-       inside the user area: a wild esp must not make the kernel write
-       (through the identity map) into kernel memory. */
-    if (frame < CHILD_USER_STACK_END || user_esp > USER_STACK_END) {
+       inside the user stack: a wild esp must not make the kernel write
+       (through the identity map) over kernel memory.  The comparison is
+       signed on purpose — an esp near 0 or above 0x80000000 is nonsense
+       and must be refused rather than treated as a huge unsigned value. */
+    if ((long)user_esp < (long)USER_STACK_FLOOR ||
+        (long)user_esp > (long)USER_STACK_TOP ||
+        (long)frame < (long)USER_STACK_FLOOR) {
         printk("signal: refusing to build a frame for esp=0x%lx\n", user_esp);
         return;
     }
     uf = (struct user_regs *)(frame + 8);
 
-    /* The context the interrupted syscall was about to return to.  The
-       syscall is still on the kernel stack, so syscall_esp is valid. */
+    /* The context the interrupted syscall was about to return to.  kf is
+       this task's own syscall frame (passed down from ret_from_sys_call),
+       so it stays correct even when the task blocked inside the syscall
+       and other tasks ran their own syscalls in the meantime. */
     sigreturn_frame.magic = SIGFRAME_MAGIC;
     sigreturn_frame.retaddr = USER_SIGRETURN_ENTRY;
     sigreturn_frame.handler = handler;
@@ -526,6 +541,12 @@ static void deliver_signal(int sig, unsigned long handler)
     sigreturn_frame.es = *(unsigned long *)(kf + UFRAME_ES);
     sigreturn_frame.ds = *(unsigned long *)(kf + UFRAME_DS);
     sigreturn_frame.eax = *(unsigned long *)(kf + UFRAME_EAX);
+    sigreturn_frame.ebx = *(unsigned long *)(kf + UFRAME_ARG0);
+    sigreturn_frame.ecx = *(unsigned long *)(kf + UFRAME_ARG1);
+    sigreturn_frame.edx = *(unsigned long *)(kf + UFRAME_ARG2);
+    sigreturn_frame.esi = *(unsigned long *)(kf + UFRAME_ARG3);
+    sigreturn_frame.edi = *(unsigned long *)(kf + UFRAME_ARG4);
+    sigreturn_frame.ebp = *(unsigned long *)(kf + UFRAME_ARG5);
 
     /* Snapshot for the handler to look at (the kernel copy above is the
        authoritative one). */
@@ -551,7 +572,6 @@ static void deliver_signal(int sig, unsigned long handler)
     put_fs_long((unsigned long)sig, (unsigned long *)(frame + 4));
 
     install_sigreturn_stub();
-    put_fs_long(handler, (unsigned long *)USER_SIGRETURN_STUB_ARG);
 
     /* Enter the handler.  The handler's argument is at [esp+4] (where a
        normal call would leave its first argument) and its return
@@ -561,14 +581,19 @@ static void deliver_signal(int sig, unsigned long handler)
 }
 
 /* Signal delivery: called at every syscall return when the current task
-   has pending signals. */
-void do_signal(void)
+   has pending signals.  `kf` is the current task's syscall frame (the
+   saved ebx slot), passed by ret_from_sys_call; the caller's privilege
+   level is read from the CS saved in that frame, which is per-call
+   correct even for a task that blocked inside its syscall. */
+void do_signal(unsigned char *kf)
 {
-    extern int syscall_cpl;
+    int cpl;
     int sig;
 
     if (!current->signal)
         return;
+
+    cpl = (int)(*(unsigned long *)(kf + UFRAME_CS) & 3);
 
     for (sig = 1; sig < 32; sig++) {
         unsigned long handler;
@@ -583,14 +608,14 @@ void do_signal(void)
 
         handler = current->handlers[sig];
         if (handler != SIG_DFL) {
-            if (syscall_cpl == 3) {
+            if (cpl == 3) {
                 /* `signal()` semantics: a handler is reset to SIG_DFL
                    before it runs, except for SIGCHLD (0.01 did the
                    same).  Interrupted syscalls are not restarted; the
                    handler resumes at the next instruction. */
                 if (sig != SIGCHLD)
                     current->handlers[sig] = SIG_DFL;
-                deliver_signal(sig, handler);
+                deliver_signal(sig, handler, kf);
                 return;
             }
             /* Ring0 caller: no user context to rewrite, fall through to

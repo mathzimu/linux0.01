@@ -22,12 +22,16 @@
  *
  * The slot is pid 1 and the task page is a static buffer inside the
  * kernel image, so the write-back thread exists before anything else can
- * fail, and it can never be confused with a user process (user tasks
- * start at pid 2).
+ * fail, and it can never be confused with a user process (it holds the
+ * last task slot, so user pids still start at 1).
  * ==================================================================== */
 
 /* Kernel stack for the write-back task, aligned to a page. */
 static unsigned long sync_task_stack[1024] __attribute__((aligned(4096)));
+
+/* Task slot (and therefore pid) of the write-back task.  The last slot
+   keeps user-visible pids starting at 1. */
+#define SYNC_TASK_SLOT  (NR_TASKS - 1)
 
 unsigned long sync_interval = 5 * HZ;     /* jiffies between flushes */
 unsigned long next_sync = 5 * HZ;
@@ -55,7 +59,7 @@ void event_sync(void)
     next_sync = jiffies + sync_interval;
     sync_pending = 1;
 
-    t = task[1];
+    t = task[SYNC_TASK_SLOT];
     if (t && t->state != TASK_RUNNING)
         wake_up(&t);
 }
@@ -71,16 +75,18 @@ void wait_for_sync(void)
 }
 
 /* Create the write-back task (called from sched_init, so `current` is
-   still the init task and no user task exists yet). */
+   still the init task and no user task exists yet).  It takes the LAST
+   task slot rather than the first free one: pid == slot index in this
+   kernel, so occupying slot 1 would push every user process to pid 2 and
+   change the shell's user-visible numbering. */
 void sync_init(void)
 {
-    struct task_struct *p = task[1];
+    struct task_struct *p = task[SYNC_TASK_SLOT];
     unsigned long *frame;
 
-    /* task[1] is free at this point; refuse loudly rather than
-       clobbering whatever took the slot. */
     if (p != NULL) {
-        printk("sync_init: task slot 1 is taken; periodic write-back off\n");
+        printk("sync_init: task slot %d is taken; periodic write-back off\n",
+               SYNC_TASK_SLOT);
         return;
     }
 
@@ -90,7 +96,7 @@ void sync_init(void)
     p->priority = 10;
     p->signal = 0;
     p->exit_code = 0;
-    p->pid = 1;
+    p->pid = SYNC_TASK_SLOT;
     p->parent = 0;
     p->pgrp = 0;
     p->session = 0;
@@ -140,7 +146,7 @@ void sync_init(void)
     p->ldt[1].b = 0x00CFF200;
 
     {
-        int tss_entry = 8 + 1 * 2;        /* slot 1 */
+        int tss_entry = 8 + SYNC_TASK_SLOT * 2;
         int ldt_entry = tss_entry + 1;
         struct desc_struct *d;
 
@@ -151,6 +157,6 @@ void sync_init(void)
         p->tss.ldt = ldt_entry * 8;
     }
 
-    task[1] = p;
+    task[SYNC_TASK_SLOT] = p;
     next_sync = jiffies + sync_interval;
 }

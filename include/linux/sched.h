@@ -214,7 +214,10 @@ int sys_fcntl(unsigned int fd, unsigned int cmd, unsigned long arg);
 int sys_brk(unsigned long end_data_seg);
 
 void do_timer(void);
-void do_signal(void);
+/* kf is the caller's syscall frame base (the saved ebx slot); see
+ * ret_from_sys_call in boot/head.s and the UFRAME_* offsets in
+ * kernel/process.c. */
+void do_signal(unsigned char *kf);
 
 #endif
 #endif

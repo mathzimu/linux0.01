@@ -36,15 +36,26 @@ int main(int argc, char *argv[])
 
     alarm(1);
 
-    /* Sum until the alarm fires.  If sigreturn resumed at the right
-       instruction the loop simply continues and the sum stays sane. */
-    for (i = 0; i < 200000 && hits == 0; i++)
-        sum += i;
-    printf("sigdemo: after alarm: hits=%d last_sig=%d sum=%d\n",
-           hits, last_sig, sum);
+    /* Block in pause() until the alarm arrives.  A busy loop would race
+       the one-second alarm: 200000 iterations finish in milliseconds.
+       pause() returns once do_timer has delivered SIGALRM, and the
+       handler runs on the syscall-return path; if sigreturn resumes at
+       the right instruction we come back here with hits==1. */
+    pause();
+    printf("sigdemo: after alarm: hits=%d last_sig=%d\n", hits, last_sig);
 
     if (hits != 1 || last_sig != SIGALRM) {
         printf("sigdemo: FAIL handler did not run for SIGALRM\n");
+        return 1;
+    }
+
+    /* The handler must not have restarted us somewhere else: sum a few
+       values to prove execution continues normally after sigreturn. */
+    for (i = 0; i < 10; i++)
+        sum += i;
+    printf("sigdemo: resumed normally, sum=%d\n", sum);
+    if (sum != 45) {
+        printf("sigdemo: FAIL bad resume state\n");
         return 1;
     }
 

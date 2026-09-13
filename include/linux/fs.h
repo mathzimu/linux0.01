@@ -9,21 +9,19 @@
 #define NR_INODE 64
 #define NR_SUPER 8
 
-/* Buffer cache size.  The cache sits at the top of RAM and grows down
- * into the window that the layout leaves free, bounded below by
- * BUFFER_CACHE_FLOOR (include/memlayout.h) — otherwise it silently
- * overlaps user data, which is exactly what NR_BUFFERS = 512 used to do
- * (see the notes in include/memlayout.h and mm/memcheck.c).
+/* Buffer cache size.  The cache occupies the window between
+ * BUFFER_CACHE_FLOOR and BUFFER_CACHE_TOP (include/memlayout.h) - i.e.
+ * below the user stack and above the heap and child-stack region - so it
+ * can never share a page with user data.
  *
  * The count is derived from the window rather than hand-picked, and it
  * must be a power of two because getblk()/brelse() index hash_table[]
- * with `& (NR_BUFFERS - 1)`.  With the current layout that window is
- * 0xB0000 bytes, which holds exactly NR_BUFFERS_MAX = 256 buffers
- * (64KB of data plus 16KB of heads).  scripts/check-layout.py charges a
- * conservative 64 bytes per buffer_head and fails the change if the
- * count no longer fits. */
+ * with `& (NR_BUFFERS - 1)`.  The window is 0xA0000 bytes, which holds
+ * exactly NR_BUFFERS_MAX = 256 buffers (256KB of data plus 8KB of heads).
+ * scripts/check-layout.py charges a conservative 64 bytes per
+ * buffer_head and fails the change if the count no longer fits. */
 #define NR_BUFFERS_MAX      256
-#define NR_BUFFERS_WINDOW   (IDENTITY_MAP_TOP - BUFFER_CACHE_FLOOR)
+#define NR_BUFFERS_WINDOW   (BUFFER_CACHE_TOP - BUFFER_CACHE_FLOOR)
 #define NR_BUFFERS_FOR_WINDOW (NR_BUFFERS_WINDOW / (BLOCK_SIZE + 64))
 #define NR_BUFFERS \
     ((NR_BUFFERS_FOR_WINDOW >= NR_BUFFERS_MAX) ? NR_BUFFERS_MAX : 64)
