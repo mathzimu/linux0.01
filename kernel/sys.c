@@ -1053,6 +1053,8 @@ int sys_execve(const char *filename, char **argv, char **envp)
     unsigned char eh[64], ph[32];
     unsigned long entry, phoff, phnum, phentsize;
     unsigned long max_end = 0;         /* end of the program image */
+    unsigned long new_pgdir = 0, old_pgdir;
+    unsigned long tail_pa;
     char argv_buf[16][64];
     unsigned long argv_ptr[16];
     int fd, argc = 0, i;
@@ -1090,13 +1092,24 @@ int sys_execve(const char *filename, char **argv, char **envp)
         goto fail;
     }
 
+    /* M3: the new image goes into an address space of its own.  This is
+       what makes a Ring3 shell possible — the old image (the parent
+       shell's code, or this very image) is not touched at all: the new
+       pages are fresh frames, reached by the kernel through the
+       identity map while they are being filled. */
+    new_pgdir = alloc_user_pgdir();
+    if (!new_pgdir) {
+        printk("execve: cannot allocate an address space\n");
+        goto fail;
+    }
+
     for (i = 0; i < phnum && i < 16; i++) {
         unsigned long p_type, p_offset, p_vaddr, p_filesz, p_memsz;
 
         if (sys_lseek(fd, (long)(phoff + i * phentsize), 0) < 0)
-            goto fail;
+            goto fail_as;
         if (sys_read(fd, (char *)ph, 32) != 32)
-            goto fail;
+            goto fail_as;
 
         p_type = rd32(ph);
         if (p_type != PT_LOAD)
@@ -1112,12 +1125,12 @@ int sys_execve(const char *filename, char **argv, char **envp)
             continue;
 
         /* ld maps the ELF headers as the first LOAD segment, one page
-           below the link address (0x1ff000 for a program linked at
-           0x200000) with no sections in it.  That page is kernel memory
-           here - the page-allocator pool - so such a segment is dropped
-           entirely; a segment that merely starts below the image base is
-           trimmed to it.  Either way nothing is ever written outside
-           [USER_PROG_START, USER_PROG_END). */
+           below the link address.  With the user window starting at
+           USER_PROG_START that page is simply outside the address space,
+           so such a segment is dropped entirely; a segment that merely
+           starts below the image base is trimmed to it.  Either way
+           nothing is ever mapped outside [USER_PROG_START,
+           USER_PROG_END). */
         if (p_vaddr + p_memsz <= USER_PROG_START)
             continue;
         if (p_vaddr < USER_PROG_START) {
@@ -1125,7 +1138,7 @@ int sys_execve(const char *filename, char **argv, char **envp)
             if (skip > ELF_HDR_MAX_SKIP) {
                 printk("execve: LOAD segment starts at 0x%lx, more than one "
                        "page below the user program image\n", p_vaddr);
-                goto fail;
+                goto fail_as;
             }
             if (skip > p_filesz)
                 skip = p_filesz;
@@ -1141,38 +1154,67 @@ int sys_execve(const char *filename, char **argv, char **envp)
                    "program image [0x%lx,0x%lx)\n",
                    p_vaddr, p_memsz,
                    (unsigned long)USER_PROG_START, (unsigned long)USER_PROG_END);
-            goto fail;
+            goto fail_as;
         }
 
-        if (p_filesz) {
-            if (sys_lseek(fd, (long)p_offset, 0) < 0)
-                goto fail;
-            if (sys_read(fd, (char *)p_vaddr, p_filesz) != (long)p_filesz)
-                goto fail;
+        /* One frame per page the segment covers: the file's bytes are
+           read into it, the rest of the page stays zero (that is the
+           BSS).  Pages the file does not cover at all — a segment whose
+           memsz runs past filesz over one or more whole pages — are
+           mapped now but left zero without being read; a process that
+           wants them demands them in on first touch (do_no_page). */
+        {
+            unsigned long va, seg_end = p_vaddr + p_memsz;
+            unsigned long file_end = p_vaddr + p_filesz;
+
+            for (va = p_vaddr & ~(PAGE_SIZE - 1); va < seg_end;
+                 va += PAGE_SIZE) {
+                unsigned long pa, copy_from, copy_len, dst_off;
+                unsigned long page_lo = va;
+                unsigned long page_hi = va + PAGE_SIZE;
+
+                if (page_hi <= p_vaddr || page_lo >= file_end)
+                    continue;                  /* pure BSS page: demand paged */
+
+                pa = alloc_user_page(new_pgdir, va);
+                if (!pa) {
+                    printk("execve: out of memory loading the image\n");
+                    goto fail_as;
+                }
+
+                copy_from = (page_lo > p_vaddr) ? page_lo : p_vaddr;
+                copy_len = (page_hi < file_end) ? (page_hi - copy_from)
+                                                : (file_end - copy_from);
+                dst_off = copy_from & (PAGE_SIZE - 1);
+
+                if (copy_len) {
+                    if (sys_lseek(fd, (long)(p_offset + (copy_from - p_vaddr)),
+                                  0) < 0)
+                        goto fail_as;
+                    if (sys_read(fd, (char *)(pa + dst_off), copy_len) !=
+                        (long)copy_len)
+                        goto fail_as;
+                }
+            }
         }
-        if (p_memsz > p_filesz)
-            memset((void *)(p_vaddr + p_filesz), 0, p_memsz - p_filesz);
+
         if (p_vaddr + p_memsz > max_end)
             max_end = p_vaddr + p_memsz;
     }
     sys_close(fd);
+    fd = -1;
 
-    /* --- make sure the whole image fits the user program region, then
-       grant Ring3 access to exactly the pages it occupies --- */
-    if (max_end > USER_PROG_END) {
+    /* --- make sure the whole image fits the user program region --- */
+    if (max_end > USER_PROG_END ||
+        (max_end > 0 && max_end <= USER_PROG_START)) {
         printk("execve: image ends at 0x%lx, past the user program region "
                "[0x%lx,0x%lx)\n", max_end,
                (unsigned long)USER_PROG_START, (unsigned long)USER_PROG_END);
-        return -1;
+        goto fail_as;
     }
 
-    /* Memory isolation: make the program image user-accessible (it was
-       loaded while the pages were still supervisor-only; Ring0 can
-       write them either way, Ring3 cannot). */
-    if (max_end > USER_PROG_START)
-        grant_user_pages(USER_PROG_START, max_end - USER_PROG_START);
-
-    /* --- collect argv (user pointers) --- */
+    /* --- collect argv (user pointers, read through the OLD address
+       space, which is still the current one) --- */
     for (i = 0; i < 15; i++) {
         unsigned long p = get_fs_long((unsigned long *)argv + i);
         if (!p)
@@ -1195,62 +1237,104 @@ int sys_execve(const char *filename, char **argv, char **envp)
         argv_buf[i][k] = '\0';
     }
 
-    /* --- build the user stack area ABOVE USER_STACK_TOP (the user stack
-       grows DOWN from it, so nothing here gets clobbered by the
-       program's own call frames), inside the tail page
-       [USER_STACK_TOP, IDENTITY_MAP_TOP) laid out by include/memlayout.h:
-         +0x04 argc, +0x08 argv-array pointer, +0x0C+ argv[]
+    /* --- build the user stack tail page ABOVE USER_STACK_TOP (the user
+       stack grows DOWN from it, so nothing here gets clobbered by the
+       program's own call frames):
+         +0x004 argc, +0x008 argv-array pointer, +0x00C+ argv[]
          strings packed down from USER_ARGV_STR_TOP --- */
     {
-        char *sp = (char *)(USER_ARGV_STR_TOP - 1);
-        unsigned long *uargv = (unsigned long *)USER_ARGV_ADDR;
+        unsigned long tail_va = USER_STACK_TOP;
+        char *sp;
+        unsigned long *uargv;
+        unsigned long frame_end;
+
+        tail_pa = alloc_user_page(new_pgdir, tail_va);
+        if (!tail_pa) {
+            printk("execve: out of memory for the argv page\n");
+            goto fail_as;
+        }
+
+        /* The page is a fresh frame reached by the kernel at its own
+           physical address; user addresses inside it are just an
+           offset away. */
+#define TAIL_PTR(va) ((char *)(tail_pa + ((va) - USER_STACK_TOP)))
+
+        sp = (char *)TAIL_PTR(USER_ARGV_STR_TOP - 1);
+        uargv = (unsigned long *)TAIL_PTR(USER_ARGV_ADDR);
         /* Strings must not grow down into the argv[] array. */
-        unsigned long frame_end = USER_ARGV_ADDR + (unsigned long)(argc + 1) *
-                                  sizeof(unsigned long);
+        frame_end = USER_ARGV_ADDR + (unsigned long)(argc + 1) *
+                    sizeof(unsigned long);
 
         for (i = argc - 1; i >= 0; i--) {
             int len = 0;
             while (argv_buf[i][len])
                 len++;
             sp -= len + 1;
-            if ((unsigned long)sp < frame_end) {
+            if ((unsigned long)sp < (unsigned long)TAIL_PTR(frame_end)) {
                 printk("execve: argv block overflows the stack page\n");
-                return -1;
+                goto fail_as;
             }
             memcpy(sp, argv_buf[i], len + 1);
-            argv_ptr[i] = (unsigned long)sp;
+            argv_ptr[i] = USER_STACK_TOP + (unsigned long)(sp -
+                            (char *)TAIL_PTR(USER_STACK_TOP));
         }
         for (i = 0; i < argc; i++)
             uargv[i] = argv_ptr[i];
         uargv[argc] = 0;
 
-        *(unsigned long *)USER_ARGC_ADDR = (unsigned long)argc;
+        *(unsigned long *)TAIL_PTR(USER_ARGC_ADDR) = (unsigned long)argc;
         /* The pointer goes to its own slot, NOT to the array's address:
            USER_ARGV_ADDR is the array itself, and storing the pointer
            there would overwrite argv[0] - which is exactly what happened
            while the two were the same constant. */
-        *(unsigned long *)USER_ARGV_PTR_ADDR = (unsigned long)uargv;
+        *(unsigned long *)TAIL_PTR(USER_ARGV_PTR_ADDR) =
+            (unsigned long)USER_ARGV_ADDR;
+#undef TAIL_PTR
+    }
 
-        /* --- iret into Ring3 at the ELF entry point --- */
-        {
-            unsigned long stack = (unsigned long)USER_STACK_TOP;
-            unsigned long ss_sel = 0x23;
-            unsigned long cs_sel = 0x1b;
-            __asm__ volatile(
-                "pushl %2\n\t"          /* ss = USER_DS */
-                "pushl %0\n\t"          /* user esp */
-                "pushfl\n\t"
-                "pushl %3\n\t"          /* cs = USER_CS */
-                "pushl %1\n\t"          /* eip = ELF entry */
-                "iret\n\t"
-                :
-                : "r"(stack), "r"(entry), "r"(ss_sel), "r"(cs_sel)
-                : "memory");
-        }
+    /* --- switch to the new address space and iret into Ring3 --- */
+    old_pgdir = current->pg_dir;
+    current->pg_dir = new_pgdir;
+    current->tss.cr3 = new_pgdir;
+    current->start_code = USER_PROG_START;
+    current->end_code = max_end;
+    current->end_data = max_end;
+    current->brk = USER_HEAP_START;
+    current->start_stack = USER_STACK_TOP;
+
+    /* The old image (or, for a freshly exec'd child, the fork()ed copy
+       of the parent's) can go now: nothing below uses it any more, and
+       the tail/argv writes above went into the NEW space. */
+    if (old_pgdir && old_pgdir != kernel_pg_dir)
+        free_user_space(old_pgdir);
+
+    write_cr3(new_pgdir);
+
+    {
+        unsigned long stack = (unsigned long)USER_STACK_TOP;
+        unsigned long ss_sel = 0x23;
+        unsigned long cs_sel = 0x1b;
+        __asm__ volatile(
+            "pushl %2\n\t"          /* ss = USER_DS */
+            "pushl %0\n\t"          /* user esp */
+            "pushfl\n\t"
+            "pushl %3\n\t"          /* cs = USER_CS */
+            "pushl %1\n\t"          /* eip = ELF entry */
+            "iret\n\t"
+            :
+            : "r"(stack), "r"(entry), "r"(ss_sel), "r"(cs_sel)
+            : "memory");
     }
 
     /* never reached */
     return 0;
+
+fail_as:
+    if (fd >= 0)
+        sys_close(fd);
+    if (new_pgdir)
+        free_user_space(new_pgdir);
+    return -1;
 
 fail:
     sys_close(fd);

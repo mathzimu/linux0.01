@@ -63,8 +63,11 @@ void sched_init(void)
     init_task.tss.esp0 = (unsigned long)&_end + 0x1000;
     /* CRITICAL: the CPU loads CR3 from tss.cr3 on every task switch.
        Left at 0, switching back to the init task would zero CR3 and
-       crash on the next memory access. */
-    init_task.tss.cr3 = read_cr3();
+       crash on the next memory access.  M3: the init task is a kernel
+       task, so it keeps the kernel directory (identity map, no user
+       window) for its whole life. */
+    init_task.pg_dir = 0;
+    init_task.tss.cr3 = kernel_pg_dir;
 
     init_task.ldt[0].a = 0x0000FFFF;
     init_task.ldt[0].b = 0x00CFFA00;

@@ -6,42 +6,42 @@
 
 | 项目 | 事实 |
 |------|------|
-| Shell | 两个：内核态 `main()` → `shell_main()`（**Ring 0**，救援/调试入口，命令集不变）；**Ring3 的 `/bin/sh`**（`user/sh.c`，M2-2）——它自己 read 键盘、自己 fork/execve/waitpid。Ring3 shell 目前只能稳定跑内建命令与「execve 失败」的程序，见 §3 的 M2-2 条目 |
+| Shell | 两个：内核态 `main()` → `shell_main()`（**Ring 0**，救援/调试入口）；**Ring3 的 `/bin/sh`**（`user/sh.c`，M2-2）——它自己 read 键盘、自己 fork/execve/waitpid 子程序（M3 之后真正可用，见 §3） |
 | `move_to_user_mode` | 无此函数；Ring3 切换靠 `run_user_program`（内嵌程序）/ `sys_execve`（MINIX 里的 ELF32）iret 完成 |
 | USER_CS / USER_DS | GDT 中定义（`0x1B` / `0x23`）；system_call 会把 FS 设为 USER_DS |
-| 用户程序 | **`sys_execve` 从 MINIX 加载 ELF32**（/bin/xxx，链接 `USER_PROG_START`=0x200000）：LOAD 段加载到 vaddr（跳过纯头部/零长度段）、BSS 清零、argc/argv 写到 `USER_ARGC_ADDR`/`USER_ARGV_PTR_ADDR`/`USER_ARGV_ADDR`（0x3FF004/8/C，避开向下生长的用户栈）、授权用户页（`grant_user_pages`）、iret 到入口；内嵌程序（user 命令）保留。**限制**：段被写进恒等映射的固定物理页，因此子进程 execve 会覆盖父进程的代码页（见 §3 M2-2） |
+| 用户程序 | **`sys_execve` 从 MINIX 加载 ELF32**（/bin/xxx）：LOAD 段按页装进**该进程自己的新地址空间**（内核经恒等映射把文件内容填进新帧），纯 BSS 页不预建、首次访问按需分配；argv 写到栈顶尾页 `USER_ARGC_ADDR`/`USER_ARGV_PTR_ADDR`/`USER_ARGV_ADDR`（0x083FF004/8/C）；iret 到入口。内嵌程序（`user` 命令）走 `load_flat_image()`，同样进独立地址空间 |
 | inode 缓存 | 正常（曾误判为缺陷：实为 mkminix 的 imap 写入顺序错误——/hello 的 inode 位在 memcpy 后才设置，导致 new_inode 复用其编号；已修复） |
-| 用户态 fork | **已实现**：`system_call` 检测调用者 CPL（`syscall_cpl`）；Ring3 调用时 `sys_fork` 构造 16 项恢复帧（含用户 esp/ss）并把用户栈复制到子进程专属区 `(0x300000,0x340000]`，子进程 iret 回 Ring3 运行 |
+| 用户态 fork | **已实现**：`system_call` 检测调用者 CPL（`syscall_cpl`）；Ring3 调用时 `sys_fork` 构造 16 项恢复帧（含用户 esp/ss），并给子进程一份**新地址空间 + 写时复制的用户页**（`copy_page_tables`），子进程 iret 回 Ring3 运行 |
 | 信号 | **自定义处理器已实现**（M2-1）：`signal(sig, handler)` 接受 Ring3 函数指针（越界地址被拒）；投递时在用户栈上构造 `sigframe`（信号号 + 返回地址 `USER_SIGRETURN_ENTRY` + 保存的 80 字节上下文），handler 返回后执行 9 字节 `sigreturn` 桩（syscall 67），内核校验 magic/retaddr/cs/ss/esp 后**精确恢复**被中断的上下文 |
-| 内存隔离 | **已实现**：页表默认 U/S=0（PTE=0x03 = P+RW），仅用户程序/堆/栈页经 `grant_user_pages` 置 U/S（0x07）；Ring3 越权访问 → page fault → **终止肇事进程**（SIGSEGV 默认动作，exit 139，内核继续运行），不再是 panic 整个内核 |
+| 内存隔离 | **已实现**：内核恒等映射（0–16MB，PDE[0..3]）在每份页目录里都是 supervisor-only，用户页只存在于 PDE[32] 指向的那张进程私有页表里（PTE=0x07）；Ring3 访问内核地址 → page fault → **终止肇事进程**（SIGSEGV 默认动作，exit 139，内核继续运行） |
 
 ## 2. 内存
 
 | 项目 | 事实 |
 |------|------|
-| 恒等映射范围 | **0–4MB**（仅 PDE[0]，`boot/head.s`）；`IDENTITY_MAP_TOP = 0x400000` |
+| 恒等映射范围 | **0–16MB**（PDE[0..3]，`boot/head.s` 建 4 张内核页表）；`KERNEL_IDENTITY_TOP = 0x01000000`。QEMU 统一 `-m 16M` |
 | 内存地图唯一来源 | **`include/memlayout.h`**（内核与用户态共用；`include/linux/memmap.h` 是内核侧视图，`include/memlayout.inc` 是汇编侧镜像）。**任何文件都不许再硬编码用户区地址**——`scripts/check-layout.py` 会扫描并让 CI 失败 |
-| 编译器期校验 | `include/linux/memmap.h` 的 `STATIC_ASSERT`（区域有序、缓存装得下、子进程栈不压缓存）；布局写错 = 编译失败 |
-| 启动期校验 | `mm/memcheck.c` 的 `mem_check()`（`kernel/main.c` 在 `mem_init`/`buffer_init` 之后立即调用）：不一致 → 打印完整内存地图并 `panic`，不再带病运行 |
-| 用户区固定地址 | 程序镜像 `[0x200000,0x300000)`、堆 `[0x310000,0x340000)`、fork 子进程栈 `(0x300000,0x340000]`、用户栈顶 `0x3FF000`、用户可授权尾部上限 `USER_TAIL_TOP`=0x3FF400 |
+| 编译器期校验 | `include/linux/memmap.h` 的 `STATIC_ASSERT`（区域有序、用户区必须落在同一个 PDE 窗口内、缓存装得下）；布局写错 = 编译失败 |
+| 启动期校验 | `mm/memcheck.c` 的 `mem_check()`（`kernel/main.c` 在 `mem_init`/`buffer_init` 之后立即调用）：内核页表页与缓存页是否真的在 mem_map 里被保留、用户区是否有序、内核页目录是否有用户窗口、空闲页数 → 不一致即 `panic` + 地图 dump |
+| 用户区（虚拟地址，每进程私有） | 窗口 `[0x08000000,0x08400000)` = **一个页目录项**：程序镜像 `0x08000000`、堆 `0x08100000`、保护空洞 `0x08200000`、栈下界 `0x08300000`、栈顶 `0x083FF000`、尾页 `[0x083FF000,0x08400000)`（argc/argv/sigreturn stub） |
 | 缓冲区缓存 | 在 `BUFFER_CACHE_FLOOR`(0x350000) 与 `BUFFER_CACHE_TOP`(0x3F0000) 之间向下生长：运行期为 `[0x3ADC00,0x3F0000)`（256 × 1KB + 256 × 32B 头，约 265KB）。**缓存的条数由内存地图派生**（`include/linux/fs.h`），不再手工挑选 |
-| **已修复：缓存/堆重叠** | 旧值 `NR_BUFFERS=512` 把缓存放到 `~0x370000`，**正好压在用户堆上**：Ring0 无视 PTE 的 U/S 位，用户 malloc 的字节与文件系统块缓冲会是同一批物理页，写坏文件系统而毫无提示。现在堆/子进程栈/缓存的边界由静态断言 + 启动自检 + `make test` 场景 11（`user/bigalloc.c`）三重守住 |
+| **已修复：缓存/堆重叠** | 旧值 `NR_BUFFERS=512` 把缓存放到 `~0x370000`，**正好压在用户堆上**：Ring0 无视 PTE 的 U/S 位，用户 malloc 的字节与文件系统块缓冲会是同一批物理页，写坏文件系统而毫无提示。M1 用静态断言 + 启动自检 + 回归场景 11（`user/bigalloc.c`）守住；M3 之后用户页来自页帧池，缓存页在 mem_map 里是 USED，**结构上不可能重叠** |
 | 内核堆 | `lib/malloc.c` 的 bump 分配器，区间 `[KERNEL_HEAP_START, KERNEL_HEAP_END)` = `[0x2B000,0x2D000)`；越界返回 NULL（此前上界写成 `memory_end-0x200000`，会伸进页分配器池） |
-| 页分配器 | `get_free_page()` 从 `KERNEL_LOW_MEM` 顺序扫描；`mem_init()` 把 `[USER_PROG_START, …)` 全部标为 USED，`get_free_page()` 越 `KERNEL_POOL_END` 即 `panic`（否则会把用户程序镜像的物理页交给内核） |
-| 剩余页池 | 约 100 页（4MB 地图下），每个任务/管道各占 1 页——接近上限时会打印告警 |
-| COW / 按需换页 | **未实现**（M3 目标）；`do_no_page` 对任何页错误都终止肇事进程（SIGSEGV, exit 139），不分配/换页 |
-| 用户堆 | `user/lib.c` 的 first-fit + bump（`[0x310000,0x340000)`，192KB），与内核 `get_free_page` 无统一协调（内核页 U/S=0，用户区启动时预授权） |
-| fork 的用户栈 | 子进程栈是父栈的**真实副本**，放在 `(0x300000,0x340000]`；父栈超过 64KB 时 `fork` 返回 -1（不静默越界）。**代码段与堆仍然父子共享**（无 COW），正确性靠 fork 后立即 execve 的习惯维持——这是 M3 要解决的问题 |
+| 页分配器 | `get_free_page()` 从 mem_map 顺序扫描第一个空闲页并清零；`mem_init()` 保留内核页表页、`buffer_init()` 保留缓存页、`mem_map` 自身保留；**没有硬上限**，耗尽时返回 0，缺页处理据此打印 OOM 并只杀肇事进程（回归场景 18） |
+| 剩余页池 | 16MB 下约 3700 页（`memstat` 可查）；任务页/管道页/所有用户页共用 |
+| COW / 按需调页 | **已实现**（M3）：用户页首次访问才分配（`do_no_page` 按区域校验后建页）；fork 让父子共享只读页并在 PTE 上打软件 COW 位，写缺页时 `un_wp_page` 复制。区域外的访问仍然杀进程 |
+| 用户堆 | `user/lib.c` 的 first-fit + bump（`[0x08100000,0x08200000)`，1MB），页由内核按需提供；`sys_brk` 只记录 `task_struct.brk`，堆边界由用户库自己管 |
+| fork 的用户栈 | 与父进程**共享只读页 + 写时复制**，不再有独立「子进程栈区」，也没有栈大小上限（受限于物理页） |
 
 ## 3. 进程与调度
 
 | 项目 | 事实 |
 |------|------|
 | 调度 | O(N) counter + priority，硬件 `ljmp` TSS 切换（`schedule()` 不预改 current，由 `switch_to` 内 `xchg`） |
-| fork | 复制 task_struct + 内核栈帧；`f_count++`；pid == task[] 槽位 |
-| exit | 转为 **TASK_ZOMBIE**（保留 task[] 槽与任务页，发 SIGCHLD 唤醒父）；由父 `waitpid` 回收（退出码经 `*stat_addr` 传出 + 释放任务页）；init(task[0]) 保持空闲锚点不退出 |
+| fork | 复制 task_struct + 内核栈帧；新建地址空间并把用户页挂成 COW 共享；`f_count++`；pid == task[] 槽位 |
+| exit | 先切回内核页目录并 `free_user_space()` 释放地址空间（页按引用计数递减），再转为 **TASK_ZOMBIE**（保留 task[] 槽与任务页，发 SIGCHLD 唤醒父）；由父 `waitpid` 回收（退出码经 `*stat_addr` 传出 + 释放任务页）；init(task[0]) 保持空闲锚点不退出 |
 | 信号 | **投递已实现**：`sys_kill` 置位 + 唤醒 TASK_INTERRUPTIBLE；`ret_from_sys_call` 调用 `do_signal`；默认动作 SIGINT/SIGQUIT/SIGKILL/SIGPIPE/SIGALRM → exit(128+sig)，其余忽略；**`signal()` syscall**（SIG_DFL/SIG_IGN/SIGKILL 不可捕获）——SIGCHLD 忽略时子进程由调度器自动回收，waitpid 返回 ECHILD |
-| 用户态 | **自定义信号处理器已实现**（M2-1，见 §1）；Ring3 `/bin/sh` 已能运行（M2-2），但**用户级「父进程 fork 出子进程再让子进程 execve」这条路还不成立**——execve 把新镜像写进恒等映射的 0x200000 物理页，而那正是父进程正在执行的代码页，父进程会跑飞。这是 M3（每进程独立地址空间）要解决的核心问题 |
+| 用户态 | **自定义信号处理器已实现**（M2-1，见 §1）；**Ring3 `/bin/sh` 可以跑子程序了**（M3）：子进程 execve 装进自己的新地址空间，父 shell 的代码页不受影响；fork 的写时复制让父子内存真正隔离（回归场景 14/16） |
 
 ## 4. 文件系统
 
@@ -71,9 +71,9 @@
 |------|------|
 | 目标 | i386 32-bit freestanding |
 | macOS | Homebrew `i686-elf-gcc` + `i686-elf-binutils` 直接构建（Makefile 自动检测），或 Docker |
-| 运行 | QEMU `-fda Image` 或 `-cdrom kernel.iso`，内存 4M；MINIX 测试盘 `make minix.img` + `-hda minix.img` |
-| 自动化 | `scripts/qemu-test.py` 无头驱动（串口文本 + sendkey；`--min-wait` 让需要观察周期性事件的用例不会被“输出静止”提前收尾），`scripts/regress.sh` 14 个默认场景（`make test`；另有 `TEST_USERSH=1` 才跑的 Ring3 shell 场景），`scripts/ppm2png.py` 转截图 |
-| 静态校验（无需编译器） | `make check-layout` → `python3 scripts/check-layout.py`：内存地图有序/不重叠、`memlayout.inc` 与 `memlayout.h` 一致、缓存装得进窗口、**用户区地址没有被硬编码到布局头之外**，已构建 `kernel/system` 时还校验链接期 `_end` 未越界 |
+| 运行 | QEMU `-fda Image` 或 `-cdrom kernel.iso`，内存 **16M**（内核页表恒等映射 16MB）；MINIX 测试盘 `make minix.img` + `-hda minix.img` |
+| 自动化 | `scripts/qemu-test.py` 无头驱动（串口文本 + sendkey；`--min-wait` 让需要观察周期性事件的用例不会被“输出静止”提前收尾），`scripts/regress.sh` **18 个场景**（`make test`），`scripts/ppm2png.py` 转截图 |
+| 静态校验（无需编译器） | `make check-layout` → `python3 scripts/check-layout.py`：内存地图有序/不重叠、用户区必须整体落在一个页目录项内、`memlayout.inc` 与 `memlayout.h` 一致、缓存装得进窗口、**用户区地址没有被硬编码到布局头之外**，已构建 `kernel/system` 时还校验链接期 `_end` 未越界 |
 
 ## 7. 与文档/设计稿的关系
 

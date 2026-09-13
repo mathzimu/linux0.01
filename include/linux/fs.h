@@ -10,7 +10,7 @@
 #define NR_SUPER 8
 
 /* Buffer cache size.  The cache occupies the window between
- * BUFFER_CACHE_FLOOR and BUFFER_CACHE_TOP (include/memlayout.h) - i.e.
+ * BUFFER_CACHE_FLOOR and BUFFER_CACHE_TOP (include/linux/memmap.h) - i.e.
  * below the user stack and above the heap and child-stack region - so it
  * can never share a page with user data.
  *

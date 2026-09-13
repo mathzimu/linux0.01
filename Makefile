@@ -64,9 +64,11 @@ OBJS = kernel/main.o kernel/sched.o kernel/process.o kernel/sys.o \
        user/user_data.o
 
 # User programs are linked at this address; the kernel's ELF loader
-# copies each LOAD segment to its link-time vaddr without relocating it
-# (include/memlayout.h, enforced by the assert in user/lib.h).
-USER_PROG_START = 0x200000
+# maps each LOAD segment into the process's own address space at its
+# link-time vaddr (include/memlayout.h, enforced by the assert in
+# user/lib.h).  Since M3 this is a *virtual* address in the per-process
+# user window, not a physical one.
+USER_PROG_START = 0x08000000
 
 HEAD_OBJ = boot/head.o
 SETUP_OBJ = boot/setup.o
@@ -140,13 +142,18 @@ iso: Image
 
 # --- user programs (execve): make prog NAME=hello -------------------
 # user/NAME.c + crt.o + lib.o -> user/NAME.elf -> injected into minix.img
-user/crt.o: user/crt.s
+#
+# Every user object depends on the layout headers: the link address and
+# the argv/heap/stack addresses come from include/memlayout.h, and a
+# stale object linked at the old address fails at execve time (the loader
+# checks the entry point against the user program region).
+user/crt.o: user/crt.s include/memlayout.h include/memlayout.inc
 	$(AS) $(ASFLAGS) -o $@ $<
 
-user/lib.o: user/lib.c user/lib.h
+user/lib.o: user/lib.c user/lib.h include/memlayout.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-user/%.o: user/%.c user/lib.h
+user/%.o: user/%.c user/lib.h include/memlayout.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 user/%.elf: user/crt.o user/%.o user/lib.o
@@ -197,16 +204,17 @@ clean:
 	rm -f boot/boot boot/setup
 	rm -f $(OBJS) $(HEAD_OBJ) $(SETUP_OBJ) $(BOOT_OBJ)
 	rm -f tools/build
+	rm -f user/*.o user/*.elf user/*.bin user/user_data.c
 	rm -f *~ core .image_floppy_padded
 	rm -rf .iso_tmp
 
 run: Image
-	qemu-system-i386 -fda Image -m 4M -boot a
+	qemu-system-i386 -fda Image -m 16M -boot a
 
 run-cd: kernel.iso
-	qemu-system-i386 -cdrom kernel.iso -m 4M -boot d
+	qemu-system-i386 -cdrom kernel.iso -m 16M -boot d
 
 debug: Image
-	qemu-system-i386 -fda Image -m 4M -boot a -s -S
+	qemu-system-i386 -fda Image -m 16M -boot a -s -S
 
 .PHONY: all clean run run-cd debug iso docker-build test

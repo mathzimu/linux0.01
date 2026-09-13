@@ -233,7 +233,7 @@ Power On
   └── main.c
       ├── mem_init()       → Initialize memory management
       ├── buffer_init()    → Initialize buffer cache
-      ├── grant_user_pages() → 授权用户堆/栈页 (U/S=1)
+      ├── mem_check()      → 启动内存地图自检（不一致即 panic）
       ├── tty_init()       → Initialize console/keyboard
       ├── sys_setup()      → Mount MINIX root filesystem (read superblock)
       ├── sched_init()     → Initialize scheduler + timer + TSS/LDT
@@ -321,7 +321,7 @@ Device Interrupt (e.g., Keyboard IRQ1)
 head.s → main.c:        void main(void)
 main.c → mem_init:      void mem_init(long start, long end)
 main.c → buffer_init:   void buffer_init(long buffer_end)
-main.c → grant_user_pages: void grant_user_pages(unsigned long from, unsigned long size)
+main.c → mem_check:     void mem_check(void)
 main.c → tty_init:      void tty_init(void)
 main.c → sys_setup:     int sys_setup(void)
 main.c → sched_init:    void sched_init(void)
@@ -347,11 +347,15 @@ process.c exports:
     int sys_signal(int sig, unsigned long handler)
     void do_signal(void)
 
-memory.c exports:
-    int get_free_page(void)
+memory.c exports (M3):
+    unsigned long get_free_page(void)
     void free_page(unsigned long addr)
-    int free_page_tables(unsigned long from, unsigned long size)
-    void grant_user_pages(unsigned long from, unsigned long size)
+    unsigned long alloc_user_pgdir(void)
+    void free_user_space(unsigned long pgdir)
+    unsigned long alloc_user_page(unsigned long pgdir, unsigned long va)
+    int copy_page_tables(unsigned long from_pgdir, unsigned long to_pgdir)
+    void do_no_page(unsigned long error_code, unsigned long eip, unsigned long address)
+    void mm_report(void)          /* memstat 命令 */
 
 console.c exports:
     void con_init(void)

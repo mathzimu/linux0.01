@@ -854,7 +854,8 @@ setup_paging:
 - PTE[0] = 0x000003 → 线性地址 0x000000 映射到物理页 0x000000（**0x03 = P+RW，无 U/S → 内核专属**）
 - PTE[1] = 0x001003 → 线性地址 0x001000 映射到物理页 0x001000
 - PTE[1023] = 0x3FF003 → 线性地址 0x3FF000 映射到物理页 0x3FF000
-- **默认全 0x03：0-4MB 全部只有 Ring0 能访问**。用户程序/堆/栈页在启动（`grant_user_pages` 授权堆+栈 0x310000-0x400000）和 `execve`（授权程序区 0x200000 起）时把对应 PTE 置为 0x07（P+RW+U/S）。Ring3 访问未授权页 → page fault → `do_no_page` panic。
+- **默认全 0x03：内核恒等映射全部只有 Ring0 能访问**。原实现里用户程序/堆/栈页在启动（`grant_user_pages` 授权堆+栈 0x310000-0x400000）和 `execve`（授权程序区 0x200000 起）时把对应 PTE 置为 0x07（P+RW+U/S）；Ring3 访问未授权页 → page fault → `do_no_page` panic。
+- **M3 更新**：`setup_paging` 现在填 **4 张**内核页表（PDE[0..3]，恒等映射 0–16MB，仍全 0x03）；用户页不再改这些 PTE，而是由 `alloc_user_page()` 建在**每个进程自己的页目录**的 PDE[32] 指向的页表里（PTE=0x07）；`grant_user_pages` 已删除。越权访问仍然 page fault，但现在只杀肇事进程（按需调页/COW 也在同一个处理函数里）。
 
 **恒等映射**：所有线性地址等于物理地址。
 

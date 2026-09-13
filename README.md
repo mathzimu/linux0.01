@@ -26,12 +26,12 @@
 | **进程管理** | `task_struct` 控制块、TSS 硬件上下文切换、最多 64 进程、**zombie + `waitpid` 回收**、SIGCHLD 忽略时自动回收 |
 | **用户态** | `execve` 从 MINIX 加载 **ELF32** 并 iret 进 **Ring3**（argc/argv 传递）、**Ring3 fork**、可编程工具链（`make prog`） |
 | **调度** | 100Hz 时钟中断、O(N) 优先级轮转、抢占式、`alarm(SIGALRM)` |
-| **内存** | 4KB 分页、位图页帧分配器、恒等映射 0–4MB、**内存隔离**（内核页 U/S=0，仅按区授权用户页） |
+| **内存** | 4KB 分页、页帧分配器、**每进程独立地址空间**、**按需调页**、**写时复制（COW）**、内核恒等映射 0–16MB 全 supervisor-only（越权只杀肇事进程） |
 | **中断** | IDT 256 门、时钟 / 键盘 / 硬盘 / 系统调用（`int 0x80`） |
 | **设备** | VGA 80×25 文本控制台、PS/2 键盘（含 Shift）、IDE 硬盘 PIO、COM1 串口镜像 |
-| **文件系统** | **MINIX v1 读写**（文件/目录增删、**硬链接、重命名、chroot**）、LRU 块缓冲（脏块回写）、inode 缓存、相对路径 + `chdir` |
+| **文件系统** | **MINIX v1 读写**（文件/目录增删、**硬链接、重命名、chroot**）、LRU 块缓冲（脏块回写 + **每 5 秒定时回写**）、inode 缓存、相对路径 + `chdir` |
 | **系统调用** | **67 个，编号与 1991 Linux 0.01 完全一致**（含管道、`stat/fstat`、`signal`、`uid/gid`、`umask`、`uname`…） |
-| **Shell** | 25 条命令，覆盖进程 / 信号 / 文件系统 / 管道全链路 |
+| **Shell** | 内核态 26 条命令 + **Ring3 `/bin/sh`**（自建 cd/pwd/exit/help，其余走 `/bin/<name>`） |
 
 ---
 
@@ -138,21 +138,39 @@ BIOS POST
 三层把关，任何区域重叠都会**编译失败或 panic**，而不是静默写坏文件系统。
 
 ```
+物理内存（恒等映射，内核视角；每个进程的页目录都含这部分，只读给内核用）
 0x000000 ┌──────────────────┐
          │   BIOS + IVT     │
-0x100000 ├──────────────────┤ ← 页目录 (PGDIR)
-0x101000 ├──────────────────┤ ← 页表 0（仅 PDE[0]，恒等映射 0-4MB）
 0x108000 ├──────────────────┤ ← 内核起始 (startup_32)
-         │  内核代码/数据/BSS│  _end ≈ 0x29E68（上限 KERNEL_IMAGE_LIMIT = 0x2B000）
+         │  内核代码/数据/BSS│  _end ≈ 0x27E68（上限 KERNEL_IMAGE_LIMIT = 0x2B000）
          │  内核 bump 堆     │ ← lib/malloc.c，[0x2B000, 0x2D000)
-         │  页分配器池       │ ← < 0x200000（任务页 / 管道页）
-0x200000 ├──────────────────┤ ← 用户程序镜像 [0x200000, 0x300000)
-0x310000 ├──────────────────┤ ← 用户堆 [0x310000, 0x340000)（malloc）
-0x340000 ├──────────────────┤ ← fork 子进程用户栈（向下生长）
-0x3BC000 ├──────────────────┤ ← 缓冲区缓存 [0x3BC000, 0x400000)（256 × 1KB）
-0x3FF000 ├──────────────────┤ ← 用户栈顶（向下生长）
-0x400000 └──────────────────┘ ← 4MB 上限
+0x100000 ├──────────────────┤ ← 页目录 (PGDIR) + 4 张内核页表（恒等映射 0-16MB）
+0x105000 ├──────────────────┤ ← 页帧池：任务页 / 管道页 / **所有用户页**
+         │  （空闲）         │  ← 16MB 内存下约 3700 页
+0x350000 ├──────────────────┤ ← 缓冲区缓存窗口（实际落在 [0x3ADC00, 0x3F0000)）
+0x3F0000 ├──────────────────┤ ← 缓存以上的空闲页
+         │  mem_map 位图     │  ← 末尾几 KB
+0x400000 └──────────────────┘   … 4MB 以上到 16MB 同样恒等映射、同样可分配
 ```
+
+```
+用户地址空间（每个进程一份页目录，PDE[32]；虚拟地址，不是物理地址）
+0x08000000 ┌──────────────────┐ ← USER_PROG_START（ELF 链接地址）
+           │  程序镜像         │  1MB 上限，按 ELF LOAD 段按需建页
+0x08100000 ├──────────────────┤ ← 用户堆（malloc）
+           │  …               │  首次访问时才分配（按需调页）
+0x08200000 ├──────────────────┤
+           │  保护空洞         │  访问这里 = SIGSEGV
+0x08300000 ├──────────────────┤ ← 用户栈下界
+           │  用户栈（向下长） │  首次访问时才分配
+0x083FF000 ├──────────────────┤ ← 栈顶：argc/argv/sigreturn stub 所在尾页
+0x08400000 └──────────────────┘ ← USER_WINDOW_TOP（正好一个页目录项）
+```
+
+> **M3 的地址空间拆分**：内核恒等映射 0–16MB（PDE[0..3]，全部 supervisor-only），
+> 用户区只占 PDE[32] 一项，所以每个进程的额外开销是**两张页表页**（页目录 + 用户页表）。
+> 于是 execve 可以把新镜像装进全新的物理页——这正是「Ring3 shell 能跑子程序」的前提。
+
 
 > 内核映像在磁盘上约 80KB，但 `_end` 落在 0x29E68（约 168KB）——差别全在 BSS
 > （页分配器位图、inode/file 表、tty 缓冲等静态数组）。`KERNEL_IMAGE_LIMIT`
@@ -165,11 +183,16 @@ BIOS POST
 
 ### 关键事实（读源码前先记住）
 
-1. **Shell 在内核态**（`main` 直接 `shell_main`）；用户程序经 `execve`/`run_user_program` iret 进 **Ring3**，`int 0x80` 自动切回内核栈
+1. **两个 Shell**：内核态 `$`（`main` 直接 `shell_main`，救援/调试入口）与 Ring3 的 `/bin/sh`
+   （`exec /bin/sh`，自己 read 键盘、自己 fork+execve）；`int 0x80` 自动切回内核栈
 2. **67 个系统调用，编号 = Linux 0.01**；`include/unistd.h` 提供 `int $0x80` 包装宏
-3. **内存隔离**：页表默认 `0x03`（P+RW 无 U/S），仅用户程序/堆/栈页被 `grant_user_pages` 授权（`0x07`）；Ring3 越权访问 → 终止肇事进程（SIGSEGV），内核继续运行
+3. **每进程独立地址空间**（M3）：内核恒等映射 0–16MB 全 supervisor-only，用户区在 PDE[32]；
+   进程页首次访问才分配（按需调页），fork 用**写时复制**（`copy_page_tables`/`un_wp_page`）；
+   Ring3 越权访问 → 终止肇事进程（SIGSEGV），内核继续运行。`memstat` 可看空闲页与
+   缺页/COW 计数
 4. **段选择子**：`KERNEL_CS=0x08` `KERNEL_DS=0x10` `USER_CS=0x1B` `USER_DS=0x23`
-5. **MINIX FS** 挂 `minix.img`（dev 0x301）后 `ls`/`cat`/`wtest` 可实测读写
+5. **MINIX FS** 挂 `minix.img`（dev 0x301）后 `ls`/`cat`/`wtest` 可实测读写；
+   脏缓冲由**定时回写任务**每 5 秒刷盘（M2-3），不再依赖显式 `sync`
 
 ---
 
@@ -232,8 +255,8 @@ linux0.01/
 │   ├── vsprintf.c # printk 格式化
 │   └── panic.c    # 内核崩溃处理
 ├── mm/            # 内存管理
-│   ├── memory.c   # 页帧分配器 + grant_user_pages（内存隔离授权）
-│   ├── page.s     # page_fault 处理
+│   ├── memory.c   # ★ 页帧分配器 + 每进程页目录 + 按需调页 + COW + memstat
+│   ├── page.s     # page_fault 处理（do_no_page）
 │   └── memcheck.c # ★ 启动自检：内存地图不一致就 panic（带地图 dump）
 ├── fs/            # 文件系统
 │   ├── minix.c    # 超级块 + sys_setup
@@ -300,17 +323,17 @@ exec: child 1 exit_code=7
 **用户态库 `user/lib.h`** 提供：
 - `printf`（`%d %u %x %s %c %p` + 宽度/精度/`long` 修饰符）
 - `unistd.h` 全部系统调用包装（`open/read/write/close/fork/waitpid/execve/pipe/stat/...`）
-- `malloc/free`（0x310000–0x3FE000，first-fit + bump）、`opendir/readdir`
+- `malloc/free`（虚拟 `0x08100000`–`0x08200000`，first-fit + bump；页由内核按需提供）、`opendir/readdir`
 - 字符串 / `ctype` / `atoi`/`strtol`
 
-**已内置示例**：`hello`（argv）· `catfile`（读文件）· `memtest`（堆复用）· `printf`（格式演示）· `ls`（列目录）· `str`（libc 演示）· `sigchld`（SIGCHLD 语义）· `pipedemo`（管道通信）· `sysdemo`（0.01 对齐 syscall）· `bigdir`（目录扩容）· `bigalloc`（堆与缓冲区缓存不重叠）。
+**已内置示例**：`hello`（argv）· `catfile`（读文件）· `memtest`（堆复用）· `printf`（格式演示）· `ls`（列目录）· `str`（libc 演示）· `sigchld`（SIGCHLD 语义）· `pipedemo`（管道通信）· `sysdemo`（0.01 对齐 syscall）· `bigdir`（目录扩容）· `bigalloc`（堆与缓冲区缓存不重叠）· `sigdemo`（自定义信号处理器）· `cowtest`（fork 写时复制隔离）· `demandtest`（按需调页）· `oomtest`（内存耗尽只杀肇事进程）· `sh`（Ring3 shell）· `echotest`（Ring3 stdin）。
 **基础应用程序**：`cat`（读文件输出）· `wc`（统计行/词/字节）· `grep`（行内搜索）· `cp`（复制文件）· `touch`（创建空文件）。
 
 ---
 
 ## 🧪 自动化验证
 
-**一键回归**（12 个核心场景：exec / 管道 / chdir / 硬链接 / fork-waitpid / 信号 / 系统调用 / 内存隔离 / 目录扩容 / 基础应用 / 堆与缓存不重叠 / 启动自检）：
+**一键回归**（18 个场景：exec / 管道 / chdir / 硬链接 / fork-waitpid / 信号 / 系统调用 / 内存隔离 / 目录扩容 / 基础应用 / 堆与缓存不重叠 / 启动自检 / 自定义信号处理器 / **Ring3 shell** / **定时回写** / **写时复制** / **按需调页** / **内存耗尽**）：
 
 ```bash
 make test                    # 等价于 scripts/regress.sh

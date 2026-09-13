@@ -98,7 +98,7 @@ else
     echo "  Linux: sudo apt install xorriso     (or genisoimage)"
     echo ""
     echo "The floppy Image is ready at: $INPUT"
-    echo "Use: qemu-system-i386 -fda $INPUT -m 4M -boot a"
+    echo "Use: qemu-system-i386 -fda $INPUT -m 16M -boot a"
     echo "================================================================"
     exit 1
 fi

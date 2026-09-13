@@ -57,7 +57,7 @@ sys_sigreturn:
     /* The frame carries the return address it was built with; compare
        against it rather than hard-coding the stub address here. */
     movl 4(%esi), %eax
-    cmpl $0x003FF100, %eax              /* USER_SIGRETURN_ENTRY */
+    cmpl $0x083FF100, %eax              /* USER_SIGRETURN_ENTRY */
     jne sig_bad
     movl 16(%esi), %eax                 /* eip */
     testl %eax, %eax
@@ -71,9 +71,9 @@ sys_sigreturn:
     movl 28(%esi), %eax                 /* esp */
     testl $3, %eax                      /* must be word aligned */
     jnz sig_bad
-    cmpl $0x00300000, %eax              /* CHILD_USER_STACK_END */
+    cmpl $0x08300000, %eax              /* USER_STACK_FLOOR */
     jb sig_bad
-    cmpl $0x00400000, %eax              /* IDENTITY_MAP_TOP */
+    cmpl $0x08400000, %eax              /* USER_WINDOW_TOP */
     jae sig_bad
 
     /* iret frame (ss/esp/eflags/cs/eip are pre-pushed by the CPU's

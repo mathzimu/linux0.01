@@ -59,20 +59,43 @@ execve，子进程就会把新镜像写进 0x200000 —— 那正是父 shell �
 **M2 新增回归**：场景 14 `autosync`（两阶段：touch 后空转 8s 不调用 sync → 冷启动 `ls` 必须看到文件）；
 `TEST_USERSH=1` 时另跑 Ring3 shell 场景（M3 后转正）。
 
-## M3 — 架构级内存模型（计划中）
+## M3 — 架构级内存模型 ✅ 已完成
 
-放弃「单页表恒等映射 0–4MB + 固定用户地址」，改为**每进程独立页目录 + 帧分配器按页授权**：
+放弃「单页表恒等映射 0–4MB + 固定用户地址」，改为**每进程独立页目录 + 帧分配器按页授权**。
 
-| 项 | 内容 |
-|----|------|
-| M3-1 | 每进程页目录/页表、`get_free_page` 之外的帧分配器改造、`free_page_tables` 真正可用 |
-| M3-2 | `execve` 按 ELF 段建立映射（不再按 link vaddr 直接写）+ 按需调页（`do_no_page` 分配而非杀进程） |
-| M3-3 | `copy_page_tables` + COW（`un_wp_page`）：fork 语义真正正确，子进程栈/堆私有 |
-| M3-4 | fork/exit 路径适配、映射扩容（8/16MB）、用户区搬离固定地址 |
-| M3-5 | 回归与文档收尾（新场景：fork 后父子堆互不可见、缺页计数、OOM 行为） |
+**新模型**：
 
-> M3 会**冲淡**现有“内存隔离”亮点（COW 之后所有用户页本来就要 U/S=1），
-> 换来的是真正的多进程能力。`docs/GIT-WORKFLOW.md` §6 已为它预留 major 版本语义。
+```
+内核恒等映射 0..16MB（PDE[0..3]，4 张内核页表，全 supervisor-only，所有进程共享）
+  + 页目录 0x100000、内核页表 0x101000..0x105000、页帧池 0x105000 起、缓冲区缓存窗口、mem_map 末尾
+
+用户地址空间（每进程一份页目录，只占 PDE[32] = 0x08000000..0x08400000）
+  0x08000000 程序镜像（ELF LOAD 段按页装入新帧）
+  0x08100000 堆（首次访问才分配）
+  0x08200000 保护空洞（访问 = SIGSEGV）
+  0x08300000 栈下界（向下按需增长）
+  0x083FF000 栈顶尾页：argc/argv/sigreturn stub
+```
+
+| 项 | 状态 | 内容 |
+|----|------|------|
+| M3-1 | ✅ | `alloc_user_pgdir()`（页目录 + 一张用户页表）/`free_user_space()`/`alloc_user_page()`/`map_user_page()`；内核页表全局共享，`get_free_page()` 上限取消，池 = mem_map 里所有空闲页（16MB 下约 3700 页） |
+| M3-2 | ✅ | `execve` 在**新地址空间**里按 ELF LOAD 段建页（内核经恒等映射填帧内容），纯 BSS 页不预先建 → 首次访问触发 `do_no_page` 按需分配；非法区域访问仍 SIGSEGV |
+| M3-3 | ✅ | `copy_page_tables()` 让父子共享只读页（PTE 打上软件 COW 位 0x200），`un_wp_page()` 在写缺页时复制；fork 不再复制用户栈，也不再需要「子进程栈区」 |
+| M3-4 | ✅ | fork/exit/execve 适配（exit 先切回内核页目录再释放地址空间）；`boot/head.s` 建 4 张内核页表把恒等映射扩到 16MB；QEMU 统一 `-m 16M` |
+| M3-5 | ✅ | 新回归场景 16 `cow`（子进程写对父进程不可见）、17 `demand`（384KB BSS/堆首访为 0）、18 `oom`（池耗尽只杀肇事进程，内核存活）；`memstat` 暴露空闲页/缺页/COW/OOM 计数 |
+
+**M3 顺带修掉的两个老 bug**：
+
+1. `mm/page.s` 的 `page_fault` **从不丢弃 CPU 压入的错误码**：以前 `do_no_page` 从不返回
+   （一律杀进程），所以 iret 少弹一个字的错误永远暴露不出来；一旦开始按需调页/COW 就会
+   iret 到错误码上然后 #GP 死循环。现在返回前 `add $4,%esp`。
+2. `mm/page.s` 读取错误码的偏移写成了 `0x34`（两次 push 之后应为 `0x38`），
+   传给 `do_no_page` 的「错误码」其实是 eip。
+
+**M3 让 M2-2 的遗留闭环**：Ring3 `/bin/sh` 现在可以真正 fork+execve 子程序
+（回归场景 14 `usersh` 默认跑），因为子进程的 execve 不再写进父进程正在执行的物理页。
+
 
 ---
 
@@ -190,16 +213,16 @@ make test                   # 一键回归（scripts/regress.sh，8 个核心场
    写死用户区地址会被 `make check-layout` 拦下（见 M1）
 3. **chdir 已支持**（syscall 23）；`..` 依赖目录的 `..` 项（mkminix 已写入；
    `mkdir` 建的目录自带 . / ..）
-4. **无自定义信号处理器** —— 只有默认动作（SIGINT/KILL 杀进程）；M2-1 目标
+4. **自定义信号处理器已实现**（M2-1）—— 默认动作 + 用户态 handler（`sigreturn` 精确恢复上下文）
 5. **目录已支持扩容** —— >64 项时自动分配单间接块（`ensure_dir_block`；
    `rmdir` 释放全部目录 zone）。多级间接（>519 项）不支持。
-6. **用户栈**：顶 `USER_STACK_TOP`(0x3FF000)，crt 从 `USER_ARGC_ADDR`/`USER_ARGV_ADDR`
-   读 argc/argv（execve 约定）
-7. **用户堆**：`[USER_HEAP_START, USER_HEAP_END)` = `[0x310000,0x340000)`（lib.c）
-8. **程序链接地址**：`USER_PROG_START`(0x200000)，固定无 PIE；
+6. **用户栈**：顶 `USER_STACK_TOP`(0x083FF000)，crt 从 `USER_ARGC_ADDR`/`USER_ARGV_PTR_ADDR`
+   读 argc/argv（execve 约定）；栈页按需增长
+7. **用户堆**：`[USER_HEAP_START, USER_HEAP_END)` = `[0x08100000,0x08200000)`（lib.c，1MB）
+8. **程序链接地址**：`USER_PROG_START`(0x08000000)，固定无 PIE；
    `user/lib.h` 里有链接地址断言（链错地址 = 编译失败）
-9. **fork 仍非 POSIX 语义**：用户栈是真实副本，但**代码段/堆父子共享**（无 COW）。
-   fork 后立即 execve 是当前唯一稳妥用法 —— M3 修复
+9. **fork 已是 POSIX 语义**（M3）：用户页父子共享只读 + 写时复制，子进程的写父进程看不见；
+   地址空间彼此独立，子进程 execve 不再影响父进程
 10. **printf %s 需 NUL 终止**（read 后手动补）
 
 ## 关键文件地图
@@ -213,9 +236,9 @@ make test                   # 一键回归（scripts/regress.sh，8 个核心场
 | `scripts/check-layout.py` | 无编译器的静态地图校验（`make check-layout`） |
 | `kernel/sys.c` | 系统调用实现（含 sys_execve） |
 | `kernel/process.c` | fork/waitpid/exit/do_signal |
-| `boot/head.s` | system_call 入口（syscall_cpl 检测）、sys_call_table、setup_paging（PTE 0x03） |
-| `mm/memory.c` | 物理内存管理 + `grant_user_pages`（内存隔离授权） |
-| `mm/page.s` | page_fault 处理（do_no_page） |
+| `boot/head.s` | system_call 入口（syscall_cpl 检测）、sys_call_table、setup_paging（4 张内核页表恒等映射 0–16MB） |
+| `mm/memory.c` | ★ 页帧分配器 + 每进程页目录 + 按需调页 + COW（`copy_page_tables`/`un_wp_page`）+ `mm_report()` |
+| `mm/page.s` | page_fault 处理（do_no_page；记得它也负责丢弃错误码） |
 | `fs/*` | MINIX FS（inode.c 的 iget/read_inode 有历史 bug 修复记录） |
 | `init/shell.c` | Shell 命令 + run_user_program |
 | `user/lib.h/.c` | 用户态库（printf/malloc/syscall 包装） |

@@ -80,7 +80,7 @@ def main():
         if os.path.exists(f):
             os.unlink(f)
 
-    cmd = [args.qemu, '-m', '4M', '-vga', 'std', '-display', 'none',
+    cmd = [args.qemu, '-m', '16M', '-vga', 'std', '-display', 'none',
            '-serial', 'file:%s' % serial,
            '-monitor', 'unix:%s,server,nowait' % mon]
     if args.image:

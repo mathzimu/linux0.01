@@ -135,6 +135,12 @@ struct task_struct {
     unsigned long session;
     unsigned long leader;
     unsigned long utime, stime, cutime, cstime;
+    /* M3: this task's address space — the physical address of its page
+     * directory (its user window is private; the kernel identity map is
+     * shared).  0 means "kernel only", which is what the init task and
+     * the write-back task use.  tss.cr3 holds the same value because the
+     * CPU reloads CR3 from the TSS on every task switch. */
+    unsigned long pg_dir;
     unsigned long start_code, end_code, start_data, end_data;
     unsigned long brk, start_stack;
     struct desc_struct ldt[3];

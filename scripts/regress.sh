@@ -140,20 +140,16 @@ run_case sigdemo 'rm -f minix.img && make prog NAME=sigdemo' 'exec /bin/sigdemo\
     'sigdemo: after alarm: hits=1 last_sig=14' \
     'sigdemo: PASS'
 
-# 场景 14: Ring3 用户态 shell（M2-2）
+# 场景 14: Ring3 用户态 shell（M2-2，M3 落地后才真正可用）
 #   /bin/sh 完全跑在用户态：它自己 read 键盘、自己 fork+execve 子程序。
-#   WARNING: 默认不跑——让子程序**成功** execve 需要 M3 的独立地址空间：
-#   子进程的 execve 会把 ELF 段写进恒等映射的 0x200000 物理页，而那正是父
-#   shell 正在执行的代码页，父进程随即跑飞（详见 docs/NEXT-STEPS.md M2-2）。
-#   现在只能验证失败路径（execve 失败不写内存，父 shell 存活）。
-#   M3 落地后把 TEST_USERSH 默认值改成 1。
-if [ "${TEST_USERSH:-0}" = "1" ]; then
+#   M2 时这里只能验证失败路径：子进程一旦**成功** execve，就会把新镜像写进
+#   恒等映射的固定物理页，而那正是父 shell 正在执行的代码页，父进程随即跑飞。
+#   M3 给每个进程独立地址空间之后，这条路才成立（也是 M3 的验收点之一）。
 SH_PREP='rm -f minix.img && make user/sh.elf user/hello.elf && tools/mkminix minix.img user/sh.elf:sh user/hello.elf:hello'
 run_case usersh "$SH_PREP" 'exec /bin/sh\nhello a b\nexit\n' \
     'sh: user-mode shell (Ring3)' \
     'hello from user program: argc=3' \
     'sh: hello exited with 42'
-fi
 
 # 场景 15: 定时回写（M2-3）
 #   全程不调用 sync：第一阶段 touch 一个文件后空转 8 秒（>5s 回写周期），
@@ -161,6 +157,32 @@ fi
 run_case2 autosync "$BASE && make minix.img" 'touch /syncmark\n' 8 'ls\n' \
     'syncmark' \
     'sync:'
+
+# 场景 16: 写时复制（M3）—— fork 后子进程的写必须对父进程不可见
+#   M1/M2 时子进程与父进程共享代码段/堆，子进程写进去的值父进程直接看得见；
+#   现在两侧共享只读页，首次写各自复制。父进程四个变量的值必须原封不动。
+run_case cow "$BASE && make prog NAME=cowtest" 'exec /bin/cowtest\n' \
+    'cowtest: child PASS' \
+    'cowtest: parent after child exit: global=100 bss=0 heap=111 stack=7' \
+    'cowtest: PASS (fork gave the child private pages)'
+
+# 场景 17: 按需调页（M3）—— .bss 与堆的页在第一次访问时才分配
+#   384KB 未触碰区域读出来必须是 0（新分配的零页，而不是残留数据），写入后
+#   再读回必须一致（页确实建好了）。memstat 顺带验证计数器与空闲页统计。
+run_case demand "$BASE && make prog NAME=demandtest" \
+    'memstat\nexec /bin/demandtest\nmemstat\n' \
+    'demandtest: 384KB touched, 0 mismatches' \
+    'demandtest: PASS (BSS and heap arrived zeroed, on demand)' \
+    'mem: ' \
+    'COW breaks'
+
+# 场景 18: 内存耗尽（M3）—— 分配不到页是正常情况，不是内核 panic
+#   一堆子进程各占住几百页私有页，直到 16MB 池见底：缺页处理打印 OOM 并只杀
+#   肇事进程，内核继续跑。用例最后再执行一次 ls —— 内核活着、文件系统可用。
+run_case oom "$BASE && make prog NAME=oomtest" 'exec /bin/oomtest\nls\n' \
+    'children are holding memory' \
+    'PAGE FAULT: out of memory for pid=' \
+    'hello.txt'
 
 echo
 echo "================================"

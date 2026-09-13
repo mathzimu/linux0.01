@@ -211,47 +211,61 @@ def main():
         fail('include/memlayout.h: %s' % exc)
         return report()
 
-    for name in ('IDENTITY_MAP_SIZE', 'USER_PROG_START', 'USER_PROG_END',
-                 'USER_HEAP_START', 'USER_HEAP_END', 'USER_STACK_TOP',
-                 'USER_STACK_END', 'USER_ARGC_ADDR', 'USER_ARGV_ADDR',
-                 'USER_ARGV_STR_TOP', 'CHILD_USER_STACK_TOP',
+    for name in ('KERNEL_IDENTITY_TOP', 'KERNEL_TABLES_END', 'USER_BASE',
+                 'USER_WINDOW_TOP', 'USER_PDE_INDEX', 'USER_PROG_START',
+                 'USER_PROG_END', 'USER_HEAP_START', 'USER_HEAP_END',
+                 'USER_STACK_FLOOR', 'USER_STACK_TOP', 'USER_STACK_END',
+                 'USER_ARGC_ADDR', 'USER_ARGV_ADDR', 'USER_ARGV_STR_TOP',
+                 'USER_TAIL_TOP',
                  'KERNEL_IMG_BASE', 'PAGE_DIRECTORY', 'PAGE_TABLE_0'):
         if name not in L:
             fail('include/memlayout.h does not define %s' % name)
     if FAILURES:
         return report()
 
-    top = L['IDENTITY_MAP_SIZE']
+    top = L['KERNEL_IDENTITY_TOP']
 
     # --- 2. ordering / disjointness of the user regions -------------
+    # M3: the user regions live in their own virtual window (one page
+    # directory entry per process), NOT inside the kernel identity map,
+    # so they are checked against the window rather than against RAM.
+    win_lo = L['USER_BASE']
+    win_hi = L['USER_WINDOW_TOP']
     regions = [
         ('kernel image',  L['KERNEL_IMG_BASE'], None),   # open ended: grows up
         ('page dir',      L['PAGE_DIRECTORY'],  L['PAGE_DIRECTORY'] + 0x1000),
-        ('page table 0',  L['PAGE_TABLE_0'],    L['PAGE_TABLE_0'] + 0x1000),
+        ('page table 0',  L['PAGE_TABLE_0'],    L['KERNEL_TABLES_END']),
         ('user program',  L['USER_PROG_START'], L['USER_PROG_END']),
         ('user heap',     L['USER_HEAP_START'], L['USER_HEAP_END']),
-        ('user stack',    L['USER_STACK_TOP'],  L['USER_STACK_END']),
+        ('user stack',    L['USER_STACK_FLOOR'], L['USER_STACK_TOP']),
     ]
     for name, lo, hi in regions:
         if hi is None:                       # open-ended region
-            if lo >= top:
-                fail('region %s starts at 0x%x, past the identity map top 0x%x'
-                     % (name, lo, top))
+            if lo >= L['PAGE_DIRECTORY']:
+                fail('region %s starts at 0x%x, past the kernel page tables '
+                     '(0x%x)' % (name, lo, L['PAGE_DIRECTORY']))
             continue
         if lo >= hi:
             fail('region %s is empty or inverted: [0x%x, 0x%x)' % (name, lo, hi))
-        if hi > top:
-            fail('region %s ends at 0x%x, past the identity map top 0x%x'
-                 % (name, hi, top))
 
     bounds = dict((n, (lo, hi)) for n, lo, hi in regions)
     if not (L['KERNEL_IMG_BASE'] < L['PAGE_DIRECTORY']):
         fail('the kernel image is linked at 0x%x but the page directory is at '
              '0x%x: the image would overwrite it'
              % (L['KERNEL_IMG_BASE'], L['PAGE_DIRECTORY']))
-    if not (L['PAGE_TABLE_0'] + 0x1000 <= L['USER_PROG_START']):
-        fail('the page tables (end 0x%x) run into the user program image '
-             '(0x%x)' % (L['PAGE_TABLE_0'] + 0x1000, L['USER_PROG_START']))
+    if not (L['KERNEL_TABLES_END'] <= top):
+        fail('the kernel page tables (end 0x%x) do not fit below the identity '
+             'map top (0x%x)' % (L['KERNEL_TABLES_END'], top))
+
+    # The identity map must be exactly what KERNEL_PT_COUNT tables cover:
+    # PDE[0..count-1] * 4MB.  Getting this wrong means the kernel cannot
+    # address all of RAM (or maps memory that is not there).
+    if L['KERNEL_TABLES_END'] != L['PAGE_TABLE_0'] + L['KERNEL_PT_COUNT'] * 0x1000:
+        fail('KERNEL_TABLES_END 0x%x is not PAGE_TABLE_0 + KERNEL_PT_COUNT '
+             'pages' % L['KERNEL_TABLES_END'])
+    if L['KERNEL_IDENTITY_TOP'] != L['KERNEL_PT_COUNT'] * 0x400000:
+        fail('KERNEL_IDENTITY_TOP 0x%x is not KERNEL_PT_COUNT * 4MB'
+             % L['KERNEL_IDENTITY_TOP'])
 
     ordered = ['user program', 'user heap', 'user stack']
     for a, b in zip(ordered, ordered[1:]):
@@ -261,19 +275,32 @@ def main():
             fail('%s (ends 0x%x) overlaps %s (starts 0x%x)'
                  % (a, a_hi, b, b_lo))
 
+    for name in ('user program', 'user heap', 'user stack'):
+        lo, hi = bounds[name]
+        if lo < win_lo or hi > win_hi:
+            fail('%s [0x%x, 0x%x) is outside the user window [0x%x, 0x%x): a '
+                 'process gets exactly one page table, so everything must fit '
+                 'in one page-directory entry'
+                 % (name, lo, hi, win_lo, win_hi))
+    if win_lo != (L['USER_PDE_INDEX'] << 22):
+        fail('USER_PDE_INDEX (%d) does not match USER_BASE 0x%x'
+             % (L['USER_PDE_INDEX'], win_lo))
+    if win_hi - win_lo != 0x400000:
+        fail('the user window is 0x%x bytes; it must be exactly one 4MB '
+             'page-directory entry' % (win_hi - win_lo))
+
     if L['USER_STACK_TOP'] % 0x1000:
         fail('USER_STACK_TOP 0x%x is not page aligned' % L['USER_STACK_TOP'])
     if L['USER_PROG_START'] % 0x1000:
         fail('USER_PROG_START 0x%x is not page aligned' % L['USER_PROG_START'])
     if L['USER_HEAP_START'] % 0x1000:
         note('USER_HEAP_START 0x%x is not page aligned (fine, but the '
-             'granted region gets rounded up)' % L['USER_HEAP_START'])
+             'mapped region gets rounded up)' % L['USER_HEAP_START'])
 
     # The argv block, the sigreturn stub and the strings all live in the
     # stack's tail page, in a fixed order: argc/argv slots at the bottom
-    # (above the stack top), strings and stub higher up, and the granted
-    # part of the page stops before the page allocator's bitmap at the top
-    # of RAM.
+    # (above the stack top), strings and stub higher up, and the tail page
+    # ends exactly where the user window does.
     if not (L['USER_STACK_TOP'] < L['USER_ARGC_ADDR'] < L['USER_ARGV_ADDR']
             < L['USER_ARGV_STR_TOP']):
         fail('the argc/argv block does not fit above the stack top '
@@ -282,35 +309,41 @@ def main():
         fail('USER_SIGRETURN_ENTRY 0x%x overlaps the argv string area that '
              'packs down from 0x%x'
              % (L['USER_SIGRETURN_ENTRY'], L['USER_ARGV_STR_TOP']))
-    if not (L['USER_SIGRETURN_ENTRY'] + 20 <= L['USER_TAIL_TOP'] <= top):
+    if not (L['USER_SIGRETURN_ENTRY'] + 20 <= L['USER_TAIL_TOP']):
         fail('the sigreturn stub does not fit below USER_TAIL_TOP 0x%x '
-             '(stub at 0x%x, RAM top 0x%x)'
-             % (L['USER_TAIL_TOP'], L['USER_SIGRETURN_ENTRY'], top))
-
-    # the child stack copy must sit between heap and the cache floor
-    if not (L['USER_HEAP_START'] < L['CHILD_USER_STACK_TOP'] <= L['USER_STACK_TOP']):
-        fail('CHILD_USER_STACK_TOP 0x%x is not inside the heap/stack window'
-             % L['CHILD_USER_STACK_TOP'])
+             '(stub at 0x%x)'
+             % (L['USER_TAIL_TOP'], L['USER_SIGRETURN_ENTRY']))
+    if L['USER_TAIL_TOP'] != win_hi:
+        fail('USER_TAIL_TOP 0x%x is not the top of the user window 0x%x'
+             % (L['USER_TAIL_TOP'], win_hi))
 
     # --- 3. buffer cache must fit below BUFFER_CACHE_FLOOR ----------
     # The authoritative definition of NR_BUFFERS lives in fs.h, and it is
     # derived from the layout, so seed the parser with include/memlayout.h
-    # (this parser deliberately does not chase #include).
-    nrbuf, nrbuf_max = 64, 256
-    floor = L.get('BUFFER_CACHE_FLOOR')
-    if floor is None:
-        fail('include/memlayout.h does not define BUFFER_CACHE_FLOOR')
+    # (this parser deliberately does not chase #include).  Since M3 the
+    # cache window itself is a kernel-side boundary, so it lives in
+    # include/linux/memmap.h.
+    memmap_path = os.path.join(ROOT, 'include', 'linux', 'memmap.h')
+    if not os.path.exists(memmap_path):
+        fail('missing %s' % memmap_path)
         return report()
-    if not (L['USER_HEAP_END'] <= floor):
-        fail('BUFFER_CACHE_FLOOR 0x%x is below USER_HEAP_END 0x%x'
-             % (floor, L['USER_HEAP_END']))
-    if not (L['CHILD_USER_STACK_TOP'] <= floor):
-        fail('BUFFER_CACHE_FLOOR 0x%x overlaps the fork() child stack region '
-             '(top 0x%x): a Ring3 fork would write through the file cache'
-             % (floor, L['CHILD_USER_STACK_TOP']))
+    try:
+        M, _ = eval_c_constants(memmap_path, seed=L)
+    except ValueError as exc:
+        fail('include/linux/memmap.h: %s' % exc)
+        M = {}
+
+    nrbuf, nrbuf_max = 64, 256
+    floor = M.get('BUFFER_CACHE_FLOOR')
+    if floor is None:
+        fail('include/linux/memmap.h does not define BUFFER_CACHE_FLOOR')
+        return report()
+    if not (M.get('KERNEL_TABLES_END', L['KERNEL_TABLES_END']) <= floor):
+        fail('BUFFER_CACHE_FLOOR 0x%x is below the end of the kernel page '
+             'tables 0x%x' % (floor, L['KERNEL_TABLES_END']))
     try:
         F, _ = eval_c_constants(os.path.join(ROOT, 'include', 'linux', 'fs.h'),
-                                seed=L)
+                                seed=dict(list(L.items()) + list(M.items())))
         if 'NR_BUFFERS' in F:
             nrbuf = F['NR_BUFFERS']
         if 'NR_BUFFERS_MAX' in F:
@@ -328,9 +361,9 @@ def main():
     # a field is ever added.  The cache grows DOWN from BUFFER_CACHE_TOP.
     bh_size = 64
     cache_bytes = nrbuf * (1024 + bh_size)
-    cache_top = L.get('BUFFER_CACHE_TOP')
+    cache_top = M.get('BUFFER_CACHE_TOP')
     if cache_top is None:
-        fail('include/memlayout.h does not define BUFFER_CACHE_TOP')
+        fail('include/linux/memmap.h does not define BUFFER_CACHE_TOP')
         return report()
     cache_start = cache_top - cache_bytes
     if cache_start < floor:
@@ -344,23 +377,20 @@ def main():
              % (nrbuf, cache_start, cache_top, cache_start - floor, floor))
 
     # --- 4. kernel-side boundaries from linux/memmap.h --------------
-    memmap_path = os.path.join(ROOT, 'include', 'linux', 'memmap.h')
-    if not os.path.exists(memmap_path):
-        fail('missing %s' % memmap_path)
-    else:
-        try:
-            M, _ = eval_c_constants(memmap_path, seed=L)
-        except ValueError as exc:
-            fail('include/linux/memmap.h: %s' % exc)
-            M = {}
-        checks = [
-            ('KERNEL_IMAGE_LIMIT', 'KERNEL_HEAP_START'),
-            ('KERNEL_HEAP_END', 'KERNEL_POOL_START'),
-            ('KERNEL_POOL_END', 'USER_PROG_START'),
-        ]
-        for a, b in checks:
-            if a in M and b in M and M[a] > M[b]:
-                fail('%s (0x%x) is above %s (0x%x)' % (a, M[a], b, M[b]))
+    checks = [
+        ('KERNEL_IMAGE_LIMIT', 'KERNEL_HEAP_START'),
+        ('KERNEL_HEAP_END', 'KERNEL_LOW_MEM'),
+        ('KERNEL_LOW_MEM', 'PAGE_DIRECTORY'),
+        ('KERNEL_TABLES_END', 'BUFFER_CACHE_FLOOR'),
+        ('BUFFER_CACHE_TOP', 'KERNEL_IDENTITY_TOP'),
+        ('MEMORY_END_MINIMUM', 'KERNEL_IDENTITY_TOP'),
+    ]
+    for a, b in checks:
+        if a in M and b in M and M[a] > M[b]:
+            fail('%s (0x%x) is above %s (0x%x)' % (a, M[a], b, M[b]))
+    for name in ('KERNEL_LOW_MEM', 'KERNEL_IDENTITY_TOP', 'KERNEL_TABLES_END'):
+        if name not in M:
+            fail('include/linux/memmap.h does not define %s' % name)
 
     # --- 5. assembler mirror must agree with the C header -----------
     inc_path = os.path.join(ROOT, 'include', 'memlayout.inc')
@@ -384,7 +414,7 @@ def main():
     # --- 6. no hard-coded user addresses outside the layout files ---
     # Every address inside the user window is a layout fact, and the
     # original bug was exactly such a literal living in user/lib.c.
-    window_lo, window_hi = L['USER_PROG_START'], top
+    window_lo, window_hi = L['USER_BASE'], L['USER_WINDOW_TOP']
     allow = {
         os.path.relpath(layout_path, ROOT),
         os.path.relpath(inc_path, ROOT),

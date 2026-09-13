@@ -9,113 +9,97 @@
  * user/lib.c, user/crt.s, tools/build.c ...).  That is how the buffer
  * cache silently ended up overlapping the user heap (see
  * docs/LIMITATIONS.md §2.4).  Every address that is part of the
- * *contract* between boot/head, the page table, the kernel and user
+ * *contract* between boot/head, the page tables, the kernel and user
  * land now lives here, and nobody else may hard-code it.
  *
  * This header is deliberately pure preprocessor arithmetic so that
  * BOTH the kernel (include/linux/memmap.h) and user programs
  * (user/lib.c) can include it.  It must never contain declarations.
  *
- * INVARIANTS (enforced by the static asserts in linux/memmap.h and by
- * mem_check() at boot, see mm/memcheck.c):
+ * --------------------------------------------------------------------
+ * M3: TWO ADDRESS SPACES (this is the big change from M1/M2)
+ * --------------------------------------------------------------------
+ * Until M3 there was one address space: a single page directory
+ * identity-mapping 0..4MB, with the user program image, heap and stack
+ * parked at fixed *physical* addresses inside it.  That worked, but it
+ * made fork() semantics wrong (code and heap were literally shared) and
+ * it made execve() of a child destroy the parent: the ELF loader wrote
+ * the new image to physical 0x200000, which is the page the parent was
+ * executing from.  A Ring3 shell could therefore never run a program.
  *
- *   0x00100000  ┌──────────────────────────────┐
- *               │ page directory + page table0 │  8KB, reserved
- *   0x00102000  ├──────────────────────────────┤
- *               │ kernel image (linked 0x10800)│  code+data+bss, ~168KB
- *   0x002B000   ├──────────────────────────────┤  (see KERNEL_IMAGE_LIMIT)
- *               │ kernel bump heap (unused)    │
- *   0x002D000   ├──────────────────────────────┤
- *               │ ** page-allocator pool **    │  task pages, pipe pages
- *   0x00200000  ├──────────────────────────────┤
- *               │ user program image           │  execve / embedded prog
- *   0x00300000  ├──────────────────────────────┤
- *               │ user heap (malloc)           │
- *   0x00340000  ├──────────────────────────────┤
- *               │ fork() child user stack      │  grows down; private
- *   0x00350000  ├──────────────────────────────┤  to each child, so no
- *               │ kernel buffer cache (top)    │  user page may live here
- *   0x003FF000  ├──────────────────────────────┤
- *               │ user stack (grows down)      │
- *   0x00400000  └──────────────────────────────┘
+ * Now every process has its own page directory:
  *
- * USER_HEAP_END and CHILD_USER_STACK_END bound the window the buffer
- * cache is allowed to occupy; NR_BUFFERS (include/linux/fs.h) is
- * derived from that window so the cache can never share a page with
- * user data again.
+ *   PDE[0..3]  kernel identity map 0..16MB   shared, supervisor-only
+ *   PDE[32]    the process's user window     private, Ring3-accessible
+ *
+ * The kernel stays identity-mapped (physical == kernel virtual) so that
+ * task pages, the buffer cache, the page tables themselves and mem_map
+ * can be reached by plain pointers whatever CR3 happens to hold; user
+ * pages are reached through the user window and can live anywhere in
+ * RAM.  The user window is exactly one 4MB page-directory entry, which
+ * keeps a process's page-table overhead at two pages (directory + one
+ * table) and makes region checks a simple range test.
  * ==================================================================== */
 
-/* --- physical base of the kernel ---------------------------------- */
+/* --- kernel physical layout (identity mapped) ---------------------- */
 #define KERNEL_IMG_BASE     0x0010800   /* boot/head.s loads the image here;
                                            kernel.ld links startup_32 here  */
-#define PAGE_DIRECTORY      0x00100000  /* boot/head.s PGDIR               */
+#define PAGE_DIRECTORY      0x00100000  /* boot/head.s PGDIR (the kernel PDT) */
 #define PAGE_TABLE_0        0x00101000  /* boot/head.s PGTBL0 (PDE[0])     */
 
-/* --- identity map -------------------------------------------------
- * boot/head.s fills PDE[0] with one page table and maps 0..4MB
- * (0x400 PTE entries of 4KB).  Nothing above this address exists as
- * far as the kernel is concerned, so every other constant below must
- * stay strictly underneath it. */
-#define IDENTITY_MAP_SIZE   0x00400000
-#define IDENTITY_MAP_TOP    (IDENTITY_MAP_SIZE)
+/* One page table per 4MB of identity-mapped kernel space.  boot/head.s
+ * fills all of them at boot and every process directory points at them
+ * (supervisor-only), so the kernel can address all of RAM whatever CR3
+ * holds.  4 tables = 16MB, which is the largest RAM this kernel
+ * supports; QEMU is run with -m 16M. */
+#define KERNEL_PT_COUNT     4
+#define KERNEL_IDENTITY_TOP (KERNEL_PT_COUNT << 22)          /* 0x01000000 */
+#define KERNEL_TABLES_END   (PAGE_TABLE_0 + (KERNEL_PT_COUNT << 12))  /* 0x105000 */
 
-/* --- user linear address space ------------------------------------
- * The teaching kernel uses identity paging, so these are simultaneously
- * user virtual addresses and physical addresses.  They are fixed: the
- * ELF loader copies each LOAD segment to its link-time vaddr, which is
- * why every user program must be linked at USER_PROG_START. */
-#define USER_PROG_START     0x00200000
-#define USER_PROG_END       0x00300000
+/* --- the user address space (per process) -------------------------- */
+/* One page-directory entry covers the whole user world, so all four
+ * regions below share 4MB of virtual address space and the kernel needs
+ * only one additional page table per process. */
+#define USER_BASE           0x08000000
+#define USER_WINDOW_SIZE    0x00400000
+#define USER_WINDOW_TOP     (USER_BASE + USER_WINDOW_SIZE)   /* 0x08400000 */
+#define USER_PDE_INDEX      (USER_BASE >> 22)                /* 32 */
 
-/* User heap (user/lib.c malloc), the fork() child stack region, the
- * kernel buffer cache and the user stack share the space above the
- * program image.  Each has its own slice, and no two may meet:
- *
- *   [USER_HEAP_START, USER_HEAP_END)              malloc()
- *   (CHILD_USER_STACK_END, CHILD_USER_STACK_TOP]  fork() child stack
- *   [BUFFER_CACHE_FLOOR, BUFFER_CACHE_TOP)        kernel buffer cache
- *   [USER_STACK_FLOOR, USER_STACK_TOP)            user stack (grows down)
- *
- * A smaller heap/stack slice buys a bigger cache. */
-#define USER_HEAP_START     0x00310000
-#define USER_HEAP_END       0x00340000
+#define USER_PROG_START     USER_BASE
+#define USER_PROG_END       (USER_BASE + 0x00100000)
 
-/* fork() gives the child a copy of the parent's user stack with its top
- * here, growing down.  This must stay clear of the buffer cache.
- * kernel/process.c refuses to copy more than the region holds. */
-#define CHILD_USER_STACK_TOP 0x00340000
-#define CHILD_USER_STACK_END 0x00300000
-
-#define BUFFER_CACHE_FLOOR  0x00350000
+/* malloc() (user/lib.c) owns [USER_HEAP_START, USER_HEAP_END); pages are
+ * handed out by the kernel on first touch (demand paging), so the region
+ * costs nothing until it is used. */
+#define USER_HEAP_START     (USER_BASE + 0x00100000)
+#define USER_HEAP_END       (USER_BASE + 0x00200000)
 
 /* The user stack grows down from USER_STACK_TOP; USER_STACK_FLOOR is how
- * deep it is allowed to go, which is also what bounds the buffer cache
- * from above.  The window between them is the cache. */
-#define USER_STACK_FLOOR    0x003F0000
-#define BUFFER_CACHE_TOP    USER_STACK_FLOOR
-
-#define USER_STACK_TOP      0x003FF000
-#define USER_STACK_END      IDENTITY_MAP_TOP   /* stack grows down from TOP */
+ * deep it may go.  Pages appear on demand, so a deep stack is free until
+ * it is touched — and the 1MB between the heap and the floor is a guard
+ * hole, not memory: touching it kills the process. */
+#define USER_STACK_FLOOR    (USER_BASE + 0x00300000)
+#define USER_STACK_TOP      (USER_BASE + 0x003FF000)
+#define USER_STACK_END      USER_WINDOW_TOP   /* stack grows down from TOP */
 
 /* execve publishes argc/argv just above the stack top (kernel/sys.c,
- * user/crt.s read them back):
- *   0x3FF004  argc
- *   0x3FF008  pointer to the argv array
- *   0x3FF00C  the argv array itself
+ * user/crt.s read them back), in the tail page
+ * [USER_STACK_TOP, USER_WINDOW_TOP):
+ *   +0x004  argc
+ *   +0x008  pointer to the argv array
+ *   +0x00C  the argv array itself
  * The slot and the array are different addresses on purpose: writing the
  * pointer must not clobber argv[0].
  *
  * The rest of the tail page is laid out so that nothing overlaps:
- *   0x3FF00C .. ~0x3FF050   argv array (up to 16 entries)
- *   0x3FF100                sigreturn stub (9 bytes, written on delivery)
- *   below 0x3FF100          argv strings, packed DOWN from there
- * mem_init() keeps the page allocator's bitmap (mem_map) in the last
- * kilobytes of RAM, so the user-granted tail stops at USER_TAIL_TOP. */
+ *   0x…00C .. ~0x…050   argv array (up to 16 entries)
+ *   0x…100              sigreturn stub (9 bytes, written on delivery)
+ *   below 0x…100        argv strings, packed DOWN from there */
 #define USER_ARGC_ADDR      (USER_STACK_TOP + 4)
 #define USER_ARGV_PTR_ADDR  (USER_STACK_TOP + 8)
 #define USER_ARGV_ADDR      (USER_STACK_TOP + 12)
-#define USER_ARGV_STR_TOP   0x003FF100
-#define USER_TAIL_TOP       0x003FF400
+#define USER_ARGV_STR_TOP   (USER_STACK_TOP + 0x100)
+#define USER_TAIL_TOP       USER_WINDOW_TOP
 
 /* --- signal delivery frame (kernel/process.c do_signal) -------------
  * A custom signal handler runs on the user stack, and when it returns
@@ -124,10 +108,10 @@
  *
  *  1. The handler's own stack frames grow DOWN from the esp it is
  *     entered with, so the word it returns to must sit at a LOWER
- *     address than anything the handler will push.  Putting the
- *     return address at the top of the user stack (0x3FF000) would let
- *     a deep handler overwrite it, so the whole block is placed just
- *     below the interrupted esp instead (exactly what Linux does).
+ *     address than anything the handler will push.  Putting the return
+ *     address at the top of the user stack would let a deep handler
+ *     overwrite it, so the whole block is placed just below the
+ *     interrupted esp instead (exactly what Linux does).
  *  2. The code that issues sigreturn cannot live in the kernel, so nine
  *     bytes of Ring3 stub are written at USER_SIGRETURN_ENTRY, which sits
  *     clear of both the argv array and the strings:
@@ -143,7 +127,7 @@
  *     -4   ... saved-context snapshot (struct user_regs, 80 bytes) ...
  *     -84
  * ------------------------------------------------------------------ */
-#define USER_SIGRETURN_ENTRY     0x003FF100
+#define USER_SIGRETURN_ENTRY     USER_ARGV_STR_TOP
 #define SIGFRAME_BYTES           92   /* 8 for the header + 84 for the context */
 #define USER_SIGRETURN_SYSCALL   67
 

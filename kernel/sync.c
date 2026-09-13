@@ -133,7 +133,8 @@ void sync_init(void)
     p->tss.back_link = 0;
     p->tss.esp0 = (unsigned long)p + PAGE_SIZE;
     p->tss.ss0 = KERNEL_DS;
-    p->tss.cr3 = read_cr3();
+    p->tss.cr3 = kernel_pg_dir;      /* kernel task: no user window (M3) */
+    p->pg_dir = 0;
     p->tss.eip = (unsigned long)sync_loop;
     p->tss.eflags = 0x202;
     p->tss.eax = 0;

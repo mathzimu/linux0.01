@@ -39,7 +39,7 @@ case "$MODE" in
             exit 1
         fi
         echo "=== Starting QEMU (Ctrl+A X to exit) ==="
-        qemu-system-i386 -fda Image -m 4M -boot a
+        qemu-system-i386 -fda Image -m 16M -boot a
         ;;
     run-cd)
         if [ ! -f kernel.iso ]; then
@@ -47,7 +47,7 @@ case "$MODE" in
             exit 1
         fi
         echo "=== Starting QEMU from CD-ROM (Ctrl+A X to exit) ==="
-        qemu-system-i386 -cdrom kernel.iso -m 4M -boot d
+        qemu-system-i386 -cdrom kernel.iso -m 16M -boot d
         ;;
     debug)
         if [ ! -f Image ]; then
@@ -55,7 +55,7 @@ case "$MODE" in
             exit 1
         fi
         echo "=== Starting QEMU with GDB server (:1234) ==="
-        qemu-system-i386 -fda Image -m 4M -boot a -s -S
+        qemu-system-i386 -fda Image -m 16M -boot a -s -S
         echo "Connect: gdb -ex 'target remote localhost:1234' kernel/system"
         ;;
     clean)

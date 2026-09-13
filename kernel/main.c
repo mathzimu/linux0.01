@@ -23,20 +23,20 @@ void main(void)
        1MB — in the first boot parameter block. */
     ext_kb = *((unsigned short *)BOOT_PARAM_ADDR);
     if (ext_kb == 0)
-        phys_mem_end = PHYS_MEM_TOP;                 /* 4MB assumption */
+        phys_mem_end = PHYS_MEM_TOP;
     else
         phys_mem_end = (1 << 20) + ((unsigned long)ext_kb << 10);
 
-    /* Only the first 4MB is mapped (boot/head.s fills PDE[0] alone), so
-       usable RAM cannot extend past the identity map.  mem_check()
+    /* boot/head.s identity-maps KERNEL_IDENTITY_TOP bytes (16MB, four
+       page tables), so usable RAM cannot extend past it.  mem_check()
        panics if this leaves less than the layout needs. */
-    if (phys_mem_end > IDENTITY_MAP_TOP)
-        phys_mem_end = IDENTITY_MAP_TOP;
+    if (phys_mem_end > KERNEL_IDENTITY_TOP)
+        phys_mem_end = KERNEL_IDENTITY_TOP;
 
     phys_mem_end &= 0xFFFFF000;
 
-    if (phys_mem_end < USER_STACK_END)
-        phys_mem_end = IDENTITY_MAP_TOP;
+    if (phys_mem_end < MEMORY_END_MINIMUM)
+        phys_mem_end = MEMORY_END_MINIMUM;
 
     phys_mem_start = (unsigned long)&_end;
     phys_mem_start += 0x1000;
@@ -49,21 +49,15 @@ void main(void)
        image region. */
     buffer_init((long)BUFFER_CACHE_TOP);
 
-    /* Everything that carves up the 0..4MB identity map has now had its
-       say: allocator, kernel heap, buffer cache and the fixed user
-       regions.  Verify the map before anything can write through it. */
+    /* Everything that carves up RAM has now had its say: allocator,
+       kernel heap, kernel page tables, buffer cache.  Verify the map
+       before anything can write through it. */
     mem_check();
 
-    /* Memory isolation: everything is supervisor-only by default.  Grant
-       user-mode access to the fixed user regions — the heap
-       [USER_HEAP_START, USER_HEAP_END) and the stack
-       [USER_STACK_FLOOR, USER_TAIL_TOP).  The stack pages are where the
-       kernel later drops the argc/argv block and the sigreturn stub; the
-       very top of RAM stays supervisor-only because it holds the page
-       allocator's bitmap.  The program image at USER_PROG_START is
-       granted at exec time (kernel/sys.c). */
-    grant_user_pages(USER_HEAP_START, USER_HEAP_END - USER_HEAP_START);
-    grant_user_pages(USER_STACK_FLOOR, USER_TAIL_TOP - USER_STACK_FLOOR);
+    /* M3: nothing to grant any more.  Ring3 access is a property of the
+       page-table entries a process's own address space is built from
+       (alloc_user_page sets PTE_USER), so the kernel no longer pokes the
+       U/S bit of a global page table at boot. */
 
     tty_init();
 

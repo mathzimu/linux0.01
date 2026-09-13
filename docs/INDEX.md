@@ -58,11 +58,13 @@
 
 ## 本仓库关键事实（先记住）
 
-1. **分页只映射 0–4MB**（head.s 仅填 PDE[0] + 一张页表）；页表默认 **U/S=0（内核专属）**，
-   仅用户程序/堆/栈页经 `grant_user_pages` 授权（内存隔离，越权访问 → page fault panic）
+1. **地址空间已拆分（M3）**：内核恒等映射 0–16MB（PDE[0..3]，全 supervisor-only，所有进程共享）；
+   每个进程另有自己的一份页目录，用户区在 PDE[32]（虚拟 `0x08000000`–`0x08400000`），
+   **按需调页 + 写时复制**；区域外访问 → page fault → 只杀肇事进程（SIGSEGV，内核继续运行）。
+   `memstat` 可看空闲页/缺页/COW 计数
 2. **段选择子**：`KERNEL_CS=0x08` `KERNEL_DS=0x10` `USER_CS=0x1B` `USER_DS=0x23`
-3. **Shell 运行在内核态**：`main()` 直接 `shell_main()`；用户程序经 `execve`/`run_user_program`
-   iret 进 Ring3（`int 0x80` 自动切回内核栈）
+3. **两个 Shell**：内核态 `$`（`main()` 直接 `shell_main()`）与 Ring3 的 `/bin/sh`
+   （`exec /bin/sh`，自己 fork+execve 子程序）；用户程序经 `int 0x80` 自动切回内核栈
 4. **67 个系统调用，编号与 1991 Linux 0.01 的 sys_call_table 完全一致**（`include/unistd.h`
    提供 `int 0x80` 包装宏；waitpid=7、execve=11、pipe=42、signal=48…dup2=63、setsid=66；
    stub 项与 0.01 自身的 -ENOSYS 一致）
@@ -72,7 +74,8 @@
 6. **修复过的内核级 bug**（读源码时留意注释）：schedule 预改 current 导致 ljmp 被跳过；
    `init_task.tss.cr3=0` 导致切回父进程 CR3 归零；exit 释放自身任务页的 use-after-free；
    `sys_open` 从 fd 0 分配撞上 stdin；getblk 复用缓冲未摘旧哈希链的链环死循环；
-   mkminix imap 写入顺序（/hello inode 位被 new_inode 复用）；页表标志 0x06 缺 P 位
+   mkminix imap 写入顺序（/hello inode 位被 new_inode 复用）；页表标志 0x06 缺 P 位；
+   `page_fault` 从不丢弃 CPU 压入的错误码（M3 开始按需调页后才暴露）+ 读错误码偏移写错
 
 ## 设计文档（背景，非源码权威）
 

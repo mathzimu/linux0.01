@@ -6,6 +6,7 @@
 
 .equ PGDIR, 0x100000
 .equ PGTBL0, 0x101000
+.equ KERNEL_PT_COUNT, 4
 .equ KERNEL_CS, 0x08
 .equ KERNEL_DS, 0x10
 .equ USER_CS, 0x1B
@@ -69,16 +70,24 @@ setup_paging:
     mov $0x1000, %ecx
     rep stosl
 
+    /* PDE[0..KERNEL_PT_COUNT-1] -> the kernel identity page tables.
+       M3: the kernel maps ALL of RAM (16MB) into every address space,
+       so a process's CR3 can be loaded and the kernel can still reach
+       task pages, page tables, the buffer cache and mem_map.  These
+       entries stay supervisor-only: Ring3 never sees them. */
     mov $PGDIR, %edi
-    lea (PGTBL0 + 0x07), %eax
-    stosl
+    lea (PGTBL0 + 0x03), %eax
+    mov $KERNEL_PT_COUNT, %ecx
+1:  stosl
+    add $0x1000, %eax
+    loop 1b
 
-    /* Identity-map 0..4MB, all supervisor-only (0x03 = P+RW, no U/S).
-       User access is granted page-by-page later via grant_user_pages()
-       for the program / heap / stack regions only. */
+    /* Fill the tables themselves with identity entries, 0x03 = P+RW and
+       no U/S.  User access is granted per process, on the user window
+       (PDE[USER_PDE_INDEX]), by the kernel's own mapping code. */
     mov $PGTBL0, %edi
     lea 0x03, %eax
-    mov $0x400, %ecx
+    mov $(KERNEL_PT_COUNT * 0x400), %ecx
 1:  stosl
     add $0x1000, %eax
     loop 1b

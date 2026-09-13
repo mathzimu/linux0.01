@@ -99,10 +99,14 @@ int sys_fork(void)
     parent_top = current->tss.esp0;              /* parent's kernel stack top */
     child_top = (long)p + PAGE_SIZE;             /* child's kernel stack top */
     if (syscall_cpl == 3) {
-        /* ring3 caller: 16-word frame, and copy the user stack so the
-           child resumes with its own copy (iret pops user esp/ss) */
+        /* ring3 caller: 16-word frame.  The user stack is NOT copied any
+           more: copy_page_tables() below shares every user page between
+           parent and child read-only, and the child gets its own copy the
+           moment either side writes (see un_wp_page in mm/memory.c).
+           Until M3 this function memcpy'd the live stack into a fixed
+           "child stack" region, which is why a parent with more than
+           64KB of live stack had to be refused. */
         int words = 16;
-        long user_esp, user_size, child_user_esp;
 
         parent_sp = syscall_esp + 20;            /* above ss */
         size = parent_top - parent_sp;
@@ -113,27 +117,6 @@ int sys_fork(void)
         parent_frame = (long *)(syscall_esp - 11 * sizeof(long));
         for (i = 0; i < words; i++)
             child_frame[i] = parent_frame[i];
-
-        /* user stack: [user_esp, USER_STACK_TOP) -> child copy placed
-           just below CHILD_USER_STACK_TOP.  The child region is sized so
-           the copy can never reach the heap below or the buffer cache
-           above; a parent with more live stack than that is refused
-           (fork returns -ENOMEM) rather than silently corrupting the
-           filesystem cache.  Proper copy-on-write would remove the
-           limit entirely — see docs/M3. */
-        user_esp = *(long *)(syscall_esp + 12);
-        user_size = USER_STACK_TOP - user_esp;
-        if (user_size <= 0 ||
-            user_size > (long)(CHILD_USER_STACK_TOP - CHILD_USER_STACK_END)) {
-            printk("fork: user stack copy of %ld bytes does not fit the "
-                   "child stack region (%ld bytes)\n",
-                   user_size, (long)(CHILD_USER_STACK_TOP - CHILD_USER_STACK_END));
-            goto fail;
-        }
-        child_user_esp = CHILD_USER_STACK_TOP - user_size;
-        memcpy((void *)child_user_esp, (void *)user_esp, user_size);
-        child_frame[14] = child_user_esp;        /* esp slot */
-        /* child_frame[15] (ss) stays USER_DS from the parent copy */
     } else {
         /* ring0 caller: 14-word frame (spawn / kernel-side fork) */
         parent_sp  = syscall_esp + 12;
@@ -146,10 +129,27 @@ int sys_fork(void)
             child_frame[i] = parent_frame[i];
     }
 
+    /* M3: a private address space.  Only users of this task page (a real
+       user process, i.e. a Ring3 caller) need one; a kernel-side fork
+       (spawn) keeps the kernel directory. */
+    p->pg_dir = 0;
+    if (current->pg_dir && syscall_cpl == 3) {
+        p->pg_dir = alloc_user_pgdir();
+        if (!p->pg_dir) {
+            printk("fork: cannot allocate an address space\n");
+            goto fail;
+        }
+        if (copy_page_tables(current->pg_dir, p->pg_dir) < 0) {
+            free_user_space(p->pg_dir);
+            p->pg_dir = 0;
+            goto fail;
+        }
+    }
+
     p->tss.back_link = 0;
     p->tss.esp0 = (long)p + PAGE_SIZE;
     p->tss.ss0 = KERNEL_DS;
-    p->tss.cr3 = read_cr3();
+    p->tss.cr3 = p->pg_dir ? p->pg_dir : kernel_pg_dir;
     p->tss.eip = (long)ret_from_sys_call;
     p->tss.eflags = 0x202;
     p->tss.eax = 0;                              /* fork() returns 0 in child */
@@ -184,9 +184,14 @@ int sys_fork(void)
     return pid;
 
 fail:
-    /* Undo everything the child setup grabbed before giving up: the task
-       slot, the pwd/root holds (p was filled by "the child's pwd = the
-       parent's", so they must be dropped) and the task page. */
+    /* Undo everything the child setup grabbed before giving up: the
+       task slot, the address space, the pwd/root holds (p was filled by
+       "the child's pwd = the parent's", so they must be dropped) and the
+       task page. */
+    if (p->pg_dir) {
+        free_user_space(p->pg_dir);
+        p->pg_dir = 0;
+    }
     if (p->pwd)
         p->pwd->i_count--;
     if (p->root)
@@ -230,6 +235,19 @@ int sys_exit(int ret)
         current->state = TASK_RUNNING;
         for (;;)
             schedule();
+    }
+
+    /* M3: give the address space back.  CR3 has to leave it FIRST: the
+       page directory and page tables we are about to free are the ones
+       the CPU is walking right now, and this task keeps running (on its
+       kernel stack, which lives in the identity-mapped task page) until
+       schedule() switches away.  Doing it in this order also means the
+       hardware task switch out of here reloads a valid CR3. */
+    if (current->pg_dir && current->pg_dir != kernel_pg_dir) {
+        write_cr3(kernel_pg_dir);
+        current->tss.cr3 = kernel_pg_dir;
+        free_user_space(current->pg_dir);
+        current->pg_dir = 0;
     }
 
     /* Become a zombie: keep the task[] slot AND the task page so the

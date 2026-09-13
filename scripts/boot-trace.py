@@ -43,7 +43,7 @@ def main():
     args = ap.parse_args()
 
     sym = symbols()
-    cmd = ['qemu-system-i386', '-fda', args.image, '-m', '4M', '-boot', 'a',
+    cmd = ['qemu-system-i386', '-fda', args.image, '-m', '16M', '-boot', 'a',
            '-display', 'none', '-monitor', 'none',
            '-serial', 'file:%s' % args.serial, '-no-reboot',
            '-d', 'in_asm,cpu_reset', '-D', args.log]

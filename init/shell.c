@@ -11,23 +11,33 @@
 
 extern int sys_exit(int ret);
 
-/* All user-visible addresses come from include/memlayout.h. */
-#define USER_PROG_ADDR USER_PROG_START
+/* Copy the embedded user program into an address space of its own and
+   iret into Ring3.  The user program runs with cs=USER_CS (0x1B),
+   ss/ds/es/fs/gs=USER_DS (0x23) and its own stack at USER_STACK_TOP;
+   int 0x80 automatically switches to the kernel stack via TSS.esp0 and
+   iret returns to Ring3.  This never returns (the user program ends
+   with exit()).
 
-/* Copy the embedded user program to USER_PROG_ADDR and iret into Ring3.
-   The user program runs with cs=USER_CS (0x1B), ss/ds/es/fs/gs=USER_DS
-   (0x23) and its own stack at USER_STACK_TOP; int 0x80 automatically
-   switches to the kernel stack via TSS.esp0 and iret returns to Ring3.
-   This never returns (the user program ends with exit()). */
+   M3: the image goes into freshly allocated frames mapped in the current
+   task's user window, not into a fixed physical address, so running it
+   cannot disturb anything the kernel (or another process) is using. */
 void run_user_program(void)
 {
     extern const unsigned char user_prog[];
     extern const unsigned long user_prog_len;
-    unsigned long size = user_prog_len;
+    unsigned long pgdir, entry;
 
-    memcpy((void *)USER_PROG_ADDR, user_prog, size);
-    /* memory isolation: make the program pages user-accessible */
-    grant_user_pages(USER_PROG_ADDR, size);
+    pgdir = load_flat_image(user_prog, user_prog_len, &entry);
+    if (!pgdir) {
+        printk("user: cannot allocate an address space\n");
+        return;
+    }
+
+    if (current->pg_dir && current->pg_dir != kernel_pg_dir)
+        free_user_space(current->pg_dir);
+    current->pg_dir = pgdir;
+    current->tss.cr3 = pgdir;
+    write_cr3(pgdir);
 
     __asm__ volatile(
         "movl %0, %%eax\n\t"      /* user stack top */
@@ -38,7 +48,7 @@ void run_user_program(void)
         "pushl %1\n\t"            /* eip = user program */
         "iret\n\t"
         :
-        : "r"((unsigned long)USER_STACK_TOP), "r"((unsigned long)USER_PROG_ADDR)
+        : "r"((unsigned long)USER_STACK_TOP), "r"(entry)
         : "eax");
 }
 
@@ -154,6 +164,7 @@ static void cmd_help(int argc, char **argv)
     printk("  mv      - rename (sys_rename)\n");
     printk("  cat     - print a file (via open/read/close)\n");
     printk("  sync    - write back dirty buffers/inodes\n");
+    printk("  memstat - free pages, this task's mapped pages, fault/COW counts\n");
     printk("  wtest   - write a file [path] through the write path\n");
     printk("  touch   - create a file (sys_mknod)\n");
     printk("  mkdir   - create a directory (sys_mkdir)\n");
@@ -619,6 +630,8 @@ void shell_main(void)
             cmd_cat(argc, argv);
         } else if (strcmp(argv[0], "sync") == 0) {
             cmd_sync(argc, argv);
+        } else if (strcmp(argv[0], "memstat") == 0) {
+            mm_report();
         } else if (strcmp(argv[0], "wtest") == 0) {
             cmd_writetest(argc, argv);
         } else if (strcmp(argv[0], "touch") == 0) {
