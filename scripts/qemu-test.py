@@ -67,6 +67,9 @@ def main():
                     help='keystrokes to type (\\n = enter)')
     ap.add_argument('--tail', type=float, default=1.5,
                     help='seconds to wait after typing keys')
+    ap.add_argument('--min-wait', type=float, default=0.0,
+                    help='keep the VM alive at least this long after the keys '
+                         '(for tests that must observe a periodic event)')
     ap.add_argument('--extra', default='', help='extra qemu args')
     ap.add_argument('--qemu', default='qemu-system-i386')
     args = ap.parse_args()
@@ -119,7 +122,7 @@ def main():
             # Instead of a fixed wait, poll the serial capture until it stops
             # growing (output settled).  This is much more robust when QEMU
             # runs under TCG (no KVM, as on CI) where commands are slower.
-            settle_window = max(args.tail, 10)
+            settle_window = max(args.tail, args.min_wait + 3.0, 10)
             last = 0
             if os.path.exists(serial):
                 last = os.path.getsize(serial)
@@ -133,7 +136,8 @@ def main():
                 if cur != last:
                     last = cur
                     last_change = time.time()
-                elif time.time() - last_change >= 1.5:
+                elif (time.time() - last_change >= 1.5 and
+                      time.time() - start >= args.min_wait):
                     break
         hmp(sock, 'screendump %s.ppm' % args.out)
         time.sleep(0.5)

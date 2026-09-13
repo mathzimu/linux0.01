@@ -39,16 +39,27 @@ volatile int sync_pending = 0;
 
 static const unsigned long root_dev = 0x301;   /* the MINIX root disk */
 
+/* How many write-backs have actually written something. */
+unsigned long sync_flushes = 0;
+
 static void sync_loop(void)
 {
     for (;;) {
+        int written;
+
         wait_for_sync();
 
         /* One flush at a time: while this is running the timer keeps
            setting the flag, and it is simply consumed on the next
            pass. */
         sync_pending = 0;
-        sync_dev(root_dev);
+        written = sync_dev(root_dev);
+
+        if (written > 0) {
+            sync_flushes++;
+            printk("sync: %d block(s) written back (t=%d)\n",
+                   written, (int)(jiffies / HZ));
+        }
     }
 }
 

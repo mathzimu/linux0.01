@@ -159,7 +159,7 @@ void sleep_on(struct task_struct **p);
 void wake_up(struct task_struct **p);
 void ll_rw_block(int rw, struct buffer_head *bh);
 void wait_on_buffer(struct buffer_head *bh);
-void sync_dev(int dev);
+int sync_dev(int dev);
 
 extern struct file file_table[NR_FILE];
 extern struct m_inode inode_table[NR_INODE];

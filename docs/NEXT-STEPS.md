@@ -41,13 +41,23 @@
 不是 POSIX 语义（子进程写堆父进程可见、并发 fork 的子进程栈会互相覆盖）。
 M1 只是把它限制在可检测/可控范围内，真正的修复是 M3 的 COW + 独立地址空间。
 
-## M2 — 用户态能力补齐（进行中）
+## M2 — 用户态能力补齐 ✅ 已完成（M2-2 有一处架构性遗留，转 M3）
 
-| 项 | 内容 | 关键文件 |
-|----|------|----------|
-| M2-1 | **自定义信号处理器 + `sigreturn`**：`signal()` 接受函数指针，进入处理器前构造返回帧（用户栈上放 sig + 保存的上下文），`do_signal` 在 `ret_from_sys_call` 路径投递 | `kernel/process.c`、`include/signal.h`、`user/lib.c` |
-| M2-2 | **Ring3 用户态 shell（`/bin/sh`）**：把「谁能驱动系统」真正交给用户态进程；内核态 shell 保留为救援/调试入口（execve 失败可回退），内嵌工具继续可用 | `user/sh.c`、`kernel/main.c`、`init/shell.c` |
-| M2-3 | **定时回写**：`do_timer` 按 jiffies 触发 `sync_dev`，异常退出不再丢数据，测试也不再需要每次重建 `minix.img` | `kernel/sched.c`、`fs/buffer.c` |
+| 项 | 状态 | 内容 | 关键文件 |
+|----|------|------|----------|
+| M2-1 | ✅ | **自定义信号处理器 + `sigreturn`**：`signal()` 接受 Ring3 函数指针，投递时在用户栈上构造 sigframe（信号号 + 返回地址 + 80 字节上下文），`do_signal` 在 `ret_from_sys_call` 路径投递；`sigreturn`（syscall 67）校验 magic/retaddr/cs/ss/esp 后精确恢复上下文 | `kernel/process.c`、`kernel/asm.s`、`boot/head.s`、`include/signal.h`、`include/memlayout.h` |
+| M2-2 | ⚠️ 部分 | **Ring3 用户态 shell（`/bin/sh`）**：内建 cd/pwd/exit/help，其余按 `/bin/<name>` fork+execve+waitpid；Ring3 标准输入（`read(0,…)`）已通。**遗留**：让子程序*成功* execve 会写坏父 shell 的代码页（见下），故只把 `/bin/sh` 作为救援入口的替代品提供，回归场景默认不跑 | `user/sh.c`、`kernel/main.c`、`init/shell.c` |
+| M2-3 | ✅ | **定时回写**：`do_timer` 置标志 + 唤醒专用回写任务（`kernel/sync.c`，占最后一个任务槽），每 5s `sync_dev()`；`sync_dev` 返回真实写入块数，只在 >0 时打印。异常退出不再丢数据 | `kernel/sched.c`、`kernel/sync.c`、`fs/buffer.c` |
+
+**M2-2 的架构性遗留（M3 的入口）**：`execve` 把 ELF 段按 vaddr 直接写进**恒等映射的物理页**。
+内核态 shell `exec /bin/x` 没事（父进程是内核），但用户态 shell fork 出子进程后让子进程
+execve，子进程就会把新镜像写进 0x200000 —— 那正是父 shell 正在执行的代码页。
+现象：父 shell 恢复执行时 EIP 落在指令中间、CPL=3 空转（QEMU `info registers` 可见），
+串口输出恰好断在子程序最后一行。这不是 sh 的 bug，而是 M1 遗留（代码段/堆父子共享）
+在用户态的第一处硬伤：**只有每进程独立地址空间才能修**。
+
+**M2 新增回归**：场景 14 `autosync`（两阶段：touch 后空转 8s 不调用 sync → 冷启动 `ls` 必须看到文件）；
+`TEST_USERSH=1` 时另跑 Ring3 shell 场景（M3 后转正）。
 
 ## M3 — 架构级内存模型（计划中）
 

@@ -41,6 +41,40 @@ run_case() {
     PASS=$((PASS+1))
 }
 
+# run_case2 <name> <prep-cmd> <keys1> <min-wait> <keys2> <needle...>
+#   两阶段用例：共用同一张 minix.img。第一阶段（可等待周期性事件）结束后
+#   直接关机，第二阶段冷启动再看盘上的内容——以此证明数据真的落到磁盘，
+#   而不是停留在缓冲区缓存里。
+run_case2() {
+    local name="$1" prep="$2" keys1="$3" minwait="$4" keys2="$5"
+    shift 5
+    local out
+    if ! eval "$prep" >/dev/null 2>&1; then
+        echo "FAIL [$name]  setup failed: $prep"
+        FAIL=$((FAIL+1)); return 1
+    fi
+    out=$(python3 scripts/qemu-test.py --image Image --hda minix.img \
+             --hold "${TEST_HOLD:-1.2}" --tail "${TEST_TAIL:-1.5}" \
+             --min-wait "$minwait" --keys "$keys1" 2>/dev/null)
+    printf '%s' "$out" > "$LOGDIR/$name.1.serial"
+    out="$out
+$(python3 scripts/qemu-test.py --image Image --hda minix.img \
+             --hold "${TEST_HOLD:-1.2}" --tail "${TEST_TAIL:-1.5}" \
+             --keys "$keys2" 2>/dev/null)"
+    printf '%s' "$out" > "$LOGDIR/$name.serial"
+    for needle in "$@"; do
+        if ! printf '%s' "$out" | grep -qF "$needle"; then
+            echo "FAIL [$name]  missing: \"$needle\"  (see $LOGDIR/$name.serial)"
+            echo "---- tail $LOGDIR/$name.serial ----"
+            tail -15 "$LOGDIR/$name.serial" 2>/dev/null
+            echo "--------------------------------"
+            FAIL=$((FAIL+1)); return 1
+        fi
+    done
+    echo "PASS [$name]"
+    PASS=$((PASS+1))
+}
+
 BASE='rm -f minix.img'
 
 # 场景 1: execve + argv + 退出码
@@ -105,6 +139,28 @@ run_case sigdemo 'rm -f minix.img && make prog NAME=sigdemo' 'exec /bin/sigdemo\
     'sigdemo: handler ran (sig=14, hits=1)' \
     'sigdemo: after alarm: hits=1 last_sig=14' \
     'sigdemo: PASS'
+
+# 场景 14: Ring3 用户态 shell（M2-2）
+#   /bin/sh 完全跑在用户态：它自己 read 键盘、自己 fork+execve 子程序。
+#   WARNING: 默认不跑——让子程序**成功** execve 需要 M3 的独立地址空间：
+#   子进程的 execve 会把 ELF 段写进恒等映射的 0x200000 物理页，而那正是父
+#   shell 正在执行的代码页，父进程随即跑飞（详见 docs/NEXT-STEPS.md M2-2）。
+#   现在只能验证失败路径（execve 失败不写内存，父 shell 存活）。
+#   M3 落地后把 TEST_USERSH 默认值改成 1。
+if [ "${TEST_USERSH:-0}" = "1" ]; then
+SH_PREP='rm -f minix.img && make user/sh.elf user/hello.elf && tools/mkminix minix.img user/sh.elf:sh user/hello.elf:hello'
+run_case usersh "$SH_PREP" 'exec /bin/sh\nhello a b\nexit\n' \
+    'sh: user-mode shell (Ring3)' \
+    'hello from user program: argc=3' \
+    'sh: hello exited with 42'
+fi
+
+# 场景 15: 定时回写（M2-3）
+#   全程不调用 sync：第一阶段 touch 一个文件后空转 8 秒（>5s 回写周期），
+#   第二阶段冷启动 ls 必须看到它——证明脏缓冲是定时任务刷到盘上的。
+run_case2 autosync "$BASE && make minix.img" 'touch /syncmark\n' 8 'ls\n' \
+    'syncmark' \
+    'sync:'
 
 echo
 echo "================================"

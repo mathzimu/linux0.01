@@ -228,10 +228,15 @@ void ll_rw_block(int rw, struct buffer_head *bh)
 
 /* Write back every dirty buffer (and, via sync_inodes, every dirty
    inode) belonging to dev.  The free_list is a circular list holding
-   all NR_BUFFERS heads, so walking it once reaches everything. */
-void sync_dev(int dev)
+   all NR_BUFFERS heads, so walking it once reaches everything.
+
+   Returns the number of data blocks that were actually written, so the
+   periodic write-back task can stay silent when there was nothing to do
+   (and a regression test can tell "flushed" from "flushed nothing"). */
+int sync_dev(int dev)
 {
     int i;
+    int written = 0;
     struct buffer_head *bh = free_list;
 
     for (i = 0; i < NR_BUFFERS; i++, bh = bh->b_next_free) {
@@ -239,10 +244,13 @@ void sync_dev(int dev)
             bh->b_count++;
             ll_rw_block(WRITE, bh);
             bh->b_count--;
+            written++;
         }
     }
 
     sync_inodes(dev);
+
+    return written;
 }
 
 void wait_on_buffer(struct buffer_head *bh)
