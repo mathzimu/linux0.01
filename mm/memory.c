@@ -436,19 +436,38 @@ static int try_to_free_page(void)
                    after the two cheap classes. */
                 if (pass == 2 && !(pte & PTE_COW)) {
                     unsigned long pgdir_before = t->pg_dir;
+                    unsigned long pte_before = pte;
                     int slot = swap_out_page(pa);
 
                     if (slot >= 0) {
                         /* swap_out_page() writes to the disk and therefore
-                           SLEEPS.  While it does, the owner of this page
-                           table can exit and have its whole address space
-                           freed: t, pt, pa and the PTE we were about to
-                           rewrite are all stale on return.  Validate the
-                           task before touching any of them again — the
-                           first version did not, and a page table that had
-                           been recycled under it produced a kernel page
-                           fault at 0xffffffff from a garbage task pointer. */
-                        if (task[idx] != t || t->pg_dir != pgdir_before) {
+                           SLEEPS, and the PTE it is working from stays
+                           PRESENT the whole time.  Two things can happen
+                           in that window, and both make this page no
+                           longer ours to evict:
+
+                             - the owner touches it: the hardware sets the
+                               Accessed (and Dirty) bits, so the copy we
+                               just wrote to the disk is already stale;
+                             - another task faults, runs its own reclaim
+                               pass, finds this same present PTE and swaps
+                               the same frame out too - two swap entries
+                               and, worse, two free_page() calls on one
+                               frame.  The frame then belongs to two
+                               owners at once and user data silently
+                               changes under them (seen as processes
+                               faulting on address 0 with a NULL pointer
+                               under memory pressure).
+
+                           Re-read the PTE instead of assuming: bail out
+                           and give the slot back.  The task itself can
+                           also have exited and had its whole address
+                           space freed, which is what the pg_dir check
+                           catches (the first version of this code did not
+                           even do that, and produced a kernel page fault
+                           at 0xffffffff from a recycled page table). */
+                        if (task[idx] != t || t->pg_dir != pgdir_before ||
+                            pt[i] != pte_before) {
                             swap_free_slot(slot);   /* contents are orphaned */
                             return 0;
                         }
