@@ -10,6 +10,11 @@ static struct buffer_head *free_list = NULL;
 static struct buffer_head *hash_table[NR_BUFFERS];
 static char *buffer_mem;
 
+/* The wait-queue primitives live at the bottom of this file (the buffer
+   cache is their only user), but ll_rw_block has to wake the queue, so
+   wake_up() needs a declaration up here. */
+void wake_up(struct task_struct **p);
+
 /* Inspected by mm/memcheck.c: how many buffers the cache actually got,
  * and the [start, end) of the region it occupies.  A mismatch between
  * nr_buffers and NR_BUFFERS means the compile-time layout no longer
@@ -163,7 +168,15 @@ struct buffer_head *bread(int dev, int block)
     bh = getblk(dev, block);
     if (bh->b_uptodate) return bh;
     if (bh->b_lock) {
-        sleep_on(&bh->b_wait);
+        /* Somebody else is reading this very block (the common case: two
+           processes faulting in the same page of the same executable).
+           Wait for them, interrupts off so that the completion cannot
+           slip in between the test and the registration below - that
+           window is what used to lose the wakeup. */
+        cli();
+        while (bh->b_lock)
+            sleep_on(&bh->b_wait);
+        sti();
         if (bh->b_uptodate) return bh;
     }
 
@@ -224,6 +237,17 @@ void ll_rw_block(int rw, struct buffer_head *bh)
     }
 
     bh->b_lock = 0;
+
+    /* Wake whoever found this buffer locked and went to sleep on it.
+       Linux 0.01 did this from the request-completion path
+       (end_request -> wake_up(&bh->b_wait)); the block layer here is
+       synchronous - hd_read_sectors() itself waits for IRQ14 - so the
+       end of ll_rw_block() is that completion point.  Without this call
+       nothing in the kernel ever woke b_wait, and every second reader of
+       a block slept forever, uninterruptibly: that is what stalled
+       batched forks whose children faulted in the same executable pages,
+       and it is why scenario 18 (oom) never reached exhaustion. */
+    wake_up(&bh->b_wait);
 }
 
 /* Write back every dirty buffer (and, via sync_inodes, every dirty
@@ -255,9 +279,14 @@ int sync_dev(int dev)
 
 void wait_on_buffer(struct buffer_head *bh)
 {
-    while (bh->b_lock) {
+    /* Interrupts off across the test-and-register pair: the completion
+       runs from the disk interrupt, and if it landed between the test
+       and the sleep the waiter would sleep forever (nobody wakes
+       b_wait a second time).  This is Linux 0.01's own idiom. */
+    cli();
+    while (bh->b_lock)
         sleep_on(&bh->b_wait);
-    }
+    sti();
 }
 
 void sleep_on(struct task_struct **p)
