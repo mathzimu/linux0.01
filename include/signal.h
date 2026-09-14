@@ -27,6 +27,16 @@
 #define SIG_DFL ((unsigned long)0)
 #define SIG_IGN ((unsigned long)1)
 
+/* Signal masks (B5).  A blocked signal is *not* discarded: it stays
+   pending and is delivered as soon as it is unblocked, which is what
+   makes the mask usable for critical sections.  SIGKILL cannot be
+   blocked — this kernel has no job control (no SIGSTOP/SIGCONT), so
+   SIGKILL is the only signal a process may not take away. */
+#define SIG_BLOCK   1        /* mask |= set   */
+#define SIG_UNBLOCK 2        /* mask &= ~set  */
+#define SIG_SETMASK 3        /* mask  = set   */
+#define SIG_UNBLOCKABLE (1UL << SIGKILL)
+
 /* A handler is reset to SIG_DFL before it runs (classic signal()
    semantics), except for SIGCHLD.  The interrupted context is restored
    by the sigreturn syscall (67), whose stub lives at

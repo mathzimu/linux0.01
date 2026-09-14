@@ -186,6 +186,16 @@ extern struct task_struct *task[];
 extern struct task_struct *current;
 extern int jiffies;
 
+/* Per-task signal mask (B5), indexed by pid — which is the task[] slot.
+ * This is deliberately *not* a field of struct task_struct.  The struct
+ * sits at the bottom of the task's 4 KB page and the child's kernel
+ * stack is the room left above it, so sys_fork copies the parent's live
+ * stack into `PAGE_SIZE - sizeof(struct task_struct)` bytes; three
+ * earlier attempts at signal masks grew the struct and each one ended in
+ * a silent double fault (see the guard in sys_fork).  Whether a signal
+ * is blocked does not belong to the saved CPU context anyway. */
+extern unsigned long sig_blocked[NR_TASKS];
+
 /* Periodic write-back task (kernel/sync.c): pid 1, its task page is a
  * static buffer inside the kernel image so it cannot be reaped or
  * confused with a user process. */
@@ -222,6 +232,8 @@ int sys_rmdir(const char *dirname);
 int sys_waitpid(int pid, unsigned long *stat_addr, int options);
 int sys_execve(const char *filename, char **argv, char **envp);
 int sys_signal(int sig, unsigned long handler);
+int sys_sigprocmask(int how, unsigned long *set, unsigned long *oldset);
+int sys_sigsuspend(unsigned long *mask);
 int sys_chdir(const char *filename);
 int sys_chmod(const char *filename, int mode);
 int sys_chown(const char *filename, int uid, int gid);

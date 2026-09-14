@@ -83,6 +83,8 @@
  * 67.  sigreturn is entered from the user stub at USER_SIGRETURN_ENTRY
  * and never returns to its caller. */
 #define __NR_sigreturn 67
+#define __NR_sigprocmask 68
+#define __NR_sigsuspend 69
 
 /* open flags (Linux 0.01) */
 #define O_RDONLY 0
@@ -201,5 +203,11 @@ _syscall0(int, setsid)
 /* Not a normal call: invoked by the signal trampoline after a custom
    handler returns (see do_signal in kernel/process.c). */
 _syscall0(int, sigreturn)
+
+/* B5: block/unblock signals.  SIG_BLOCK / SIG_UNBLOCK / SIG_SETMASK and
+   the unblockable SIGKILL come from <signal.h>. */
+_syscall3(int, sigprocmask, int, how, unsigned long *, set,
+          unsigned long *, oldset)
+_syscall1(int, sigsuspend, unsigned long *, mask)
 
 #endif

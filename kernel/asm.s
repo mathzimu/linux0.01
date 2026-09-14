@@ -114,7 +114,13 @@ sys_sigreturn:
     movl 76(%esi), %eax
     movl %eax, 24(%esp)                 /* ebp */
 
-    movl $0, %eax                       /* syscall "return value" (unused) */
+    /* Hand the *restored* eax back as this syscall's return value.  It is
+       already in the frame's eax slot, but ret_from_sys_call stores the
+       value this routine returns into that very slot on its way out
+       (mov %eax, 24(%esp)), so returning 0 here would clobber the
+       interrupted syscall's return value — which is what a handler that
+       interrupts e.g. sigsuspend() must preserve. */
+    movl 52(%esi), %eax
     ret
 
 sig_bad:

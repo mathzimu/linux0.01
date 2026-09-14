@@ -315,6 +315,21 @@ QEMU_MEM=4M QEMU_MIN_WAIT=180 run_case swap "$BASE && make prog NAME=swaptest" \
     'pages swapped out' \
     'exec: child 1 exit_code=0'
 
+# 场景 25: 信号屏蔽与 sigsuspend（B5）
+#   阻塞的信号不能被丢掉：它留在 pending 集合里，解除阻塞的**那一次**
+#   sigprocmask 返回时立刻投递（不需要再发一次信号）。sigsuspend 则要
+#   原子地"换掩码 + 睡觉"——POSIX 要求唤醒它的处理器在 sigsuspend 返回**之前**
+#   跑完，所以临时掩码必须一直生效到进入 handler 为止（内核在这里把旧掩码的
+#   恢复推迟到 do_signal 里）。这条场景同时钉住一个老 bug：从 handler 返回时
+#   sys_sigreturn 曾把被中断系统调用的返回值清成 0（sigdemo 只检查 pause()，
+#   返回值没人看，所以一直没暴露）。
+run_case sigblock "$BASE && make prog NAME=sigblock" 'exec /bin/sigblock\n' \
+    'sigblock: raised SIGUSR1 while blocked: hits=0' \
+    'sigblock: after unblock: hits=1 last_sig=10' \
+    'sigblock: sigsuspend returned -1, hits=2 last_sig=10' \
+    'sigblock: SIGKILL is still unblockable (hits=2)' \
+    'sigblock: PASS'
+
 echo
 echo "================================"
 echo "  $PASS passed, $FAIL failed"

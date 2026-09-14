@@ -185,7 +185,8 @@ BIOS POST
 
 1. **两个 Shell**：内核态 `$`（`main` 直接 `shell_main`，救援/调试入口）与 Ring3 的 `/bin/sh`
    （`exec /bin/sh`，自己 read 键盘、自己 fork+execve）；`int 0x80` 自动切回内核栈
-2. **67 个系统调用，编号 = Linux 0.01**；`include/unistd.h` 提供 `int $0x80` 包装宏
+2. **67 个系统调用，编号 = Linux 0.01**；`include/unistd.h` 提供 `int $0x80` 包装宏。
+   编号 67 起是本内核的扩展：`sigreturn`、`sigprocmask`、`sigsuspend`
 3. **每进程独立地址空间**（M3）：内核恒等映射 0–16MB 全 supervisor-only，用户区在 PDE[32]；
    进程页首次访问才分配（按需调页），fork 用**写时复制**（`copy_page_tables`/`un_wp_page`）；
    Ring3 越权访问 → 终止肇事进程（SIGSEGV），内核继续运行。`memstat` 可看空闲页与
@@ -333,10 +334,10 @@ exec: child 1 exit_code=7
 
 ## 🧪 自动化验证
 
-**一键回归**（24 个场景：exec / 管道 / chdir / 硬链接 / fork-waitpid / 信号 / 系统调用 / 内存隔离 / 目录扩容 / 基础应用 / 堆与缓存不重叠 / 启动自检 / 自定义信号处理器 / **Ring3 shell** / **定时回写** / **写时复制** / **按需调页** / **内存耗尽** / **文件权限** / **shell 管道与重定向** / **中断驱动磁盘** / **内存压力下的页回收** / **信号投递时机** / **匿名页换出**）：
+**一键回归**（25 个场景：exec / 管道 / chdir / 硬链接 / fork-waitpid / 信号 / 系统调用 / 内存隔离 / 目录扩容 / 基础应用 / 堆与缓存不重叠 / 启动自检 / 自定义信号处理器 / **Ring3 shell** / **定时回写** / **写时复制** / **按需调页** / **内存耗尽** / **文件权限** / **shell 管道与重定向** / **中断驱动磁盘** / **内存压力下的页回收** / **信号投递时机** / **匿名页换出** / **信号屏蔽与 sigsuspend**）：
 
 ```bash
-make test                    # 等价于 scripts/regress.sh（24 个场景，TCG 下约 10.5 分钟）
+make test                    # 等价于 scripts/regress.sh（25 个场景，TCG 下约 10.5 分钟）
 make test-fast               # 快集：跳过 autosync/oom/evict 三个重场景（CI 的 PR 跑这个）
 ```
 

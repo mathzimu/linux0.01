@@ -205,8 +205,53 @@ OOM 杀进程。而且 `execve` 仍然是**预先**把整个镜像拷进新页�
 | 回归 | 场景 23 `spinkill`（`user/spintest.c`）：`alarm(1)` 之后进入**不含任何系统调用**的死循环，必须约 1 秒后以 142（128+SIGALRM）退出。**反向验证过**：把补丁 stash 掉重跑，进程永远转下去、连 `exit_code` 都不出现 |
 | 顺带 | `user/evicttest.c` 里那条"本内核只在系统调用返回时投递信号"的注释同步更新；它循环里的周期性 `times()` 保留（让长循环更早可中断），但不再是"能不能被杀掉"的前提 |
 
-**下一步的自然延伸**：`sigaction`/`sigprocmask`/`sigsuspend`（处理器运行期间屏蔽自身、
-可重启的系统调用等），以及把投递点也补到缺页返回路径上（现在靠 tick 兜底，最坏 10ms 延迟）。
+### B5 — 信号屏蔽与 `sigsuspend`：第 1 步 ✅（`sigaction` 待做）
+
+**动因**：临界区必须能把信号挡住再放开，否则"检查标志 → 改数据"随时会被处理器插进来；而
+`sigsuspend` 是"原子地换掩码并睡觉"的唯一办法，没有它只能忙等 + 轮询标志。
+
+| 项 | 内容 |
+|----|------|
+| 状态存放 | `sig_blocked[NR_TASKS]`（按 pid 索引）**故意不放进 `struct task_struct`**：结构体躺在任务页底部，子进程的内核栈就是它上面剩下的空间，`sys_fork` 要把父进程的**活栈**拷进去。三次尝试（每次只给结构体加几到几百字节）都以静默三重故障/重启告终——`sizeof(struct task_struct)` 只有 712 字节，空间是被"父进程活栈"吃掉的。现在 `sys_fork` 先算 `sizeof(struct task_struct) + 活栈` 装不装得下，装不下就打印原因并让 fork 失败，而不是越界 memcpy |
+| 继承 | fork 时 `sig_blocked[child] = sig_blocked[parent]`；槽位复用时这条赋值也顺便把上一个进程的掩码覆盖掉 |
+| 投递 | `do_signal` 遇到被阻塞的信号**不清 pending 位**：解除阻塞的那次 `sigprocmask` 返回时就地投递，不需要补发信号 |
+| `sigsuspend` | 临时掩码一直生效到进入 handler 为止（POSIX：唤醒它的处理器必须在 `sigsuspend` 返回**之前**跑完），旧掩码的恢复推迟到 `do_signal` 里做；`pause()` 也不再把被阻塞的信号当成"有事发生" |
+| SIGKILL | 唯一不可屏蔽的信号（本内核没有作业控制，也就没有 SIGSTOP/SIGCONT） |
+| 顺带修的老 bug | `sys_sigreturn` 曾以 `movl $0,%eax` 返回，而 `ret_from_sys_call` 会把 eax 存回"被中断系统调用的返回值槽"——于是**每次从 handler 返回，被打断的系统调用的返回值都被清成 0**。`sigdemo` 只检查 `pause()`（返回值没人看），所以这个 bug 一直藏着；现在返回恢复出来的 eax |
+| 回归 | 场景 25 `sigblock`（`user/sigblock.c`）：阻塞 → 给自己发信号（handler 不得运行）→ 解除阻塞（pending 信号立刻送达）→ 子进程发信号 + `sigsuspend`（返回 -1、hits=2、掩码随后恢复）→ SIGKILL 仍不可屏蔽 |
+
+**还没做**：`sigaction`（持久处理器 + `sa_mask` 在处理器运行期间屏蔽自身）、可重启的系统调用
+（`SA_RESTART`），以及把投递点补到缺页返回路径上（现在靠 tick 兜底，最坏 10ms 延迟）。
+
+## 已知问题：批量 fork 出来的子进程会卡住（做 B5 时发现，**早于 B5**）
+
+最小复现 `user/oomdiag.c`：父进程连续 fork 3 个子进程，每个子进程 `malloc(768KB)`、填满
+192 页、打印、`exit(7)`；父进程用 `waitpid(-1)` 回收 3 次。实测（16MB，**无任何内存压力**）：
+
+```
+diag: forked 3 children
+diag: child[2]: alive … malloc=ok … filled, exiting
+diag: reaped r=4 status=7          ← 只有最后一个子进程跑完
+（另外两个子进程打印了 "alive" 之后再也没有输出，父进程随后永远阻塞）
+```
+
+`memstat` 显示 0 swap-out、0 eviction、0 OOM、内存大量空闲——所以卡住不是缺内存。
+
+**对照实验**：把同一份探针拿到 B5 **之前**的提交（`06183d2`，用 `git worktree` 单独构建）
+上跑，输出逐字相同 ⇒ 这不是 B5 引入的，是一直存在的调度或内存路径问题。
+
+**影响**：`scripts/regress.sh` 场景 18（`oom`）的前提是"10 个子进程各自真的持有 768KB"，
+一旦子进程成批卡住，内存压力根本不会出现，于是 `PAGE FAULT: out of memory for pid=`
+缺失、场景失败。本机能稳定复现；CI run #19 里这条场景则是卡在**最后一个**断言（OOM 打印
+出现了、后面的 `ls` 没出现）——两种情况都说明它**不确定**，以它判断 CI 红绿并不可靠。
+
+**下一步**：先定位子进程为什么卡住。怀疑点：
+1. 批量 fork 后子进程的首次 COW 缺页路径（每个子进程都在写自己刚 malloc 出来的页）；
+2. `drivers/tty_io.c` 里**所有进程共享、无锁**的 tty 环形缓冲（`write_head/write_tail/
+   write_cnt` 在系统调用上下文里被定时器抢占即可交错；`tty_write` 在缓冲满时直接 `break`
+   丢字符）——探针里"第一条打印出来了、第二条没有"这一点与它吻合。
+定位清楚后，再决定是把 `oom` 场景改成"子进程自报已填满、父进程等待"的握手形式（那样卡住
+会变成响亮的失败，而不是静默地少测一件事），还是先修内核。
 
 ## B4 — 匿名页换出（swap）：内存回收的最后一块 ✅ 已完成
 
@@ -250,7 +295,8 @@ swap 后耗尽门槛是**内存+swap**（695 帧 + 512 槽 ≈ 1207 页），子
 
 ## 当前状态（一句话）
 
-**67 个系统调用（编号与 1991 Linux 0.01 完全一致）**、23 条 Shell 命令的教学内核：
+**67 个系统调用（编号与 1991 Linux 0.01 完全一致）＋ 3 个本内核扩展（67 sigreturn /
+68 sigprocmask / 69 sigsuspend）**、23 条 Shell 命令的教学内核：
 进程生命周期完整（fork/execve/waitpid/信号/管道）、MINIX FS 增删改查 + 硬链接/重命名 +
 **权限模型**、
 Ring3 用户态 + 编程工具链（`make prog NAME=xxx` → `exec /xxx`）、内存隔离、chdir。
@@ -347,7 +393,7 @@ make Image                # 引导镜像
 # 运行/验证
 qemu-system-i386 -fda Image -hda minix.img -m 16M -boot a
 python3 scripts/qemu-test.py --image Image --hda minix.img --keys $'cmd\n'
-make test                   # 一键回归（scripts/regress.sh，24 个场景断言）
+make test                   # 一键回归（scripts/regress.sh，25 个场景断言）
 make check                  # 静态校验：内存地图 + 文档一致性 + lint 反向自测
 make check-layout           # 只校验内存地图（含 _end 未越界）
 make check-docs             # 只校验文档里引用的布局常量/场景数与源码一致

@@ -14,6 +14,42 @@ extern long syscall_esp;
 extern int syscall_cpl;
 extern void ret_from_sys_call(void);
 
+/* --- B5: signal masks ------------------------------------------------
+ *
+ * Whether a signal is blocked is per-process state, so it has to be
+ * saved on fork and be private to each task — but it is deliberately not
+ * a field of struct task_struct.  That struct sits at the bottom of the
+ * task's 4 KB page and the child's kernel stack is the room left above
+ * it, so sys_fork copies the parent's live kernel stack into
+ * `PAGE_SIZE - sizeof(struct task_struct)` bytes.  Three earlier
+ * attempts at this feature grew the struct, and each one ended in a
+ * silent double fault (there is now a guard in sys_fork that reports the
+ * overflow instead).  Indexing by pid costs 512 bytes of BSS and takes
+ * nothing away from any kernel stack.
+ */
+unsigned long sig_blocked[NR_TASKS];
+
+/* sigsuspend()'s deferred mask restore.
+ *
+ * sigsuspend() installs a temporary mask and waits.  POSIX says the
+ * signal that wakes it runs *before* sigsuspend() returns, so the
+ * temporary mask has to stay in force until the handler has been
+ * entered: restoring the caller's mask first would leave the waking
+ * signal blocked again, sitting in the pending set while the caller was
+ * already back in user mode, and the whole point of sigsuspend() is to
+ * close that gap.  So it records the mask to restore and do_signal()
+ * puts it back as soon as it has entered the handler. */
+static unsigned long sig_suspend_mask[NR_TASKS];
+static unsigned char sig_suspend_pending[NR_TASKS];
+
+static void sig_restore_suspend_mask(void)
+{
+    if (sig_suspend_pending[current->pid]) {
+        sig_suspend_pending[current->pid] = 0;
+        sig_blocked[current->pid] = sig_suspend_mask[current->pid];
+    }
+}
+
 /* USER_STACK_TOP and CHILD_USER_STACK_TOP both come from
  * include/memlayout.h alongside every other user-visible address. */
 int sys_fork(void)
@@ -74,6 +110,11 @@ int sys_fork(void)
     }
 
     p->pid = pid;
+    /* B5: the child inherits the parent's signal mask.  This assignment
+       is also what makes the array per-process across slot reuse: an
+       exiting task's mask is overwritten here when its slot is handed
+       out again. */
+    sig_blocked[pid] = sig_blocked[current->pid];
     p->counter = p->priority;
     p->state = TASK_RUNNING;
 
@@ -419,14 +460,77 @@ int sys_pause(void)
        nothing else to run (it halts once and returns), so a single
        sleep/wake pair is not enough: the loop is what makes pause()
        actually block.  do_timer() wakes an interruptible task whose
-       alarm has expired, which is how alarm(); pause(); works. */
+       alarm has expired, which is how alarm(); pause(); works.
+       A signal the task has blocked is not "pending" as far as pause()
+       is concerned (B5) — POSIX pause() ignores blocked signals too. */
     current->state = TASK_INTERRUPTIBLE;
-    while (!current->signal) {
+    while (!(current->signal & ~sig_blocked[current->pid])) {
         schedule();
         current->state = TASK_INTERRUPTIBLE;
     }
     current->state = TASK_RUNNING;
     return 0;
+}
+
+/* --- B5: signal masks: block/unblock, then wait ----------------------
+ * sig_blocked[] and the deferred-restore helpers live at the top of this
+ * file, next to the explanation of why they are not in task_struct.
+ */
+
+int sys_sigprocmask(int how, unsigned long *set, unsigned long *oldset)
+{
+    unsigned long old = sig_blocked[current->pid];
+    unsigned long mask;
+
+    if (oldset)
+        put_fs_long(old, oldset);
+    if (!set)
+        return 0;                     /* query only */
+
+    switch (how) {
+    case SIG_BLOCK:
+        mask = old | get_fs_long(set);
+        break;
+    case SIG_UNBLOCK:
+        mask = old & ~get_fs_long(set);
+        break;
+    case SIG_SETMASK:
+        mask = get_fs_long(set);
+        break;
+    default:
+        return -1;
+    }
+
+    sig_blocked[current->pid] = mask & ~SIG_UNBLOCKABLE;
+    return 0;
+}
+
+/* sigsuspend(mask): wait for a signal that the caller's *new* mask lets
+   through, then hand control back with the old mask restored.  POSIX
+   splits this into "set the mask" and "sleep" so that the two cannot be
+   interleaved with the signal arriving in between; here they are one
+   syscall, which is the whole point of having it.  It always returns -1
+   (= EINTR in POSIX).  The waking signal is delivered on the way back
+   out to user mode, with the temporary mask still in force — see the
+   comment on sig_suspend_mask. */
+int sys_sigsuspend(unsigned long *mask)
+{
+    unsigned long old = sig_blocked[current->pid];
+    unsigned long new = mask ? (get_fs_long(mask) & ~SIG_UNBLOCKABLE) : 0;
+
+    sig_blocked[current->pid] = new;
+    current->state = TASK_INTERRUPTIBLE;
+    while (!(current->signal & ~new)) {
+        schedule();
+        current->state = TASK_INTERRUPTIBLE;
+    }
+    current->state = TASK_RUNNING;
+
+    /* Leave the temporary mask installed and let do_signal() restore
+       `old` once it has entered the handler. */
+    sig_suspend_mask[current->pid] = old;
+    sig_suspend_pending[current->pid] = 1;
+    return -1;
 }
 
 /* Signal delivery from the timer interrupt (see boot/head.s).
@@ -717,8 +821,14 @@ void do_signal(unsigned char *kf)
     int cpl;
     int sig;
 
-    if (!current->signal)
+    if (!current->signal) {
+        /* Nothing to deliver — but a signal consumed without a handler
+           (SIG_IGN, or a default action that ignores) may have been the
+           one sigsuspend() was waiting for, and its temporary mask is
+           still installed. */
+        sig_restore_suspend_mask();
         return;
+    }
 
     cpl = (int)(*(unsigned long *)(kf + UFRAME_CS) & 3);
 
@@ -727,6 +837,14 @@ void do_signal(unsigned char *kf)
 
         if (!(current->signal & (1 << sig)))
             continue;
+
+        /* B5: a blocked signal stays pending — leave the bit set and
+           look at it again on the next return to user mode, which is
+           what happens right after sigprocmask(SIG_UNBLOCK).  SIGKILL
+           can never be in the mask (sys_sigprocmask strips it). */
+        if (sig_blocked[current->pid] & (1UL << sig))
+            continue;
+
         current->signal &= ~(1 << sig);
 
         /* An ignored signal never reaches the task. */
@@ -742,6 +860,9 @@ void do_signal(unsigned char *kf)
                    handler resumes at the next instruction. */
                 if (sig != SIGCHLD)
                     current->handlers[sig] = SIG_DFL;
+                /* The temporary mask from sigsuspend() stays in force
+                   until the handler is about to run. */
+                sig_restore_suspend_mask();
                 deliver_signal(sig, handler, kf);
                 return;
             }
@@ -761,4 +882,8 @@ void do_signal(unsigned char *kf)
             break;                 /* default action: ignore */
         }
     }
+
+    /* Everything that was pending is now consumed or ignored, so a
+       sigsuspend() temporary mask can go back to being the real one. */
+    sig_restore_suspend_mask();
 }
