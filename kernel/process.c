@@ -521,6 +521,18 @@ struct sig_context sigreturn_frame;
  * without updating it would silently corrupt the resumed context. */
 STATIC_ASSERT(sizeof(struct sig_context) == 80, sig_context_is_80_bytes);
 
+/* The user-stack frame must hold the header (8 bytes) plus the snapshot
+ * the handler sees, and it is placed below the interrupted esp — see
+ * deliver_signal() and include/memlayout.h (SIGFRAME_BYTES).
+ *
+ * B5 (signal masks) appended two words to struct sig_context for the mask
+ * and the pending set, and the kernel then faulted in the signal-return
+ * path.  These asserts make the size relationships explicit instead of
+ * implicit, so the next attempt cannot outgrow the frame without the
+ * build saying so. */
+STATIC_ASSERT(sizeof(struct sig_context) + 8 <= SIGFRAME_BYTES,
+              sig_context_plus_the_mask_fits_the_frame);
+
 /* Snapshot of the interrupted context, mirrored for the handler to look
  * at.  The block is written just BELOW the interrupted user esp (see
  * deliver_signal):
@@ -535,6 +547,11 @@ struct user_regs {
     unsigned long gs, fs, es, ds, eax;
     unsigned long ebx, ecx, edx, esi, edi, ebp;
 };
+
+/* 8 bytes of header (retaddr + signo) plus this snapshot is all the user
+ * stack frame has to hold — see SIGFRAME_BYTES and deliver_signal(). */
+STATIC_ASSERT(8 + sizeof(struct user_regs) <= SIGFRAME_BYTES,
+              signal_frame_holds_the_snapshot);
 
 /* Offsets into the system_call frame at ret_from_sys_call (see
  * boot/head.s: 5 pushes + 7 saved words below the iret frame).  The
