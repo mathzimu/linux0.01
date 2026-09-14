@@ -95,7 +95,7 @@ $(python3 scripts/qemu-test.py --image Image --hda minix.img \
 # （harness 每字符默认等 TEST_TYPE_DELAY=0.5 秒）。不要靠压低打字速度省时间：
 # 低于 ~0.2 秒实测会丢键（8042 只有一字节缓冲，guest 跟不上就丢整条命令），
 # 所以宁可拆成两集。
-HEAVY_CASES=" autosync oom evict "
+HEAVY_CASES=" autosync oom evict swap "
 
 # CI 可观测性：GitHub Actions 会把 `::error::` 开头的行变成**注解**（annotations），
 # 那是公开可读的——而作业日志接口需要 admin 权限。CI 红的时候，如果失败场景名
@@ -232,7 +232,7 @@ run_case demand "$BASE && make prog NAME=demandtest" \
 #   ⚠️ 这条曾经跑在 16MB 上要 40 个子进程、耗时几十秒——CI 的 runner 更慢，
 #   总窗口一到就被截断，于是 CI 红而本地绿。现在改用小内存 + 显式窗口，
 #   工作量小了十几倍，任何 runner 上都稳。
-QEMU_MEM=4M QEMU_MIN_WAIT=45 run_case oom "$BASE && make prog NAME=oomtest" \
+QEMU_MEM=4M QEMU_MIN_WAIT=90 run_case oom "$BASE && make prog NAME=oomtest" \
     'exec /bin/oomtest\nls\n' \
     'children are holding memory' \
     'PAGE FAULT: out of memory for pid=' \
@@ -301,6 +301,19 @@ run_case spinkill "$BASE && make prog NAME=spintest" 'exec /bin/spintest\nls\n' 
     'installing alarm(1), then spinning with no syscalls' \
     'exec: child 1 exit_code=142' \
     'hello.txt'
+
+# 场景 24: 匿名页换出/换入（B4）
+#   4MB（约 695 帧）下要 768 页**私有脏页**：3 个子进程各填 768KB 堆后持有
+#   （alarm 自行退场，142=128+SIGALRM；若被 OOM 杀会是 139，测试直接 FAIL），
+#   父进程在它们持有期间再填自己的 768KB。零页/正文页回收不够用时，B4 把脏页
+#   写到镜像末尾的裸 swap 区、缺页时读回——所有数据必须逐字节一致。
+#   重场景：磁盘 I/O 密集，需要长窗口。
+QEMU_MEM=4M QEMU_MIN_WAIT=90 run_case swap "$BASE && make prog NAME=swaptest" \
+    'exec /bin/swaptest\nmemstat\n' \
+    'swaptest: forked 3 children' \
+    'swaptest: PASS (3 children, data intact across swap)' \
+    'pages swapped out' \
+    'exec: child 1 exit_code=0'
 
 echo
 echo "================================"

@@ -74,6 +74,20 @@
  * fine as long as it is at least this. */
 #define MEMORY_END_MINIMUM  0x00400000
 
+/* --- swap area (B4) ------------------------------------------------
+ * The disk image is laid out as [MINIX filesystem][raw swap].  The fs
+ * records its own size (1024 1KB zones = 1MB, tools/mkminix.c), so the
+ * kernel can address the swap region directly by LBA without asking the
+ * filesystem anything — swap is a raw device, not a file, which is also
+ * why the page-reclaim path can use it with no buffers and no inode.
+ *
+ * One slot holds exactly one 4KB page, so a slot number is all a page
+ * table entry needs in order to remember where its contents went. */
+#define SWAP_START_LBA    2048                   /* 1MB into the image */
+#define SWAP_SECTORS      4096                   /* 2MB of swap        */
+#define SWAP_SLOT_SECTORS 8                      /* 8 x 512B = 4KB page */
+#define NR_SWAP_SLOTS     (SWAP_SECTORS / SWAP_SLOT_SECTORS)  /* 512 pages */
+
 /* The kernel buffer cache sits in the window between the end of the
  * kernel page tables and the low 1MB hole, nowhere near user memory: it
  * is kernel-only, mapped identity in every address space, and marked
@@ -130,6 +144,8 @@ STATIC_ASSERT(NR_BUFFERS * (BLOCK_SIZE + 64) <= BUFFER_CACHE_WINDOW,
               nr_buffers_fit_the_window);
 STATIC_ASSERT(KERNEL_TABLES_END <= BUFFER_CACHE_FLOOR, cache_above_kernel_tables);
 STATIC_ASSERT(MEMORY_END_MINIMUM > BUFFER_CACHE_TOP, minimum_ram_holds_the_cache);
+STATIC_ASSERT(SWAP_SLOT_SECTORS * 512 == 4096, swap_slot_is_one_page);
+STATIC_ASSERT(NR_SWAP_SLOTS <= 4096, swap_slot_fits_in_a_pte);
 
 /* --- runtime self-check (mm/memcheck.c) ---------------------------
  * Called once from main(), right after mem_init() and buffer_init()

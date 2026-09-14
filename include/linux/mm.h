@@ -19,7 +19,17 @@
 #define PTE_PRESENT 0x001
 #define PTE_RW      0x002
 #define PTE_USER    0x004
+/* The CPU sets Accessed on every touch and Dirty on every write; this
+ * kernel uses Accessed for the reclaimer's second-chance clock (B4). */
+#define PTE_ACCESSED 0x020
 #define PTE_COW     0x200
+
+/* A page that is not in memory but on the swap device (B4): present is 0,
+ * bit 11 marks it as swapped, and the slot number lives in the address
+ * bits — the CPU ignores everything but P when P is clear, so the whole
+ * entry is free for the kernel to use. */
+#define PTE_SWAPPED 0x800
+#define PTE_SWAP_SLOT(pte) ((pte) >> 12)
 
 extern unsigned long memory_end;
 extern unsigned long *mem_map;
@@ -55,6 +65,14 @@ extern unsigned long nr_page_ins;
 extern unsigned long nr_evicted;
 extern unsigned long nr_unmapped;
 void mm_report(void);
+
+/* --- swap (B4) --- */
+int swap_out_page(unsigned long pa);      /* returns a slot, or -1 */
+int swap_in_page(int slot, unsigned long pa);
+void swap_free_slot(int slot);
+int swap_slots_free(void);
+extern unsigned long nr_swapouts;
+extern unsigned long nr_swapins;
 
 /* Shared by the ELF loader (kernel/sys.c) and the embedded-program entry
  * (init/shell.c): build an address space, copy `len` bytes of image to

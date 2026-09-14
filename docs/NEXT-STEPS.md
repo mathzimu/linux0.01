@@ -208,6 +208,43 @@ OOM 杀进程。而且 `execve` 仍然是**预先**把整个镜像拷进新页�
 **下一步的自然延伸**：`sigaction`/`sigprocmask`/`sigsuspend`（处理器运行期间屏蔽自身、
 可重启的系统调用等），以及把投递点也补到缺页返回路径上（现在靠 tick 兜底，最坏 10ms 延迟）。
 
+## B4 — 匿名页换出（swap）：内存回收的最后一块 ✅ 已完成
+
+**动因**：B3 之后能回收的是零页、只读正文页、COW 共享页——**程序真正吃内存的私有脏页
+（堆/栈）没有后备存储**，池子一空就只能 OOM 杀进程。补上它，按需调页才是一套完整的内存
+管理器。
+
+| 项 | 内容 |
+|----|------|
+| 交换区 | 镜像布局 `[MINIX fs 1MB][raw swap 2MB]`：`tools/mkminix.c` 在文件系统之后追加归零区域，内核按 `SWAP_START_LBA` 常量直接读写 LBA——**裸设备而非文件**，回收路径不需要缓冲区/inode；512 槽 × 4KB |
+| 页表编码 | present=0 + bit11 标记 + 槽号在地址高位：CPU 忽略非存在项的其他位，于是"这页在哪"完全记在页表项里，不需要每页的额外记账 |
+| 回收顺序 | 全零页（memset）→ 只读正文页（回读文件）→ **私有脏页换出**（写盘）→ COW 共享页（只解映射，兜底） |
+| 缺页换入 | `do_no_page` 先看页表项：是 swap 项就分配帧、从槽读回、归还槽位、建映射；换入失败才杀进程 |
+| fork | `copy_page_tables` 遇到已换出的页**先换入再 COW 共享**——否则子进程会把它当成"从未访问"而拿到零页（最容易漏的一处） |
+| 退出 | `free_page_tables` 归还槽位（`memstat` 的 `slots free` 回到 512 就是这条的回归） |
+| 观测 | `memstat` 增加 `pages swapped out / swapped back in / slots free` |
+
+**过程中踩到并修掉的两个真 bug**：
+
+1. **换出时睡眠导致的 use-after-free**。`swap_out_page()` 要写盘、会睡眠，而回收器正拿着
+   **别的进程的页表指针**——睡着的这段时间里那个进程可能退出、地址空间被 `free_user_space`
+   释放，醒来继续用 `pt[i]` / `t->pid` / `free_page(pa)` 就是 use-after-free。症状是一条内核
+   页错误 `PAGE FAULT: addr=0xffffffff ... pid=-268370093`（垃圾任务指针）。修法：换出前记下
+   任务槽位与 `pg_dir`，睡醒后先验证 `task[idx] == t && t->pg_dir == pgdir_before`，不成立
+   就归还槽位、放弃这一轮（内容成为孤儿，不碰任何陈旧指针）。
+   > B3 的所有回收路径都不睡眠，所以这个坑在 B4 之前根本不存在。
+2. **抖动（thrashing）**。修掉 1 之后仍然不收敛：零页与正文页耗尽后，回收器只能挑私有脏页
+   换出，而进程立刻又访问同一批页把它们换回来——时间全花在来回搬同一批页上，谁也不前进。
+   修法是教科书里的**第二次机会/时钟算法**：页表项的 Accessed 位（硬件每次访问自动置位）
+   就是现成的引用位，回收器遇到 A=1 的页清位并跳过，只挑 A=0 的换出；扫完一轮仍找不到就
+   再扫一轮、不再给机会（保证有界）。实测换回次数 49→28，场景由"不收敛"变为 2/2 稳定通过。
+
+**回归**：场景 24 `swap`（`QEMU_MEM=4M`）：3 个子进程各填 768KB 堆后持有（`alarm` 自行
+退场，142=128+SIGALRM；被 OOM 杀会是 139，测试直接 FAIL），父进程在它们持有期间再填
+768KB——峰值超过物理内存，必须靠换出撑住，最终逐字节校验数据。`oom` 场景同步重调：有
+swap 后耗尽门槛是**内存+swap**（695 帧 + 512 槽 ≈ 1207 页），子进程数 6→10（1920 页需求）
+才越得过去。
+
 
 ---
 
@@ -310,7 +347,7 @@ make Image                # 引导镜像
 # 运行/验证
 qemu-system-i386 -fda Image -hda minix.img -m 16M -boot a
 python3 scripts/qemu-test.py --image Image --hda minix.img --keys $'cmd\n'
-make test                   # 一键回归（scripts/regress.sh，23 个场景断言）
+make test                   # 一键回归（scripts/regress.sh，24 个场景断言）
 make check                  # 静态校验：内存地图 + 文档一致性 + lint 反向自测
 make check-layout           # 只校验内存地图（含 _end 未越界）
 make check-docs             # 只校验文档里引用的布局常量/场景数与源码一致

@@ -62,6 +62,10 @@ struct dir_entry {
 #define INODE_BLOCKS (NINODES / 32)          /* 16 */
 #define FIRSTDATAZONE (2 + IMAP_BLOCKS + ZMAP_BLOCKS + INODE_BLOCKS) /* 20 */
 #define NZONES 1024                          /* 1 MB image */
+/* The image is [filesystem][raw swap]: the kernel's swap device lives past
+   the filesystem (SWAP_START_LBA in include/linux/memmap.h), so the image
+   has to be long enough to contain it.  Nothing in the fs refers to it. */
+#define SWAP_BLOCKS 2048                     /* 2 MB of swap */
 
 static unsigned char img[NZONES * BLOCK];
 static unsigned char imap[BLOCK];
@@ -330,6 +334,9 @@ int main(int argc, char *argv[])
 
     {
         FILE *f = fopen(out, "wb");
+        static char zero[64 * 1024];
+        int left = SWAP_BLOCKS * BLOCK;
+
         if (!f) {
             perror("mkminix");
             return 1;
@@ -338,10 +345,22 @@ int main(int argc, char *argv[])
             perror("mkminix: write");
             return 1;
         }
+        /* Append the swap area, zeroed: the kernel writes pages into it
+           directly by LBA, so it only has to exist and be big enough. */
+        memset(zero, 0, sizeof(zero));
+        while (left > 0) {
+            int n = left < (int)sizeof(zero) ? left : (int)sizeof(zero);
+            if (fwrite(zero, 1, (size_t)n, f) != (size_t)n) {
+                perror("mkminix: swap write");
+                return 1;
+            }
+            left -= n;
+        }
         fclose(f);
     }
-    printf("mkminix: wrote %s (%d KB, %d zones used, firstdatazone=%d)\n",
-           out, (int)(sizeof(img) / 1024), next_zone - FIRSTDATAZONE,
-           FIRSTDATAZONE);
+    printf("mkminix: wrote %s (%d KB fs + %d KB swap, %d zones used, "
+           "firstdatazone=%d)\n",
+           out, (int)(sizeof(img) / 1024), SWAP_BLOCKS, 
+           next_zone - FIRSTDATAZONE, FIRSTDATAZONE);
     return 0;
 }

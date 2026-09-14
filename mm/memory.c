@@ -200,6 +200,88 @@ void free_page(unsigned long addr)
     mem_map[i]--;
 }
 
+/* --- swap: the backing store for anonymous pages (B4) ---------------
+ *
+ * B3 could reclaim three kinds of page (zeros, clean text, COW shares)
+ * but not the one kind a program actually fills memory with: its own
+ * dirty heap and stack.  Those had no backing store, so the pool ran out
+ * and somebody had to be killed.  The fix is the classic one — write
+ * them to the disk and read them back on the next fault.
+ *
+ * The swap device is the tail of the disk image, past the filesystem
+ * (SWAP_START_LBA in include/linux/memmap.h).  It is raw: one slot is
+ * one 4KB page, and the page-table entry itself remembers the slot while
+ * the page is away, so nothing else has to be tracked per page.
+ *
+ * The disk driver sleeps while it works, which is fine here: every path
+ * that can swap runs in a task context, never in an interrupt.
+ */
+
+unsigned long nr_swapouts = 0;
+unsigned long nr_swapins = 0;
+
+static unsigned char swap_map[NR_SWAP_SLOTS];   /* 0 free, 1 in use */
+
+int swap_slots_free(void)
+{
+    int i, n = 0;
+
+    for (i = 0; i < NR_SWAP_SLOTS; i++)
+        if (!swap_map[i])
+            n++;
+    return n;
+}
+
+void swap_free_slot(int slot)
+{
+    if (slot >= 0 && slot < NR_SWAP_SLOTS)
+        swap_map[slot] = 0;
+}
+
+static int swap_alloc_slot(void)
+{
+    int i;
+
+    for (i = 0; i < NR_SWAP_SLOTS; i++) {
+        if (!swap_map[i]) {
+            swap_map[i] = 1;
+            return i;
+        }
+    }
+    return -1;
+}
+
+/* Write one page out; returns the slot it went to, or -1. */
+int swap_out_page(unsigned long pa)
+{
+    int slot = swap_alloc_slot();
+
+    if (slot < 0)
+        return -1;
+
+    if (hd_write_sectors(SWAP_START_LBA +
+                         (unsigned int)slot * SWAP_SLOT_SECTORS,
+                         SWAP_SLOT_SECTORS, (char *)pa) < 0) {
+        swap_free_slot(slot);
+        return -1;
+    }
+    nr_swapouts++;
+    return slot;
+}
+
+/* Read one page back in; returns 0 or -1. */
+int swap_in_page(int slot, unsigned long pa)
+{
+    if (slot < 0 || slot >= NR_SWAP_SLOTS)
+        return -1;
+    if (hd_read_sectors(SWAP_START_LBA +
+                        (unsigned int)slot * SWAP_SLOT_SECTORS,
+                        SWAP_SLOT_SECTORS, (char *)pa) < 0)
+        return -1;
+    nr_swapins++;
+    return 0;
+}
+
 /* --- reclaiming pages (B3) -----------------------------------------
  *
  * Demand paging without eviction is only half a memory manager: once the
@@ -276,14 +358,23 @@ static unsigned long evict_trace = 0;
 
 static int try_to_free_page(void)
 {
-    int pass, n;
+    int pass, n, round;
     unsigned long fallback_pa = 0;
     unsigned long *fallback_pt = NULL;
     struct task_struct *fallback_t = NULL;
 
-    for (pass = 0; pass < 2; pass++) {
+    /* Two rounds: the first gives every recently *used* page a second
+       chance (clearing its Accessed bit), the second takes whatever is
+       left.  Without that, a page could be evicted and then re-touched
+       immediately, evicted again, and so on — the whole machine ends up
+       shuffling the same pages between memory and the swap device and
+       nothing makes progress.  This is the classic clock algorithm; the
+       hardware supplies the reference bit for free. */
+    for (round = 0; round < 2; round++) {
+    for (pass = 0; pass < 3; pass++) {
         for (n = 0; n < NR_TASKS; n++) {
-            struct task_struct *t = task[(evict_cursor + n) % NR_TASKS];
+            int idx = (evict_cursor + n) % NR_TASKS;
+            struct task_struct *t = task[idx];
             unsigned long *pt;
             int i;
 
@@ -301,6 +392,16 @@ static int try_to_free_page(void)
                     continue;
                 pa = pte & PT_MASK;
                 va = USER_BASE + (unsigned long)i * PAGE_SIZE;
+
+                /* Second chance: the CPU sets Accessed on every touch, so
+                   a page used since the last sweep keeps its frame for one
+                   more round.  Clearing the bit is enough — there is no
+                   need to flush the TLB, because the worst case is that
+                   the CPU sets it again on the next access. */
+                if (round == 0 && (pte & PTE_ACCESSED)) {
+                    pt[i] = pte & ~PTE_ACCESSED;
+                    continue;
+                }
 
                 if (pass == 0 && !(pte & PTE_COW) && page_is_zero(pa)) {
                     pt[i] = 0;
@@ -328,6 +429,42 @@ static int try_to_free_page(void)
                     return 1;
                 }
 
+                /* pass 2: a private page with no other backing store —
+                   dirty heap or stack.  Write it to swap and remember the
+                   slot in the PTE.  This is the expensive one (a disk
+                   write now, a disk read on the next touch), so it comes
+                   after the two cheap classes. */
+                if (pass == 2 && !(pte & PTE_COW)) {
+                    unsigned long pgdir_before = t->pg_dir;
+                    int slot = swap_out_page(pa);
+
+                    if (slot >= 0) {
+                        /* swap_out_page() writes to the disk and therefore
+                           SLEEPS.  While it does, the owner of this page
+                           table can exit and have its whole address space
+                           freed: t, pt, pa and the PTE we were about to
+                           rewrite are all stale on return.  Validate the
+                           task before touching any of them again — the
+                           first version did not, and a page table that had
+                           been recycled under it produced a kernel page
+                           fault at 0xffffffff from a garbage task pointer. */
+                        if (task[idx] != t || t->pg_dir != pgdir_before) {
+                            swap_free_slot(slot);   /* contents are orphaned */
+                            return 0;
+                        }
+                        pt[i] = PTE_SWAPPED | ((unsigned long)slot << 12);
+                        free_page(pa);
+                        nr_evicted++;
+                        evict_cursor = (evict_cursor + n + 1) % NR_TASKS;
+                        if (t == current)
+                            write_cr3(current->pg_dir);
+                        if (evict_trace++ < 10)
+                            printk("evict: pid=%lu page 0x%lx -> swap slot "
+                                   "%d\n", t->pid, va, slot);
+                        return 1;
+                    }
+                }
+
                 if (pte & PTE_COW && !fallback_pt) {
                     fallback_pt = &pt[i];
                     fallback_pa = pa;
@@ -336,6 +473,7 @@ static int try_to_free_page(void)
             }
         }
     }
+    }   /* end of the two clock rounds */
 
     /* Nothing freeable: fall back to unmapping a shared page so that at
        least the *next* write to it takes the COW path with a private
@@ -436,6 +574,27 @@ int copy_page_tables(unsigned long from_pgdir, unsigned long to_pgdir)
         unsigned long pte = spt[i];
         unsigned long pa;
 
+        /* A page that is out on the swap device has no frame to share, so
+           it is brought back first and then shared like any other.  The
+           alternative — letting both processes reference the same slot —
+           would need a reference count per slot; pulling it in costs one
+           disk read at fork time only when fork actually meets a swapped
+           page, which is rare. */
+        if (!(pte & PTE_PRESENT) && (pte & PTE_SWAPPED)) {
+            unsigned long frame = get_free_page();
+            int slot = (int)PTE_SWAP_SLOT(pte);
+
+            if (!frame)
+                return -1;              /* out of memory: let fork fail */
+            if (swap_in_page(slot, frame) < 0) {
+                free_page(frame);
+                return -1;
+            }
+            swap_free_slot(slot);
+            spt[i] = frame | PTE_PRESENT | PTE_RW | PTE_USER;
+            pte = spt[i];
+        }
+
         if (!(pte & PTE_PRESENT))
             continue;
         pa = pte & PT_MASK;
@@ -500,8 +659,12 @@ int free_page_tables(unsigned long pgdir, unsigned long from, unsigned long size
         return 0;
 
     for (i = 0; i < 1024; i++) {
-        if (pt[i] & PTE_PRESENT)
-            free_page(pt[i] & PT_MASK);
+        unsigned long pte = pt[i];
+
+        if (pte & PTE_PRESENT)
+            free_page(pte & PT_MASK);
+        else if (pte & PTE_SWAPPED)
+            swap_free_slot((int)PTE_SWAP_SLOT(pte));   /* give the slot back */
         pt[i] = 0;
     }
 
@@ -644,6 +807,8 @@ void mm_report(void)
            "%lu disk interrupts (IRQ14)\n", nr_page_ins, hd_interrupt_count());
     printk("mem: %lu pages evicted, %lu COW mappings dropped\n",
            nr_evicted, nr_unmapped);
+    printk("mem: %lu pages swapped out, %lu swapped back in, %d slots free\n",
+           nr_swapouts, nr_swapins, swap_slots_free());
 }
 
 /* mm/page.s passes (error_code, eip, cr2).  Three cases matter:
@@ -684,7 +849,35 @@ void do_no_page(unsigned long error_code, unsigned long eip, unsigned long addre
 
     if (pgdir && user_addr_ok(address, 1)) {
         unsigned long va = address & PT_MASK;
-        unsigned long pa = get_free_page();     /* still unmapped here */
+        unsigned long pa;
+
+        /* Is this page out on the swap device?  The entry itself says so
+           (present clear, swap bit set, slot in the address bits), so a
+           fault after reclamation brings the contents back instead of
+           handing out a fresh zero page. */
+        {
+            unsigned long *ptep = pte_slot(pgdir, va);
+
+            if (ptep && (*ptep & PTE_SWAPPED) && !(*ptep & PTE_PRESENT)) {
+                int slot = (int)PTE_SWAP_SLOT(*ptep);
+
+                pa = get_free_page();
+                if (pa && swap_in_page(slot, pa) == 0) {
+                    swap_free_slot(slot);
+                    map_user_page(pgdir, va, pa,
+                                  PTE_PRESENT | PTE_RW | PTE_USER);
+                    write_cr3(pgdir);
+                    return;
+                }
+                if (pa)
+                    free_page(pa);
+                printk("\nSWAP-IN FAILED: slot %d for pid=%d addr=0x%lx\n",
+                       slot, current->pid, address);
+                goto kill;
+            }
+        }
+
+        pa = get_free_page();                   /* still unmapped here */
 
         if (pa) {
             nr_demand_pages++;

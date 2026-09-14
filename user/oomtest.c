@@ -10,15 +10,16 @@
  * few hundred private pages until the pool is gone, then reports.
  *
  * It runs on a small machine on purpose: the regression scenario boots
- * with 4MB (~695 free frames), so six children holding 768KB each already
- * overflow it.  The earlier version needed forty children on a 16MB
- * machine and took tens of seconds — long enough that CI's settle window
- * cut the run off, which is a test bug, not a kernel bug.
+ * with 4MB (~695 free frames), so ten children holding 768KB each already
+ * overflow it.  The count has to clear memory *and* swap: since B4 the
+ * reclaimer writes dirty pages to the swap area, so a workload that
+ * merely outgrows RAM now survives instead of being killed (695 frames +
+ * 512 swap slots = ~1207 pages, and 10 x 192 = 1920 pages are asked for).
  */
 #include "lib.h"
 
 #define KID_BYTES (768 * 1024)
-#define MAX_KIDS  6
+#define MAX_KIDS  10
 #define MAX_CHUNKS 8
 
 int main(void)

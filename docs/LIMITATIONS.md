@@ -30,7 +30,8 @@
 | 页分配器 | `get_free_page()` 从 mem_map 顺序扫描第一个空闲页并清零；`mem_init()` 保留内核页表页、`buffer_init()` 保留缓存页、`mem_map` 自身保留；**没有硬上限**，耗尽时返回 0，缺页处理据此打印 OOM 并只杀肇事进程（回归场景 18） |
 | 剩余页池 | 16MB 下约 3700 页（`memstat` 可查）；任务页/管道页/所有用户页共用 |
 | COW / 按需调页 | **已实现**（M3/B3）：用户页首次访问才分配（`do_no_page` 按区域校验后建页）；fork 让父子共享只读页并在 PTE 上打软件 COW 位，写缺页时 `un_wp_page` 复制。区域外的访问仍然杀进程 |
-| 页回收（B3） | `get_free_page()` 在池子空时调用 `try_to_free_page()`：**全零页**与**只读镜像页**可丢弃（后者下次取指由 `page_in_image()` 从可执行文件读回——文件就是它的后备存储），**COW 共享页**只解除映射（帧留给另一个 owner）且仅作兜底（不产生空闲帧）；私有脏堆/栈页没有交换区，不回收。`memstat` 报 `pages evicted` / `COW mappings dropped` |
+| 页回收（B3/B4） | `get_free_page()` 在池子空时调用 `try_to_free_page()`，按代价从低到高：**全零页**（memset 即可重建）→ **只读镜像页**（下次取指由 `page_in_image()` 从可执行文件读回）→ **私有脏页换出**（B4：写到镜像末尾的裸 swap 区，槽号记在页表项里，缺页时读回）→ **COW 共享页**只解除映射（帧留给另一个 owner，仅作兜底、不产生空闲帧）。`memstat` 报 `pages evicted` / `COW mappings dropped` / `pages swapped out \| swapped back in \| slots free` |
+| 交换区（B4） | 镜像布局 `[MINIX fs 1MB][raw swap 2MB]`（`tools/mkminix.c` 追加，`SWAP_START_LBA` 与内核一致）：512 槽 × 4KB，**裸设备而非文件**，所以回收路径可以直接按 LBA 读写、不需要缓冲区或 inode。页表项编码 = present 0 + bit11 标记 + 槽号在高位（CPU 忽略非存在项的其他位）。fork 遇到已换出的页会先换入再 COW 共享（否则子进程会把它当成"从未访问"而拿到零页）；进程退出时 `free_page_tables` 归还槽位——`slots free` 回到 512 就是这条的回归 |
 | 程序镜像 | `execve` **不再预拷贝** LOAD 段：把段位置记进 `exe_regions[]` 并持有可执行文件 inode，缺页时才从文件读进新帧（`N image pages read back from the executable` 可见）。镜像页因此天然可回收，无需交换区 |
 | 用户堆 | `user/lib.c` 的 first-fit + bump（`[0x08100000,0x08200000)`，1MB），页由内核按需提供；`sys_brk` 只记录 `task_struct.brk`，堆边界由用户库自己管 |
 | fork 的用户栈 | 与父进程**共享只读页 + 写时复制**，不再有独立「子进程栈区」，也没有栈大小上限（受限于物理页） |
@@ -75,7 +76,7 @@
 | 目标 | i386 32-bit freestanding |
 | macOS | Homebrew `i686-elf-gcc` + `i686-elf-binutils` 直接构建（Makefile 自动检测），或 Docker |
 | 运行 | QEMU `-fda Image` 或 `-cdrom kernel.iso`，内存 **16M**（内核页表恒等映射 16MB）；MINIX 测试盘 `make minix.img` + `-hda minix.img` |
-| 自动化 | `scripts/qemu-test.py` 无头驱动（串口文本 + sendkey，含大写与 `\| < > ( ) & *` 等需要 shift 的键；`--mem` 缩小客户机内存以制造压力；`--type-delay` 调打字速度；`--min-wait` 让需要观察周期性事件的用例不被“输出静止”提前收尾），`scripts/regress.sh` **23 个场景**（`make test`；`make test-fast` / `TEST_SKIP_HEAVY=1` 跳过 autosync/oom/evict 三个重场景，CI 的 PR 跑快集），`scripts/ppm2png.py` 转截图 |
+| 自动化 | `scripts/qemu-test.py` 无头驱动（串口文本 + sendkey，含大写与 `\| < > ( ) & *` 等需要 shift 的键；`--mem` 缩小客户机内存以制造压力；`--type-delay` 调打字速度；`--min-wait` 让需要观察周期性事件的用例不被“输出静止”提前收尾），`scripts/regress.sh` **24 个场景**（`make test`；`make test-fast` / `TEST_SKIP_HEAVY=1` 跳过 autosync/oom/evict/swap 四个重场景，CI 的 PR 跑快集），失败时发 GitHub 注解 + step summary（CI 日志要 admin 权限，注解不用），`scripts/ppm2png.py` 转截图 |
 | 回归耗时 | 全集在本机容器内（TCG，无 KVM，与 CI 同模式）实测 **约 10.5 分钟**，而 CI 作业预算 30 分钟（含 apt/构建/静态检查）。时间几乎都花在 harness 按键上（每字符 `TEST_TYPE_DELAY` 默认 0.5 秒）——**不要靠压低它省时间**：低于 ~0.2 秒实测会丢键（8042 只有一个字节的输出缓冲，guest 跟不上就整条命令丢掉），所以拆成快集/全集而不是压速度 |
 | 静态校验（无需编译器） | `make check` = `check-layout` + `check-docs` + `check-docs-selftest`。`scripts/check-layout.py`：内存地图有序/不重叠、用户区必须整体落在一个页目录项内、`memlayout.inc` 与 `memlayout.h` 一致、缓存装得进窗口、**用户区地址没有被硬编码到布局头之外**，已构建 `kernel/system` 时还校验链接期 `_end` 未越界。`scripts/check-docs.py`：文档里的旧地址/旧宏必须带历史标注、`0x08xxxxxx` 必须是布局常量、场景数必须等于 `regress.sh` 实际条数、`-m` 参数必须与测试驱动一致 |
 
