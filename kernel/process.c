@@ -104,6 +104,31 @@ int sys_fork(void)
      * ------------------------------------------------------------------ */
     parent_top = current->tss.esp0;              /* parent's kernel stack top */
     child_top = (long)p + PAGE_SIZE;             /* child's kernel stack top */
+
+    /* The child's kernel stack is the rest of the task page, below the
+       task_struct that lives at the bottom of it — and it has to hold a
+       copy of the parent's *live* kernel stack (everything from the
+       syscall frame up to the parent's esp0).  If that does not fit, fail
+       the fork here instead of memcpy'ing past the end of the page.
+       That failure mode is not hypothetical: it is how three attempts at
+       the B5 signal-mask work died, each time by growing task_struct a
+       little, with a silent double fault and a reboot as the only symptom.
+       Note how little headroom there is: the struct is only ~700 bytes,
+       but the live stack of a parent sitting deep in execve() is most of
+       the rest of the page. */
+    {
+        long parent_sp_guess = syscall_esp + (syscall_cpl == 3 ? 20 : 12);
+        long need = parent_top - parent_sp_guess;
+
+        if (need < 0 ||
+            (long)sizeof(struct task_struct) + need > PAGE_SIZE) {
+            printk("fork: task_struct (%d bytes) + %ld bytes of live kernel "
+                   "stack do not fit the %d byte task page\n",
+                   (int)sizeof(struct task_struct), need, (int)PAGE_SIZE);
+            goto fail;
+        }
+    }
+
     if (syscall_cpl == 3) {
         /* ring3 caller: 16-word frame.  The user stack is NOT copied any
            more: copy_page_tables() below shares every user page between
