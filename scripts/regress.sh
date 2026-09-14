@@ -232,7 +232,7 @@ run_case demand "$BASE && make prog NAME=demandtest" \
 #   ⚠️ 这条曾经跑在 16MB 上要 40 个子进程、耗时几十秒——CI 的 runner 更慢，
 #   总窗口一到就被截断，于是 CI 红而本地绿。现在改用小内存 + 显式窗口，
 #   工作量小了十几倍，任何 runner 上都稳。
-QEMU_MEM=4M QEMU_MIN_WAIT=90 run_case oom "$BASE && make prog NAME=oomtest" \
+QEMU_MEM=4M QEMU_MIN_WAIT=180 run_case oom "$BASE && make prog NAME=oomtest" \
     'exec /bin/oomtest\nls\n' \
     'children are holding memory' \
     'PAGE FAULT: out of memory for pid=' \
@@ -257,7 +257,7 @@ run_case perm "$BASE && make prog NAME=permtest" 'exec /bin/permtest\n' \
 #   去向，内核这一轮把控制台也放进了 fd 表（fd 0/1/2 = tty_file），不再是
 #   sys_write 里的硬编码分支。
 #   数值是算得出来的：alpha beta gamma\n = 17B，delta\n = 6B，追加后 23B/2 行/4 词。
-run_case shpipe \
+QEMU_MIN_WAIT=60 run_case shpipe \
     'rm -f minix.img && make user/sh.elf user/cat.elf user/wc.elf user/hello.elf && tools/mkminix minix.img user/sh.elf:sh user/cat.elf:cat user/wc.elf:wc user/hello.elf:hello' \
     'exec /bin/sh\necho alpha beta gamma > /p.txt\necho delta > /q.txt\ncat /q.txt >> /p.txt\ncat /p.txt\nwc < /p.txt\ncat /p.txt | wc\nexit\n' \
     'sh: supports < > >> and |' \
@@ -283,7 +283,7 @@ run_case diskio "$BASE && make minix.img" 'wtest\ncat /hello.txt\nmemstat\n' \
 #   都要能读回自己的数据。断言里带上内核的 `evict:` 轨迹行：回收真的发生了。
 #   子进程用 alarm(3) 自己退场（期望 rc=142）；若被 OOM 杀掉会是 139，
 #   测试会打印 FAIL。没有回收时这里必然失败。
-QEMU_MEM=4M QEMU_MIN_WAIT=45 run_case evict "$BASE && make prog NAME=evicttest" \
+QEMU_MEM=4M QEMU_MIN_WAIT=150 run_case evict "$BASE && make prog NAME=evicttest" \
     'exec /bin/evicttest\n' \
     'evicttest: forked 2 children' \
     'evicttest: 2 children survived to their own timeout' \
@@ -308,7 +308,7 @@ run_case spinkill "$BASE && make prog NAME=spintest" 'exec /bin/spintest\nls\n' 
 #   父进程在它们持有期间再填自己的 768KB。零页/正文页回收不够用时，B4 把脏页
 #   写到镜像末尾的裸 swap 区、缺页时读回——所有数据必须逐字节一致。
 #   重场景：磁盘 I/O 密集，需要长窗口。
-QEMU_MEM=4M QEMU_MIN_WAIT=90 run_case swap "$BASE && make prog NAME=swaptest" \
+QEMU_MEM=4M QEMU_MIN_WAIT=180 run_case swap "$BASE && make prog NAME=swaptest" \
     'exec /bin/swaptest\nmemstat\n' \
     'swaptest: forked 3 children' \
     'swaptest: PASS (3 children, data intact across swap)' \

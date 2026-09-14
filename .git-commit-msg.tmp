@@ -1,54 +1,29 @@
-B4: swap anonymous pages, and the two bugs it exposed
+﻿test: give the long scenarios a window the CI runner can finish in
 
-B3 could reclaim zeros, clean text and COW shares, but not the kind of
-page a program actually fills memory with: its own dirty heap and stack.
-Those had no backing store, so an exhausted pool meant killing somebody.
-Swap is the missing half.
+Run #19 (69fa178) put the CI story in focus: the first twenty scenarios
+now pass - the readiness fix from 6c5d46b did its job - and exactly four
+fail, all of them the ones with a long workload:
 
-  * the disk image is now [MINIX fs 1MB][raw swap 2MB]: mkminix appends
-    a zeroed region and the kernel addresses it directly by LBA
-    (SWAP_START_LBA).  It is a raw device, not a file, which is why the
-    reclaim path needs no buffers and no inode; 512 slots of 4KB;
-  * the page-table entry remembers where the page went: present clear,
-    bit 11 as the marker, slot number in the address bits (the CPU
-    ignores everything but P when P is 0), so no per-page bookkeeping;
-  * reclaim order is now zero page (memset) -> clean text (read back
-    from the executable) -> dirty private page (write to swap) -> COW
-    share (unmap only, as a last resort);
-  * do_no_page recognises a swap entry and reads the page back instead
-    of handing out a fresh zero page;
-  * copy_page_tables brings a swapped page back before sharing it on
-    fork, or the child would treat it as never-touched and get zeros;
-  * free_page_tables returns the slot on exit - `slots free` returning
-    to 512 in memstat is the regression for that.
+    FAIL [shpipe] missing: "exec: child 1 exit_code=0"
+    FAIL [evict]  missing: "evicttest: 2 children survived to their own timeout"
+    FAIL [oom]    missing: "PAGE FAULT: out of memory for pid="
+    FAIL [swap]   missing: "swaptest: PASS (3 children, data intact across swap)"
 
-Two real bugs on the way:
+In every case it is the *last* assertion of its scenario: the earlier
+ones passed, so the kernel did the work and the run was then cut off.
+These are the memory-pressure cases (4MB, hundreds of page faults and
+disk I/O) plus the Ring3 pipeline case, and a GitHub runner is several
+times slower than the machine they were tuned on.
 
-1. Swapping out sleeps (it writes to the disk) while the reclaimer is
-   holding *another* task's page-table pointer.  That task can exit and
-   have its address space freed during the write, so on return pt[i],
-   t->pid and free_page(pa) are all stale - use-after-free, which showed
-   up as a kernel page fault at 0xffffffff with a garbage pid.  Fixed by
-   re-validating the task slot and pg_dir after the sleep and giving up
-   (returning the slot) when they changed.  B3 never had this problem
-   because none of its reclaim paths sleep.
+So the windows grow rather than the workloads shrink - the workloads are
+already the minimum that still creates the pressure under test:
 
-2. With that fixed it still would not converge: once zeros and text ran
-   out, the only victims were dirty private pages, which the owner
-   touched again immediately, got swapped back in, and were chosen again
-   - the machine spent all its time shuffling the same pages.  The fix
-   is the textbook second-chance clock: the PTE Accessed bit (set by the
-   hardware on every touch) is the reference bit, so a page used since
-   the last sweep is skipped with its bit cleared, and only a second
-   sweep that ignores the bit may evict it (which keeps it bounded).
-   Swap-ins dropped from 49 to 28 and the scenario went from "does not
-   converge" to 2/2 stable.
+    shpipe  20s (default) -> 60s
+    evict   45s -> 150s
+    oom     90s -> 180s
+    swap    90s -> 180s
 
-New scenario 24 'swap' on a 4MB machine: three children each fill 768KB
-of heap and hold it (they time themselves out with alarm, so 142 is the
-expected status and 139 would mean they were killed), while the parent
-fills its own 768KB; every byte is verified afterwards.  The oom case is
-re-tuned for the new threshold: exhaustion now needs more than memory
-*and* swap (~1207 pages), so ten children ask for 1920.
-
-Verified: make test 24/24 in 13m51s, make check green.
+That is about six minutes more for a full run, which the 30 minute job
+budget covers, and the settle loop still ends early once a scenario is
+really finished (the window is a floor on how long the VM stays alive,
+not a fixed delay).

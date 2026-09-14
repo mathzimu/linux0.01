@@ -7,7 +7,7 @@ cd "$(dirname "$0")/.."
 NAME=${1:-evict}
 TIMES=${2:-3}
 MEM=4M
-MINWAIT=45
+MINWAIT=150
 KEYS='exec /bin/evicttest\n'
 GREP='evicttest:|evict: '
 
@@ -16,13 +16,13 @@ case "$NAME" in
     rm -f minix.img && make prog NAME=evicttest >/dev/null 2>&1
     ;;
   oom)
-    MINWAIT=90
+    MINWAIT=180
     KEYS='exec /bin/oomtest\nls\n'
     GREP='oomtest:|out of memory|hello.txt'
     rm -f minix.img && make prog NAME=oomtest >/dev/null 2>&1
     ;;
   swap)
-    MINWAIT=90
+    MINWAIT=180
     KEYS='exec /bin/swaptest\nmemstat\n'
     GREP='swaptest:|swapped out|PAGE FAULT'
     rm -f minix.img && make prog NAME=swaptest >/dev/null 2>&1
