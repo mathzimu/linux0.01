@@ -9,6 +9,10 @@
  * must stay alive — this program forks children that each hold on to a
  * few hundred private pages until the pool is gone, then reports.
  *
+ * The parent deliberately does *not* allocate: whoever faults when the
+ * pool is empty is the one the kernel kills, so a parent that ate memory
+ * too would be the victim and could never report the outcome.
+ *
  * It runs on a small machine on purpose: the regression scenario boots
  * with 4MB (~695 free frames), so ten children holding 768KB each already
  * overflow it.  The count has to clear memory *and* swap: since B4 the
@@ -20,12 +24,20 @@
 
 #define KID_BYTES (768 * 1024)
 #define MAX_KIDS  10
-#define MAX_CHUNKS 8
+#define HOLD_SECS 10
+
+static volatile int times_up = 0;
+
+static void on_alarm(int sig)
+{
+    times_up = 1;
+}
 
 int main(void)
 {
-    int kids = 0, i, pid, held;
+    int kids = 0, i, pid, reaped;
     unsigned char *p;
+    unsigned long st = 0;
     unsigned long j;
 
     for (i = 0; i < MAX_KIDS; i++) {
@@ -64,24 +76,29 @@ int main(void)
 
     printf("oomtest: %d children are holding memory\n", kids);
 
-    /* Now eat whatever is left, in non-evictable chunks, until an
-       allocation cannot be satisfied at all.  This is the deterministic
-       part: 64 chunks is 48MB on a 16MB machine, so the pool *must* run
-       out and the fault that finds no frame is this process's own — the
-       kernel kills it (exit 139) and everything else keeps running. */
-    held = 0;
-    for (i = 0; i < MAX_CHUNKS; i++) {
-        p = (unsigned char *)malloc(KID_BYTES);
-        if (!p) {
-            printf("oomtest: malloc refused after %d chunks\n", held);
-            break;
-        }
-        for (j = 0; j < KID_BYTES; j += 4096)
-            p[j] = 0x55;
-        held++;
-        printf("oomtest: parent holds %dKB, %d children still alive\n",
-               held * (KID_BYTES / 1024), kids);
+    /* Now wait for exhaustion to do its work — and ask for nothing
+       ourselves.  This kernel's answer to a fault it cannot satisfy is to
+       kill the process that faulted, and the children have already asked
+       for more than the machine can hold (10 x 192 = 1920 pages against
+       ~695 frames plus 512 swap slots), so a child is guaranteed to be
+       the victim.  The parent used to fill a chunk of its own here, which
+       made *it* the faulting process once the pool was gone: it was
+       killed, 'done' never printed, and the scenario failed even though
+       the kernel had done exactly the right thing.  Keep the parent out
+       of the pool and it survives to report. */
+    signal(SIGALRM, (unsigned long)on_alarm);
+    alarm(HOLD_SECS);
+    while (!times_up)
+        pause();                       /* the OOM killer runs meanwhile */
+
+    /* Whoever died is a zombie now: reap and report. */
+    reaped = 0;
+    while ((pid = waitpid(-1, &st, WNOHANG)) > 0) {
+        reaped++;
+        printf("oomtest: reaped child, status=%lu (139 = killed)\n", st);
     }
+    printf("oomtest: %d children still holding, %d reaped\n", kids - reaped,
+           reaped);
 
     printf("oomtest: done\n");
     return 0;
