@@ -186,7 +186,7 @@ BIOS POST
 1. **两个 Shell**：内核态 `$`（`main` 直接 `shell_main`，救援/调试入口）与 Ring3 的 `/bin/sh`
    （`exec /bin/sh`，自己 read 键盘、自己 fork+execve）；`int 0x80` 自动切回内核栈
 2. **67 个系统调用，编号 = Linux 0.01**；`include/unistd.h` 提供 `int $0x80` 包装宏。
-   编号 67 起是本内核的扩展：`sigreturn`、`sigprocmask`、`sigsuspend`
+   编号 67 起是本内核的扩展：`sigreturn` / `sigprocmask` / `sigsuspend` / `sigaction` / `sleep` / `select`
 3. **每进程独立地址空间**（M3）：内核恒等映射 0–16MB 全 supervisor-only，用户区在 PDE[32]；
    进程页首次访问才分配（按需调页），fork 用**写时复制**（`copy_page_tables`/`un_wp_page`）；
    Ring3 越权访问 → 终止肇事进程（SIGSEGV），内核继续运行。`memstat` 可看空闲页与

@@ -274,71 +274,23 @@ code/data 组、B3 加了镜像表），gcc 报 `braces around scalar initialize
 
 
 
-## 已知问题：管道会让内核重启（**尚未修复**，做场景 29 时发现）
+## 已知问题（已修复）：管道里 `wc` 计数错 + 内核重启 —— 同一个根因
 
-**纠正之前的误判**：前两轮我把现象记成"管道里 `wc` 读到的字节数不对（29 > 23）"。那是**读日志
-读错了**——真正的现象严重得多：
+**现象**（做场景 29 时发现，已修）：`cat /p.txt | wc` 报 `1 4 29 -`（应为 `2 4 23 -`），
+`cat /p.txt | cat` 会 `sh: /bin/cat: cannot execute` 并让内核重启。
 
-```
-$ cat /p.txt | cat
-sh: /bin/cat: cannot execute            ← 管道第一个 stage 的 execve 失败
-$ wc /p.txt
-buffer cache: 256 buffers …             ← 内核又打印了一遍启动横幅：**机器重启了**
-mem_check: 3732 free pages …
-MINIX: superblock loaded …
-$ cat /p.txt | wc
-alpha beta gamma
-delta                                   ← 这不是管道的输出，是重启后的**内核 shell**
-                                          在回放 harness 缓冲下来的按键
-```
+**根因**：管道子进程在 `execve` 失败时**没有退出**，而是掉出 `if (pid == 0)` 继续执行父进程的
+管道代码，最终回到 `main()` 变成**第二个 shell**——而它此时的 fd 0/1 已是管道，于是它的输出灌进
+管道（被 `wc` 数进去 ⇒ 计数错），它又和第一个 shell 抢控制台（⇒ 内核崩溃）。
 
-**这里有两个独立的问题，别把它们混成一个**（我先后搞混过一次，记录在此）：
+**修复**：`run_pipeline()` 与 `run_one()` 在 `execve` 失败后 `exit(1)`（提交 2807046）。
 
-| # | 现象 | 证据 | 触发条件 |
-|---|------|------|----------|
-| A | 管道里 `wc` 的计数错误（`cat /p.txt \| wc` → `1 4 29 -`，应为 `2 4 23 -`） | `shpipe` 场景在**加了重启检测之后仍然通过**（整个运行只有 1 条启动横幅）⇒ 没有重启，这就是真实的读错误 | `cat <file> \| wc`（`echo hello \| wc` = `1 1 6 -` 是对的） |
-| B | **内核三重故障重启** | `cat /p.txt \| cat` 先打印 `sh: /bin/cat: cannot execute`，紧接着是第二遍启动横幅 | `cat <file> \| cat`（我临时试出来的；场景里没有这条命令） |
+**顺带交付**：`scripts/regress.sh` 新增 `check_no_reboot()`——`run_case`/`run_case2` 在断言之前
+统计本次运行的启动横幅条数（单阶段期望 1、两阶段期望 2），多了直接判失败并给注解。从此"崩了
+重启却看起来是绿的"不会再溜过去。场景 20 也新增了管道读断言 `cat /q.txt | wc` → `1 1 6 -`。
 
-重启之后 harness 之前键入的字符会被新启动的内核 shell 吃掉，于是日志里出现看似"数据错乱"的行
-——我第一次看到 `1 4 29 -` 时就误以为那就是重启造成的，其实 A 在没有重启的情况下也会出现。
-
-**最新证据（接着 B 查下去）**：给 `sys_execve` 的两个静默失败点加上打印之后，`cat /p.txt | cat`
-给出的是
-
-```
-execve: cannot open the image (fd=-1)
-```
-
-也就是说失败发生在 `sys_execve()` 开头的 `sys_open()`，而且打开的是**可执行文件 `/bin/cat` 自己**
-（与 `/p.txt` 无关）——此时第 0 级进程正把同一个 `/bin/cat` 当作镜像在跑。`fs/` 下**没有**任何
-`i_count > 1` 形式的 ETXTBSY 式拒绝（已 grep 确认），所以下一步要看两处：
-
-1. `sys_open()` / `open_namei()` / `iget()` 在"该 inode 已被别的进程以 execve 镜像身份持有"时的
-   分支（本内核让进程整个生命周期持有 `exe_inode`，`i_count` 因此 ≥1）；
-2. 管道子进程的 fd 槽位：`execve` 里的 `sys_open()` 需要一个空闲 fd，而子进程此时 0/1 已是管道、
-   还继承了父进程的 `prev`。
-
-对照：`cat /p.txt | wc`（第 1 级是**另一个**程序）完全正常，`echo x | cat` 也正常——所以触发条件
-是"同一个程序被两个进程并发 exec"。`echo`/`<`/`>`/`|` 的接线本身没有问题。
-
-**已经独立完成的一步**：`scripts/regress.sh` 新增 `check_no_reboot()`，`run_case` / `run_case2`
-在断言之前统计本次运行的启动横幅条数（分别期望 1 / 2），多了就直接判失败并给出注解。这类
-"崩了重启却看起来是绿的"问题从此不会再溜过去——上面 A/B 的区分也正是靠它做出来的。
-
-**最要紧的次生问题**：`shpipe` 场景现在是**在重启之后通过**的——harness 的断言只检查"这些行
-出现过"，重启后内核 shell 也会打印 `$` 提示符、也能让 `exit` 变成 "Goodbye."、`exec` 的退出行
-也可能再次出现，所以**它区分不出"跑完了"和"崩了重启了"**。
-
-**下一步（按顺序）**：
-
-1. 给 harness 加**重启检测**：`scripts/regress.sh` 的 `run_case` 在跑完后统计串口日志里启动横幅
-   （`Minimal Linux 0.01 Equivalent Kernel`）出现的次数，>1 直接判这条场景失败并给出注解。
-   这一条独立于本 bug，能把"绿着的红灯"这一类问题全堵住；
-2. 再用 `cat /p.txt | cat`（最小复现）定位重启点：先看是不是 `execve` 在管道 stage 里失败
-   （`sh: /bin/cat: cannot execute` 是第一个可见症状），再顺着 `run_pipeline` 的 `dup2`/`close`
-   与 `sys_execve` 的 fd/页表处理往下查；
-3. 修好之后，在场景 20 里**新增**一条 `cat /p.txt | wc` → `2 4 23 -` 的断言（现有断言不动）。
-
+**未修的残余**：`cat /p.txt | cat` 现在**不再重启**，但第二次并发 exec 同一程序仍会失败
+（`namei returned NULL`）——这是 inode 缓存的问题，见文末"最新进展：并发 exec 的根因"一节。
 
 ## B5.5 — 一次丢失的唤醒：`bh->b_wait` 从来没有人叫过 ✅ 已修复
 
@@ -460,7 +412,7 @@ swap 后耗尽门槛是**内存+swap**（695 帧 + 512 槽 ≈ 1207 页），子
 
 ## 当前状态（一句话）
 
-**67 个系统调用（编号与 1991 Linux 0.01 完全一致）＋ 3 个本内核扩展（67 sigreturn /
+**67 个系统调用（编号与 1991 Linux 0.01 完全一致）＋ 6 个本内核扩展（67 sigreturn /
 68 sigprocmask / 69 sigsuspend / 70 sigaction / 71 sleep / 72 select）**、25 条 Shell 命令的教学内核：
 进程生命周期完整（fork/execve/waitpid/信号/管道）、MINIX FS 增删改查 + 硬链接/重命名 +
 **权限模型**、
