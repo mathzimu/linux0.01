@@ -66,7 +66,8 @@ qemu-system-i386 -cdrom kernel.iso -m 16M -boot d -hda minix.img
 镜像都是标准格式，可以直接挂进虚拟机，但有**两个硬性要求**：
 
 1. **必须同时挂上 `minix.img`**（作为 **IDE 硬盘**）。MINIX 文件系统在它里面；不挂就没有文件系统
-   可用——而且目前**没有文件系统时内核起不到 shell**（见 `docs/roadmap.md` 的已知问题）。
+   可用——内核现在会打印 `Warning: no root filesystem found` 并照常进 shell（场景 32 守着这条），
+   但 shell 里 `ls`/`cat`/`exec /bin/...` 都无文件可操作。
 2. **硬盘控制器必须是 IDE**（Primary Master）。内核只有 PIIX 风格的 PIO 驱动（IRQ14、端口 0x1F0），
    没有 SATA/AHCI/SCSI/NVMe 驱动。
 
@@ -325,8 +326,9 @@ int main(int argc, char *argv[]) {
 make prog NAME=myprog        # 编译 myprog + 注入一个含 /bin/hello 与 /bin/myprog 的新镜像
 ```
 
-`make prog` **每次都会重新生成 `minix.img`**（保留默认 `/bin/hello` + 当前程序）。若要
-一次性注入多个程序，直接调用 `tools/mkminix`：
+`make prog` **每次都会重新生成 `minix.img`**，内容只有 mkminix 的默认 `/bin/hello` 加当前程序：
+要一套完整可用的用户态（`ls`/`cat`/`wc`/`sh`…）就 `make minix.img`，想两者都有就显式列出。
+一次性注入多个程序直接调用 `tools/mkminix`：
 
 ```bash
 tools/mkminix minix.img user/a.elf:a user/b.elf:b   # /a 和 /b 都注入
