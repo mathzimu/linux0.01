@@ -685,6 +685,11 @@ echo a | wc              ← 第二个管道：内核重启（串口日志出现
 
 ## A1 — 无根文件系统时进不了 shell（复位循环）✅ 已修复
 
+> ⚠️ 下面"真正的根因"里的三条机制说法（驱动睡进 `schedule()`、`0xffffffff` 是 BSS 垃圾、带盘时
+> "读先完成所以通常没事"）后来被独立复核用 `-d int,cpu_reset` 对照日志**证伪**，正确版本见本节末尾的
+> **订正**。修复本身有效，经复核确认（无盘 ×3、带盘 ×3 全部 1 横幅 / 0 页错误），只是故事讲错了两处、
+> 并漏了第四处修复（`read_inode()` 的槽位释放）。
+
 **现象**：只挂 CD、不挂 MINIX 盘启动（这正是 `make run-cd` 修改前的写法，也是 README 早先的快速开始）：
 
 ```
@@ -730,6 +735,43 @@ buffer cache: …            ← 早启动的打印又来一遍：机器复位�
 `PAGE FAULT`（`check_no_reboot()` 现在同时数 `buffer cache:` 那行，正是为了抓"横幅前复位"）、打印
 warning 并进 shell 执行 `help`/`exit`。实测修好后：无盘 0 次页错误、正常进 shell；**带盘 0 次页错误、
 0 次复位**（此前每次启动都会悄悄复位 2–3 次）。
+
+### 订正：三条机制说法被独立复核证伪（含第四处修复）
+
+修复本身经独立复核确认有效（无盘 ×3、带盘 ×3：1 横幅 / 1 条 `buffer cache:` / 0 次页错误；快速集
+28/0），但本节最初写的机制有**三处是错的**，用 `-d int,cpu_reset` 的前后对照日志证伪：
+
+1. **第一次 `schedule()` 不是驱动"睡"出来的**。它来自 `do_timer()`：`setup.s` 清了 IF，而 `hd_lock()`
+   拿到锁时会 `sti()`——挂起的定时器中断**在这一刻**就被投递，早于 `hd_wait_bits()` 执行。此时
+   `current == NULL`，`do_timer()` 读 `current->counter`（物理地址 4，实模式 IVT 的 `0xF000FF53`）→
+   `schedule()`。
+2. **那个 `0xffffffff` 不是"BSS 里的垃圾"**。`schedule()` 发现 `task[]` 全空 → 走 `c < 0` 分支 → 在
+   中断处理程序里、IF=1 的情况下执行 `hlt`（`0x10f63`）。之后的每一次时钟节拍都在**同一个中断帧里再嵌一层**
+   （每层约 0x9c 字节），栈一路走进 `.bss` 并把 `task[]` 连同 `schedule()` 自己的局部变量（`c`/`next`）
+   覆盖成了 `0xffffffff` —— 第 182 个事件才是那条致命的 `v=0e CR2=ffffffff IP=0008:00010eb4`。
+3. **"带盘时读常常先完成所以通常没事"是错的**。用 `-no-reboot`（不重试）跑带盘启动，串口输出与无盘
+   启动**逐字节相同**、同一处崩溃——因为故障发生在 `hd_lock()` 的 `sti()`，任何磁盘 I/O 都还没开始。
+   带重试时之所以"通常能起来"，靠的是 CPU 复位**不清 .bss**：`jiffies`/`current`/`task[]` 留了下来，
+   第 3 次恰好凑对。所以每一次启动其实都是掷硬币。
+
+**第四处修复**：`shell_main()` 里那句"没有根文件系统"提示最初是**死代码**——`read_inode()` 在
+`if (!sb) return;`（设备没有超级块）这条路径上**没有释放槽位**（`i_dev`/`i_count` 原样留着），于是
+`iget()` 的 `if (inode->i_dev != dev) return NULL;` 守卫永远不会触发，它把一个"已认领但零化"的 inode
+（`i_mode == 0`）交给调用者，`current->pwd` 因此**不是** NULL，提示永远不打印，`ls` 依旧报那句误导性的
+`open: permission denied (mode=00 uid=0 mask=0x4 euid=0)`。修法是与 `bread()` 失败路径保持一致：
+
+```c
+sb = get_super(inode->i_dev);
+if (!sb) { inode->i_dev = 0; inode->i_count = 0; return; }
+```
+
+修后无盘启动的 `ls` 变成诚实的 `open: namei returned NULL (flag=0x0, inode table 0/64 used)`。
+
+**另外留了一道永久诊断**（`kernel/sched.c`）：`switch_to()` 的下一条指令就是硬件任务切换的远跳，它要读
+GDT 里的 TSS 描述符。若目标（或当前）地址空间丢了内核恒等映射，这一次读取就会触发页错误并升级成
+#PF → #DF → 三重故障、毫无输出。现在切换前会检查目标 `tss.cr3` 的 `PDE[0]`，一旦缺失就打印
+`switch: task N has cr3=... pde[0]=... (running task M, cr3=... pde[0]=...)`。健康启动下它静默
+（实测 0 条），而这正是把 B 的"静默重启"变成一行可读诊断的原因。
 
 **顺带修好**：`make run-cd` 与 README/Docker 快速开始此前都**只挂 CD**，照文档做出来的系统没有文件系统
 ——用户看到的"`ls` 不能用"就是这个。三处现在都补了 `-hda minix.img`（`run-cd` 还依赖 `minix.img` 目标），

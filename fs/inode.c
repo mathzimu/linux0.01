@@ -16,7 +16,21 @@ static void read_inode(struct m_inode *inode)
     if (!inode || !inode->i_dev) return;
 
     sb = get_super(inode->i_dev);
-    if (!sb) return;
+    if (!sb) {
+        /* No superblock for this device: the read cannot be done at all,
+           so release the slot exactly like the bread() failure below.
+           Returning with the slot still claimed left iget() handing out a
+           zeroed inode (i_mode == 0, i_count == 1) - iget()'s
+           "inode->i_dev != dev" guard cannot fire, because i_dev was
+           still set.  That is how a kernel booted without a root
+           filesystem ended up with a non-NULL current->pwd, and the first
+           `ls` then failed with a puzzling
+           "permission denied (mode=00 ...)" instead of a plain
+           "No root filesystem: ...". */
+        inode->i_dev = 0;
+        inode->i_count = 0;
+        return;
+    }
 
     block = 2 + sb->s_imap_blocks + sb->s_zmap_blocks +
             (inode->i_num - 1) / (BLOCK_SIZE / sizeof(struct d_inode));

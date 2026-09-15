@@ -195,8 +195,29 @@ void schedule(void)
 
     {
         int current_idx;
+        unsigned long ccr3, ncr3, npde0, cpde0;
+
         for (current_idx = 0; current_idx < NR_TASKS; current_idx++)
             if (task[current_idx] == current) break;
+
+        /* The far jump inside switch_to() is the next instruction, and it
+           reads the new task's TSS descriptor out of the GDT.  If the
+           address space being switched to - or the one we are running in
+           - has lost its kernel identity map, that single read page
+           faults and escalates #PF -> #DF -> triple fault, with no output
+           at all.  Say so instead: this is the cheapest place to notice a
+           corrupted or recycled page directory (it is what turned the
+           second-pipeline crash into a one-line diagnosis instead of a
+           silent reboot). */
+        __asm__ volatile("movl %%cr3, %0" : "=r"(ccr3));
+        ncr3 = task[next]->tss.cr3;
+        npde0 = *(volatile unsigned long *)ncr3;
+        cpde0 = *(volatile unsigned long *)ccr3;
+        if (!(npde0 & 1) || !(cpde0 & 1))
+            printk("switch: task %d has cr3=%x pde[0]=%x (running task %d, cr3=%x pde[0]=%x): page directory lost the kernel map\n",
+                   next, (unsigned)ncr3, (unsigned)npde0,
+                   current_idx, (unsigned)ccr3, (unsigned)cpde0);
+
         if (next != current_idx) {
             /* NOTE: do NOT assign current = task[next] here.
                switch_to() swaps it in via "xchgl %%ecx, current"
