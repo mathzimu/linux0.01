@@ -657,3 +657,30 @@ echo a | wc              ← 第二个管道：内核重启（串口日志出现
   场景在一个会话里跑两个管道，所以一直是绿的——`check_no_reboot()` 是唯一能抓住它的手段。
 - 下一步建议：审计 `pipe()`/`dup2()`/`sys_exit` 的 fd↔file↔inode 引用计数，以及两个并发 execve 之后
   `exe_inode` 与页表的状态；调试时先在一个会话里连跑两个管道，并临时打开 `NAMEI_TRACE` 与 `hd:` 级打印。
+
+## 已知问题：没有根文件系统时内核起不到 shell（**未修复**）
+
+**现象**：只挂 CD、不挂 MINIX 盘启动（这正是 `make run-cd` 修改前的写法，也是 README 早先的快速开始）：
+
+```
+$ qemu-system-i386 -cdrom kernel.iso -m 16M -boot d
+buffer cache: 256 buffers (265KB) at [0x3adc00, 0x3f0000)
+mem_check: 3732 free pages (14928KB) for tasks, pipes and user pages, starting at 0x105000
+hd: IRQ14 enabled (slave mask 0xff -> 0xbf)
+buffer cache: …            ← 早启动的打印又来一遍：机器复位了
+```
+
+- 启动横幅（`Minimal Linux 0.01 Equivalent Kernel`，由 `shell_main()` 打印）**从未出现**；串口里也
+  **没有** `hd: … timeout`、**没有** `MINIX: bad magic`、**没有** `main.c` 那句
+  `Warning: no root filesystem found` ⇒ 内核在 `sys_setup()` 读超级块的过程中就三重故障复位了。
+- 按代码走查这条路本应优雅降级：`bread(0x301, 1)` 失败 → `sys_setup()` 返回 -1 → `main()` 打 warning
+  → `sched_init()` → `sti()` → `shell_main()`。实际却在更早处崩掉，所以最可疑的是 **`bread()` 下面那条
+  路径**（`getblk`/`ll_rw_block`/`hd_read_sectors` 在"控制器在、盘不在"时的行为），而不是文件系统代码。
+- 影响面**仅限**"不带文件系统启动"：`-hda minix.img` 一切正常（套件 30/30 全绿）。但它把"ISO 能不能用"
+  这个最直观的问题变成了"机器根本起不来"。
+- 下一步：在 `sys_setup` → `bread` → `hd_read_sectors` 各加一行 `printk`，定位最后一次打印；修好后补一条
+  "无盘启动也能进 shell 并打印 warning" 的回归（harness 支持 `--iso` 且不加 `--hda`）。
+
+**顺带修好**：`make run-cd` 与 README/Docker 快速开始此前都**只挂 CD**，照文档做出来的系统没有文件系统
+——用户看到的"`ls` 不能用"就是这个。三处现在都补了 `-hda minix.img`（`run-cd` 还依赖 `minix.img` 目标），
+`scripts/mkiso.sh` 也会打印正确的运行命令并提示 ISO 只含内核。

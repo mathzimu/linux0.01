@@ -41,8 +41,8 @@
 
 ```bash
 sudo apt install -y build-essential gcc-multilib qemu-system-x86 xorriso
-make && make iso
-qemu-system-i386 -cdrom kernel.iso -m 16M -boot d
+make && make iso && make minix.img
+qemu-system-i386 -cdrom kernel.iso -m 16M -boot d -hda minix.img
 ```
 
 ### macOS（Homebrew）
@@ -57,8 +57,8 @@ qemu-system-i386 -fda Image -m 16M -boot a
 
 ```bash
 docker build -t linux-0.01-builder .
-docker run --rm -v $(pwd):/kernel -w /kernel linux-0.01-builder make clean all iso
-qemu-system-i386 -cdrom kernel.iso -m 16M -boot d
+docker run --rm -v $(pwd):/kernel -w /kernel linux-0.01-builder make clean all iso minix.img
+qemu-system-i386 -cdrom kernel.iso -m 16M -boot d -hda minix.img
 ```
 
 ### 构建产物
@@ -66,7 +66,7 @@ qemu-system-i386 -cdrom kernel.iso -m 16M -boot d
 | 文件 | 说明 |
 |------|------|
 | `Image` | 1.44MB 软盘镜像（`-fda Image` 直接启动） |
-| `kernel.iso` | El Torito 启动光盘（`-cdrom kernel.iso`） |
+| `kernel.iso` | El Torito 启动光盘（**只含内核**；必须配 `-hda minix.img` 才有文件系统，否则 `ls`/`cat` 都无从谈起） |
 | `minix.img` | MINIX v1 测试盘（`make minix.img`，挂载真实文件系统用） |
 
 ---

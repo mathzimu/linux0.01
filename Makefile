@@ -232,8 +232,11 @@ clean:
 run: Image
 	qemu-system-i386 -fda Image -m 16M -boot a
 
-run-cd: kernel.iso
-	qemu-system-i386 -cdrom kernel.iso -m 16M -boot d
+# The ISO carries the kernel only: the MINIX filesystem lives in
+# minix.img, so it has to be attached as well or the guest comes up with
+# nothing to list, read or exec.  Keep this in step with the quick start.
+run-cd: kernel.iso minix.img
+	qemu-system-i386 -cdrom kernel.iso -m 16M -boot d -hda minix.img
 
 debug: Image
 	qemu-system-i386 -fda Image -m 16M -boot a -s -S

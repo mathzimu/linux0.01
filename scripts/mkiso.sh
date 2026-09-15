@@ -87,7 +87,10 @@ rm -f "$PADDED"
 if [ "$ISO_CREATED" -eq 1 ]; then
     ISO_SIZE=$(stat -f%z "$OUTPUT" 2>/dev/null || stat -c%s "$OUTPUT" 2>/dev/null)
     echo "ISO created: $OUTPUT ($ISO_SIZE bytes)"
-    echo "Run with: qemu-system-i386 -cdrom $OUTPUT -boot d"
+    echo "NOTE: the ISO carries the kernel only.  The MINIX filesystem lives"
+    echo "      in minix.img, so attach it as well or the guest has nothing"
+    echo "      to list, read or exec."
+    echo "Run with: qemu-system-i386 -cdrom $OUTPUT -m 16M -boot d -hda minix.img"
     exit 0
 else
     echo "============================ WARNING ============================"
