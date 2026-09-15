@@ -347,14 +347,17 @@ int sys_open(const char *filename, int flag, int mode)
     }
     if (fd >= NR_OPEN) return -1;
 
-    for (i = 0; i < NR_FILE; i++) {
-        if (!file_table[i].f_count) break;
-    }
-    if (i >= NR_FILE) {
-        printk("open: file_table full (%d entries)\n", NR_FILE);
-        return -1;
-    }
-
+    /* The file_table[] entry is claimed at the very end of this function,
+       NOT here.  namei() below (and the whole O_CREAT path) sleeps on disk
+       I/O, and a slot picked before that sleep is still marked free, so
+       two tasks opening a file concurrently both picked the same entry and
+       their descriptors ended up sharing one struct file — the later
+       writer's f_inode won, silently pointing the other task's fd at the
+       wrong file.  execve() was the visible casualty: a pipeline stage
+       (whose image pages are demand-loaded from exe_inode, sys_execve)
+       inherited the other stage's executable and ran the wrong program.
+       Claiming the slot only once nothing can sleep before the f_count
+       bump closes the window. */
     inode = namei(filename);
     if (!inode && (flag & O_CREAT)) {
         /* create the file: split parent dir + basename (Linux 0.01
@@ -432,15 +435,32 @@ int sys_open(const char *filename, int flag, int mode)
         }
     }
 
+    /* Now claim the file_table[] slot: the lookup above is done, and the
+       scan and the f_count bump below have nothing that can sleep between
+       them.  The entry is marked used with f_inode == NULL until it is
+       filled in, so a second concurrent open cannot pick it; it is not
+       reachable from any task->filp[] yet, so nobody can mistake the
+       half-filled entry for the console (the f_inode == NULL marker). */
+    for (i = 0; i < NR_FILE; i++) {
+        if (!file_table[i].f_count) break;
+    }
+    if (i >= NR_FILE) {
+        printk("open: file_table full (%d entries)\n", NR_FILE);
+        iput(inode);
+        return -1;
+    }
+    f = &file_table[i];
+    f->f_count = 1;
+    f->f_mode = 0;
+    f->f_flags = 0;
+    f->f_inode = NULL;
+    f->f_pos = 0;
+
     if ((flag & O_TRUNC) && !(inode->i_mode & 0x4000))
         truncate_inode(inode);                 /* empty the file */
 
-    f = &file_table[i];
     f->f_mode = flag;
-    f->f_flags = 0;
-    f->f_count = 1;
     f->f_inode = inode;
-    f->f_pos = 0;
 
     current->filp[fd] = f;
     return fd;
