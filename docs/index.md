@@ -6,27 +6,27 @@
 
 ```
 第 0 步  README.md          项目是什么、如何编译运行
-第 1 步  本文件 INDEX.md    建立全局地图
+第 1 步  本文件 index.md    建立全局地图
 第 2 步  PREREQ 四件套      补齐硬件/语言/OS 理论
-第 3 步  TUTORIAL.md        按章节读源码实现
-第 4 步  LIMITATIONS.md     明确本仓库「做了什么 / 没做什么」
-第 5 步  HLD.md / SRS.md    （可选）设计与需求背景
+第 3 步  tutorial.md        按章节读源码实现
+第 4 步  limitations.md     明确本仓库「做了什么 / 没做什么」
+第 5 步  architecture.md / requirements.md    （可选）设计与需求背景
 ```
 
 ### 前置知识（按顺序）
 
 | 顺序 | 文档 | 学完应能 |
 |------|------|----------|
-| 1 | [PREREQ-x86-asm.md](PREREQ-x86-asm.md) | 读懂 boot/head 汇编与内联 asm |
-| 2 | [PREREQ-c-language.md](PREREQ-c-language.md) | 理解内核 C 惯用法与宏 |
-| 3 | [PREREQ-computer-arch.md](PREREQ-computer-arch.md) | 理解 PIC/PIT/IDE/VGA/分页硬件 |
-| 4 | [PREREQ-os-theory.md](PREREQ-os-theory.md) | 理解进程/调度/FS/系统调用概念 |
+| 1 | [x86-asm.md](prereq/x86-asm.md) | 读懂 boot/head 汇编与内联 asm |
+| 2 | [c-language.md](prereq/c-language.md) | 理解内核 C 惯用法与宏 |
+| 3 | [computer-architecture.md](prereq/computer-architecture.md) | 理解 PIC/PIT/IDE/VGA/分页硬件 |
+| 4 | [os-theory.md](prereq/os-theory.md) | 理解进程/调度/FS/系统调用概念 |
 
 ### 实现教程
 
 | 文档 | 内容 |
 |------|------|
-| [TUTORIAL.md](TUTORIAL.md) | 总目录 + 引导全流程（boot/setup/head/main） |
+| [tutorial.md](tutorial.md) | 总目录 + 引导全流程（boot/setup/head/main） |
 | [tutorial/07-sched.md](tutorial/07-sched.md) | 调度器 sched.c |
 | [tutorial/08-process.md](tutorial/08-process.md) | fork/exit process.c |
 | [tutorial/09-syscalls.md](tutorial/09-syscalls.md) | 系统调用 sys.c / vsprintf / panic |
@@ -36,7 +36,7 @@
 | [tutorial/13-shell-lib.md](tutorial/13-shell-lib.md) | Shell 与 lib/* |
 | [tutorial/14-headers-build.md](tutorial/14-headers-build.md) | 头文件、链接脚本、Makefile |
 | [tutorial/15-scenarios.md](tutorial/15-scenarios.md) | 端到端场景（按键/echo/读盘） |
-| [LIMITATIONS.md](LIMITATIONS.md) | 已知简化与源码事实 |
+| [limitations.md](limitations.md) | 已知简化与源码事实 |
 
 ## 源码 → 文档对照表
 
@@ -83,5 +83,5 @@
 
 | 文档 | 说明 |
 |------|------|
-| [SRS.md](SRS.md) | 需求规格（可能含未实现目标） |
-| [HLD.md](HLD.md) | 高层设计（可能与当前实现有差异） |
+| [requirements.md](requirements.md) | 需求规格（可能含未实现目标） |
+| [architecture.md](architecture.md) | 高层设计（可能与当前实现有差异） |

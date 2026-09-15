@@ -1,6 +1,6 @@
 # §7 调度器 — `kernel/sched.c`
 
-> 前置：`PREREQ-os-theory.md` 调度章 · `include/linux/sched.h` · `include/asm/system.h`
+> 前置：`../prereq/os-theory.md` 调度章 · `include/linux/sched.h` · `include/asm/system.h`
 
 ## 1. 文件职责
 

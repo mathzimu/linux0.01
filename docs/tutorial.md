@@ -1,12 +1,12 @@
 # Linux 0.01 内核完整实现教程
 
-> **总索引：** [INDEX.md](INDEX.md) · **已知限制：** [LIMITATIONS.md](LIMITATIONS.md)  
+> **总索引：** [index.md](index.md) · **已知限制：** [limitations.md](limitations.md)  
 > **权威顺序：** 源码 > LIMITATIONS/本教程 > HLD/SRS
 
 ### 阅读前
 
-1. 四份前置：`PREREQ-x86-asm.md` → `PREREQ-c-language.md` → `PREREQ-computer-arch.md` → `PREREQ-os-theory.md`
-2. 先读 [LIMITATIONS.md](LIMITATIONS.md)（两个 Shell、每进程独立地址空间、恒等映射 0–16MB 等）
+1. 四份前置：`prereq/x86-asm.md` → `prereq/c-language.md` → `prereq/computer-architecture.md` → `prereq/os-theory.md`
+2. 先读 [limitations.md](limitations.md)（两个 Shell、每进程独立地址空间、恒等映射 0–16MB 等）
 3. 本文 §1–§6 为引导与 main 详解；§7 起见 `docs/tutorial/`
 
 ---
@@ -1432,4 +1432,4 @@ extern int sys_setup(void);     // 文件系统挂载 (fs/minix.c)
 | §14 头文件与构建 | [tutorial/14-headers-build.md](tutorial/14-headers-build.md) | `include/` `kernel.ld` `Makefile` |
 | §15 端到端场景 | [tutorial/15-scenarios.md](tutorial/15-scenarios.md) | 跨文件数据流 |
 
-总索引：[INDEX.md](INDEX.md) · 已知限制：[LIMITATIONS.md](LIMITATIONS.md)
+总索引：[index.md](index.md) · 已知限制：[limitations.md](limitations.md)

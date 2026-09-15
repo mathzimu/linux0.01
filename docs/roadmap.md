@@ -308,7 +308,7 @@ code/data 组、B3 加了镜像表），gcc 报 `braces around scalar initialize
    子进程是 `state=2`，即睡在 `sleep_on()` 里，而不是在用户态空转；
 3. 全内核设置 `TASK_UNINTERRUPTIBLE` 的只有三处：`hd_lock_q`（磁盘锁）、`bh->b_wait`
    （缓冲头）、管道 `i_wait`；再 `grep b_wait` ⇒ **`wake_up(&bh->b_wait)` 一次都没出现过**
-   （只有 `docs/PREREQ-*.md` 里教了这个模式——文档比代码正确）。
+   （只有 `docs/prereq/*.md` 里教了这个模式——文档比代码正确）。
 
 **根因**：`ll_rw_block()` 在本内核里是**同步**的——`hd_read_sectors()` 自己 `sleep_on`
 等 IRQ14，返回时 I/O 已经做完。Linux 0.01 的异步块层由请求完成路径（`end_request`）负责
@@ -567,7 +567,7 @@ make check-docs-selftest    # 反向测试 check-docs（8 个坏样本必须被�
 | `tools/mkminix.c` | 镜像制作（`tools/mkminix minix.img prog.elf:name` 注入；目录含 . / ..） |
 | `tools/build.c` | 引导镜像拼接 |
 | `scripts/qemu-test.py` | 无头回归驱动 |
-| `docs/LIMITATIONS.md` | 实现边界（权威：源码 > 本文件） |
+| `docs/limitations.md` | 实现边界（权威：源码 > 本文件） |
 
 ## 历史 bug 修复备忘（改相关代码前必读）
 

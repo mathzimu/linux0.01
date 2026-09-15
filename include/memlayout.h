@@ -8,7 +8,7 @@
  * places (kernel/main.c, mm/memory.c, kernel/sys.c, kernel/process.c,
  * user/lib.c, user/crt.s, tools/build.c ...).  That is how the buffer
  * cache silently ended up overlapping the user heap (see
- * docs/LIMITATIONS.md §2.4).  Every address that is part of the
+ * docs/limitations.md §2.4).  Every address that is part of the
  * *contract* between boot/head, the page tables, the kernel and user
  * land now lives here, and nobody else may hard-code it.
  *

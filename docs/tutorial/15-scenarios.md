@@ -1,6 +1,6 @@
 # §15 端到端场景
 
-把分散模块串成完整运行时故事。结合 [LIMITATIONS.md](../LIMITATIONS.md)。
+把分散模块串成完整运行时故事。结合 [limitations.md](../limitations.md)。
 
 ---
 

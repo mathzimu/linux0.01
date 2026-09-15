@@ -53,7 +53,7 @@
  * keeps a 16-bit word per (task, signal), so bits for signals that do not
  * exist here cost nothing.
  * SA_RESTART is accepted for source compatibility, but interrupted
- * syscalls are not restarted in this kernel (see docs/LIMITATIONS.md). */
+ * syscalls are not restarted in this kernel (see docs/limitations.md). */
 struct sigaction {
     unsigned long sa_handler;    /* SIG_DFL, SIG_IGN or a Ring3 address */
     unsigned long sa_mask;       /* extra signals to block (1..17) */

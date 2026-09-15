@@ -84,7 +84,7 @@ Ring 3: 用户模式
   - 只能通过系统调用 (int 0x80) 请求内核服务
   - 只能访问用户页 (U/S=1)
   - 经典 OS 中 Shell/用户程序运行在此级
-  - **本仓库现状：** Shell 在 Ring 0（见 LIMITATIONS.md）；GDT 仍保留 USER_CS/DS
+  - **本仓库现状：** Shell 在 Ring 0（见 limitations.md）；GDT 仍保留 USER_CS/DS
 ```
 
 **特权级切换：**

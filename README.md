@@ -179,7 +179,7 @@ BIOS POST
 > 缓存条数不是手写的：`NR_BUFFERS` 由内存地图派生（`include/linux/fs.h`），
 > 所以缓存永远塞不进用户堆里。历史上 `NR_BUFFERS = 512` 曾把缓存放到 `~0x370000`
 > 压在用户堆上——Ring0 无视 PTE 的 U/S 位，用户 `malloc` 的字节会和文件系统块缓冲
-> 变成同一批物理页，写坏文件系统却毫无提示（见 `docs/LIMITATIONS.md` §2）。
+> 变成同一批物理页，写坏文件系统却毫无提示（见 `docs/limitations.md` §2）。
 
 ### 关键事实（读源码前先记住）
 
@@ -282,7 +282,7 @@ linux0.01/
 │   └── memlayout.inc  # ★ 汇编侧镜像（.equ 常量，与上面同步校验）
 ├── tools/         # build.c（镜像拼接）· mkminix.c（MINIX 测试盘）
 ├── scripts/       # qemu-test.py（无头验证）· regress.sh · check-layout.py（静态地图校验）· ppm2png.py
-├── docs/          # 教学与设计文档（含 GIT-WORKFLOW.md 分支/版本规范）
+├── docs/          # 教学与设计文档（含 git-workflow.md 分支/版本规范）
 └── Makefile       # 构建系统（工具链自动检测）
 ```
 
@@ -373,13 +373,13 @@ python3 scripts/qemu-test.py --image Image --hda minix.img \
 
 | 顺序 | 开始读 |
 |------|--------|
-| 1 | [`docs/INDEX.md`](docs/INDEX.md) — 全局地图与学习路径 |
-| 2 | `docs/PREREQ-*.md` — 汇编 / C / 体系结构 / OS 理论前置（可选但推荐） |
-| 3 | [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md) — 先知道"做了什么 / 没做什么" |
-| 4 | [`docs/TUTORIAL.md`](docs/TUTORIAL.md) + `docs/tutorial/` — 按文件逐行读源码 |
-| 5 | [`docs/HLD.md`](docs/HLD.md) / [`docs/SRS.md`](docs/SRS.md) — 高层设计 / 需求背景 |
-| 6 | [`docs/GIT-WORKFLOW.md`](docs/GIT-WORKFLOW.md) — 分支 / 提交 / 版本规范 |
-| 7 | [`docs/NEXT-STEPS.md`](docs/NEXT-STEPS.md) — 保存的后续工作清单 |
+| 1 | [`docs/index.md`](docs/index.md) — 全局地图与学习路径 |
+| 2 | `docs/prereq/*.md` — 汇编 / C / 体系结构 / OS 理论前置（可选但推荐） |
+| 3 | [`docs/limitations.md`](docs/limitations.md) — 先知道"做了什么 / 没做什么" |
+| 4 | [`docs/tutorial.md`](docs/tutorial.md) + `docs/tutorial/` — 按文件逐行读源码 |
+| 5 | [`docs/architecture.md`](docs/architecture.md) / [`docs/requirements.md`](docs/requirements.md) — 高层设计 / 需求背景 |
+| 6 | [`docs/git-workflow.md`](docs/git-workflow.md) — 分支 / 提交 / 版本规范 |
+| 7 | [`docs/roadmap.md`](docs/roadmap.md) — 保存的后续工作清单 |
 
 > **权威顺序**：源码 > LIMITATIONS/TUTORIAL > HLD/SRS。文档与代码冲突时以源码为准。
 

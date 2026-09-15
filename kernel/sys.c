@@ -1364,7 +1364,7 @@ int sys_execve(const char *filename, char **argv, char **envp)
 
     /* Executing a file needs the x bit (the open above already enforced
        the r bit; POSIX would let --x through, this kernel does not —
-       see docs/LIMITATIONS.md). */
+       see docs/limitations.md). */
     if (current->filp[fd] && !permission(current->filp[fd]->f_inode, MAY_EXEC)) {
         sys_close(fd);
         return -1;

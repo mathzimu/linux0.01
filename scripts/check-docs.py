@@ -7,7 +7,7 @@ Why this exists
 caught up with.  Nothing caught the other direction: after M3 moved the
 user address space from fixed physical addresses (0x200000/0x310000/...)
 to a per-process window at 0x08000000, the code was updated and several
-tutorial chapters were not.  A reader following TUTORIAL.md would have
+tutorial chapters were not.  A reader following tutorial.md would have
 been taught a memory model the kernel no longer has - the worst kind of
 documentation bug in a teaching repository, because the docs *are* the
 product.

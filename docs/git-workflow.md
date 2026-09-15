@@ -152,7 +152,7 @@ git push origin v1.2
 - 合入 `main` / `develop` 前，**本地跑 `make test`**（8 个核心场景）或等 GitHub Actions。
 - 提交信息里可标注验证方式：`QEMU-verified` / `make test passes`。
 - 历史踩坑（iget/mkminix 顺序、页表标志位 0x06、schedule current 预赋值等）
-  已在 `docs/NEXT-STEPS.md` 与源码注释里——读源码时留意，避免重蹈。
+  已在 `docs/roadmap.md` 与源码注释里——读源码时留意，避免重蹈。
 
 ---
 

@@ -239,7 +239,7 @@ Power On
       ├── sys_setup()      → Mount MINIX root filesystem (read superblock)
       ├── sched_init()     → Initialize scheduler + timer + TSS/LDT
       ├── sti()            → Enable interrupts
-      └── shell_main()     → interactive shell (Ring 0 in current tree; see LIMITATIONS.md)
+      └── shell_main()     → interactive shell (Ring 0 in current tree; see limitations.md)
 ```
 
 ### 3.2 上下文切换流程
