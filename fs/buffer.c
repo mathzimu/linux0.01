@@ -306,9 +306,38 @@ void sleep_on(struct task_struct **p)
         tmp->state = TASK_RUNNING;
 }
 
+/* Wake the task at the head of a wait queue.
+ *
+ * sleep_on() chains sleepers through the queue head (each sleeper keeps
+ * the previous head on its own kernel stack and the woken task passes the
+ * wake-up on), so waking *p is enough to wake the whole chain.
+ *
+ * The head must then be CLEARED.  Waking without unlinking leaves the
+ * queue pointing at a task that is running again; once that task exits
+ * and its parent reaps it, free_page() returns its task page to the pool
+ * and get_free_page() may hand it out to somebody else — a user page, a
+ * page table or a page directory.  The next wake_up() on the same queue
+ * would then write TASK_RUNNING into offset 0 of that recycled page.
+ * `state` is the first field of struct task_struct, so that is a stray
+ * zero word written into whatever now lives there.
+ *
+ * That is exactly the "a second pipeline reboots the machine" bug:
+ * hd_lock_q (drivers/hd.c) kept a pointer to a finished pipeline process,
+ * its task page came back as the next process's *page directory*, and
+ * hd_unlock()'s wake_up() zeroed PDE[0] of that live directory — the
+ * kernel identity-map entry.  The next task switch reloaded that CR3 and
+ * then faulted reading the new task's LDT descriptor out of the GDT
+ * (CR2 = _gdt + 0x68) while executing switch_to()'s ljmp: #PF inside the
+ * task switch, then #DF, then a triple fault and a silent reboot.
+ *
+ * Linux 0.01's wake_up() does both halves for this reason:
+ *         (**p).state = 0;  *p = NULL;
+ * Clearing is safe for the chained queue: a woken task makes its
+ * predecessor runnable when it resumes, so no sleeper is lost. */
 void wake_up(struct task_struct **p)
 {
     if (p && *p) {
         (*p)->state = TASK_RUNNING;
+        *p = NULL;
     }
 }
