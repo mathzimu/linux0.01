@@ -1349,6 +1349,7 @@ int sys_execve(const char *filename, char **argv, char **envp)
 
     fd = sys_open(filename, 0, 0);
     if (fd < 0) {
+        printk("execve: cannot open the image (fd=%d)\n", fd);
         return -1;
     }
 
@@ -1363,6 +1364,7 @@ int sys_execve(const char *filename, char **argv, char **envp)
     {
         long rr = sys_read(fd, (char *)eh, 52);
         if (rr != 52) {
+            printk("execve: short ELF header read (%ld bytes, wanted 52)\n", rr);
             goto fail;
         }
     }
