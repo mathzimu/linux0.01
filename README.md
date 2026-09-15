@@ -61,6 +61,25 @@ docker run --rm -v $(pwd):/kernel -w /kernel linux-0.01-builder make clean all i
 qemu-system-i386 -cdrom kernel.iso -m 16M -boot d -hda minix.img
 ```
 
+### VMware / VirtualBox（可选）
+
+镜像都是标准格式，可以直接挂进虚拟机，但有**两个硬性要求**：
+
+1. **必须同时挂上 `minix.img`**（作为 **IDE 硬盘**）。MINIX 文件系统在它里面；不挂就没有文件系统
+   可用——而且目前**没有文件系统时内核起不到 shell**（见 `docs/roadmap.md` 的已知问题）。
+2. **硬盘控制器必须是 IDE**（Primary Master）。内核只有 PIIX 风格的 PIO 驱动（IRQ14、端口 0x1F0），
+   没有 SATA/AHCI/SCSI/NVMe 驱动。
+
+| 用途 | 文件 | 在虚拟机里怎么挂 |
+|------|------|------------------|
+| 启动（软盘） | `Image` | 软盘设备 → `Image`（界面只认 `.flp` 时，复制一份成 `Image.flp`） |
+| 启动（光盘） | `kernel.iso` | CD/DVD → `kernel.iso`（El Torito **软盘仿真**，BIOS 可直接引导） |
+| 文件系统 | `minix.img` | **硬盘（IDE / Primary Master）** → `minix.img`（`make minix.img` 生成） |
+
+其它：内存 **≥ 16MB**（内核恒等映射 16MB，多出来的会被忽略）；键盘用默认 PS/2、显示用默认 VGA 文本模式
+即可；想把内核输出抓成文本文件，加一个**串口 → 输出到文件**（内核把控制台输出镜像到 COM1，测试 harness
+就是这么读日志的）。
+
 ### 构建产物
 
 | 文件 | 说明 |

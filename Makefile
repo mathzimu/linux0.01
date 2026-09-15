@@ -229,8 +229,11 @@ clean:
 	rm -f *~ core .image_floppy_padded
 	rm -rf .iso_tmp
 
-run: Image
-	qemu-system-i386 -fda Image -m 16M -boot a
+# minix.img is not optional: the MINIX filesystem lives in it, and a
+# kernel with no filesystem does not currently reach a shell (see the
+# known issue in docs/roadmap.md), so boot it with the disk attached.
+run: Image minix.img
+	qemu-system-i386 -fda Image -m 16M -boot a -hda minix.img
 
 # The ISO carries the kernel only: the MINIX filesystem lives in
 # minix.img, so it has to be attached as well or the guest comes up with
@@ -238,7 +241,7 @@ run: Image
 run-cd: kernel.iso minix.img
 	qemu-system-i386 -cdrom kernel.iso -m 16M -boot d -hda minix.img
 
-debug: Image
-	qemu-system-i386 -fda Image -m 16M -boot a -s -S
+debug: Image minix.img
+	qemu-system-i386 -fda Image -m 16M -boot a -hda minix.img -s -S
 
 .PHONY: all clean run run-cd debug iso docker-build test test-fast
