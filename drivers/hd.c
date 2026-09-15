@@ -21,11 +21,13 @@
  *   - the deadline is checked against jiffies, and schedule() also
  *     returns on the next timer tick, so a *lost* interrupt costs a
  *     timeout rather than a hung machine;
- *   - during boot, though, I/O happens with interrupts still off
- *     (sys_setup() reads the superblock before main() calls sti()), and
- *     then jiffies does not advance at all — so the wait falls back to
- *     the old bounded poll.  hd_irq_enabled() decides which regime we
- *     are in.
+ *   - during boot, though, I/O happens before main() calls sched_init(),
+ *     so the timer is not programmed yet and jiffies never advances: a
+ *     sleeper could not be timed out.  The wait therefore falls back to
+ *     the old bounded poll until sched_ready is set.  (This used to be
+ *     decided by hd_irq_enabled(), which is wrong - hd_lock() enables
+ *     interrupts itself, so on the first boot read the flag was already
+ *     set and the driver slept with no task table and no timer.)
  *
  * Sleeping inside the driver also means two tasks can now be in here at
  * the same time, which the polling version never had to consider: the
@@ -106,7 +108,7 @@ static int hd_wait_bits(unsigned char mask, unsigned char value,
         if ((status & mask) == value)
             return 0;
 
-        if (hd_irq_enabled()) {
+        if (hd_irq_enabled() && sched_ready) {
             if ((long)(jiffies - deadline) >= 0) {
                 printk("hd: %s: timeout, status 0x%02x (IRQ14 never came)\n",
                        what, status);
@@ -119,9 +121,12 @@ static int hd_wait_bits(unsigned char mask, unsigned char value,
             current->state = TASK_RUNNING;
             hd_wait = NULL;
         } else {
-            /* Boot-time I/O: the timer is not running either, so the only
-               way to make progress is to poll, which is what this driver
-               used to do all the time. */
+            /* Boot-time I/O: the timer is not running yet, so nothing
+               would ever time this wait out, and the only way to make
+               progress is to poll - which is what this driver used to do
+               all the time.  Testing the interrupt flag is not enough:
+               hd_lock() enables interrupts as soon as it takes the lock,
+               so on the very first (boot) read it is already set. */
             if (--spins == 0) {
                 printk("hd: %s: timeout while polling, status 0x%02x\n",
                        what, status);

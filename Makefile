@@ -243,9 +243,11 @@ clean:
 	rm -f *~ core .image_floppy_padded
 	rm -rf .iso_tmp
 
-# minix.img is not optional: the MINIX filesystem lives in it, and a
-# kernel with no filesystem does not currently reach a shell (see the
-# known issue in docs/roadmap.md), so boot it with the disk attached.
+# minix.img is where the MINIX filesystem lives: attach it, or the guest
+# comes up with nothing to list, read or exec.  (Booting without it no
+# longer resets in a loop - the kernel warns "no root filesystem found"
+# and reaches the shell, see scenario 32 - but there is nothing useful to
+# do once you are there.)
 run: Image minix.img
 	qemu-system-i386 -fda Image -m 16M -boot a -hda minix.img
 

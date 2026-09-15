@@ -29,13 +29,38 @@ static struct task_struct init_task = {
     .priority = 15,
 };
 
-void sched_init(void)
+/* Non-zero once sched_init() has programmed the 8253.  Until the timer is
+   running, jiffies does not advance, so a task that sleeps on a deadline
+   can never be timed out; drivers must poll instead.  drivers/hd.c used
+   to test the interrupt flag for this, but hd_lock() enables interrupts
+   as soon as it takes the lock, so during boot the flag was already set
+   and the driver slept - before there was either a task table to sleep
+   through or a timer to wake it.  See sched_init_early(). */
+int sched_ready = 0;
+
+/* The half of the scheduler that has to be live before anything can
+   block.
+
+   main() calls sys_setup() BEFORE sched_init(), and mounting the root
+   filesystem reads the disk: the driver's wait loop calls schedule().
+   With the task table still all-zero from BSS that produced
+
+       PAGE FAULT: addr=0xffffffff err=0x0 eip=0x10eb4 (= schedule+0xc7)
+
+   where schedule() walked a task[] slot holding 0xffffffff and
+   dereferenced it, and the CPU reset - in a loop, because the retry hit
+   the same window.  (With a disk the read sometimes completed before the
+   driver slept, which is why the boot usually looked fine; with no disk
+   it never did, which is the "no root filesystem -> reset loop" bug.)
+
+   So the table, `current` and the init task exist first; the root inode
+   for pwd, the GDT/TSS/LDT descriptors and the timer stay in
+   sched_init().  Only task[0] exists here and it IS `current`, so
+   schedule() ends with next == current_idx and never calls switch_to():
+   that path needs no TSS and no LDT, which is what makes this safe. */
+void sched_init_early(void)
 {
     int i;
-    struct desc_struct *p;
-
-    p = (struct desc_struct *)(&_gdt);
-    p += 8;
 
     for (i = 0; i < NR_TASKS; i++) {
         task[i] = NULL;
@@ -43,6 +68,19 @@ void sched_init(void)
 
     current = &init_task;
     task[0] = &init_task;
+}
+
+void sched_init(void)
+{
+    struct desc_struct *p;
+
+    p = (struct desc_struct *)(&_gdt);
+    p += 8;
+
+    /* The task table may already be set up (main() does it before
+       sys_setup()); doing it again is harmless and keeps sched_init()
+       self-contained if the call order ever changes back. */
+    sched_init_early();
 
     /* sys_setup() (called before sched_init in main) has mounted the
        MINIX fs, so the root inode is resolvable.  The init task (and
@@ -92,6 +130,10 @@ void sched_init(void)
        page inside the kernel image, so this must happen before any user
        process can fork. */
     sync_init();
+
+    /* From here on the timer ticks, so a driver may sleep on a deadline
+       instead of polling (drivers/hd.c). */
+    sched_ready = 1;
 }
 
 void schedule(void)

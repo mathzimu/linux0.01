@@ -207,6 +207,16 @@ extern unsigned long sync_interval;
 extern unsigned long next_sync;
 
 void sched_init(void);
+/* The half of the scheduler that must be live before anything can block:
+   the task table, `current` and the init task.  init() runs it before
+   sys_setup(), because mounting the root filesystem reads the disk and
+   the block layer can call schedule().  See kernel/sched.c. */
+void sched_init_early(void);
+/* Non-zero once sched_init() has programmed the 8253, i.e. once jiffies
+   advances.  A driver that sleeps on a deadline must check this: before
+   it, a sleeper has no timer to time it out and must poll instead
+   (drivers/hd.c). */
+extern int sched_ready;
 void schedule(void);
 int sys_fork(void);
 int sys_pause(void);

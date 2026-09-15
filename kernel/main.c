@@ -62,9 +62,21 @@ void main(void)
 
     tty_init();
 
+    /* sys_setup() below reads the superblock through the block layer, and
+       that path can call schedule() - so the task table has to be real
+       before it runs, not after.  Leaving it for sched_init() (below)
+       meant schedule() walked a task[] slot full of BSS/0xffffffff during
+       a boot-time disk read, faulted and reset the machine; a missing
+       filesystem made that fatal instead of merely unhelpful.  The rest
+       of the scheduler (root inode for pwd, GDT/TSS/LDT, timer) still
+       happens in sched_init(), once the filesystem has been mounted. */
+    sched_init_early();
+
     /* Let the disk's own interrupt wake the task waiting for it.  This
-       only unmasks IRQ14; until sti() below, disk I/O falls back to the
-       bounded poll inside the driver (see drivers/hd.c). */
+       only unmasks IRQ14.  Boot-time disk I/O polls rather than sleeps:
+       hd_lock() turns interrupts on, so the driver cannot use "are
+       interrupts on?" to decide, and until sched_init() runs there is no
+       timer tick to time a sleeper out (see drivers/hd.c). */
     hd_init();
 
     if (sys_setup() < 0)

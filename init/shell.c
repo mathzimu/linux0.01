@@ -587,6 +587,13 @@ void shell_main(void)
     printk("Minimal Linux 0.01 Equivalent Kernel\n");
     printk("Type 'help' for commands\n");
 
+    /* Say so instead of letting the first `ls` fail with a puzzling
+       "permission denied (mode=00)": with no root filesystem mounted
+       there is no working directory, so every path lookup starts from a
+       NULL inode (see the no-root-filesystem regression scenario). */
+    if (!current->pwd)
+        printk("No root filesystem: ls, cat, cd and exec /bin/... will not work.\n");
+
     while (1) {
         print_prompt();
 

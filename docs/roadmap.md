@@ -510,7 +510,7 @@ make Image                # 引导镜像
 # 运行/验证
 qemu-system-i386 -fda Image -hda minix.img -m 16M -boot a
 python3 scripts/qemu-test.py --image Image --hda minix.img --keys $'cmd\n'
-make test                   # 一键回归（scripts/regress.sh，31 个场景断言）
+make test                   # 一键回归（scripts/regress.sh，32 个场景断言）
 make check                  # 静态校验：内存地图 + 文档一致性 + lint 反向自测
 make check-layout           # 只校验内存地图（含 _end 未越界）
 make check-docs             # 只校验文档里引用的布局常量/场景数与源码一致
@@ -683,7 +683,7 @@ echo a | wc              ← 第二个管道：内核重启（串口日志出现
 - 下一步建议：审计 `pipe()`/`dup2()`/`sys_exit` 的 fd↔file↔inode 引用计数，以及两个并发 execve 之后
   `exe_inode` 与页表的状态；调试时先在一个会话里连跑两个管道，并临时打开 `NAMEI_TRACE` 与 `hd:` 级打印。
 
-## 已知问题：没有根文件系统时内核起不到 shell（**未修复**）
+## A1 — 无根文件系统时进不了 shell（复位循环）✅ 已修复
 
 **现象**：只挂 CD、不挂 MINIX 盘启动（这正是 `make run-cd` 修改前的写法，也是 README 早先的快速开始）：
 
@@ -695,16 +695,41 @@ hd: IRQ14 enabled (slave mask 0xff -> 0xbf)
 buffer cache: …            ← 早启动的打印又来一遍：机器复位了
 ```
 
-- 启动横幅（`Minimal Linux 0.01 Equivalent Kernel`，由 `shell_main()` 打印）**从未出现**；串口里也
-  **没有** `hd: … timeout`、**没有** `MINIX: bad magic`、**没有** `main.c` 那句
-  `Warning: no root filesystem found` ⇒ 内核在 `sys_setup()` 读超级块的过程中就三重故障复位了。
-- 按代码走查这条路本应优雅降级：`bread(0x301, 1)` 失败 → `sys_setup()` 返回 -1 → `main()` 打 warning
-  → `sched_init()` → `sti()` → `shell_main()`。实际却在更早处崩掉，所以最可疑的是 **`bread()` 下面那条
-  路径**（`getblk`/`ll_rw_block`/`hd_read_sectors` 在"控制器在、盘不在"时的行为），而不是文件系统代码。
-- 影响面**仅限**"不带文件系统启动"：`-hda minix.img` 一切正常（套件 30/30 全绿）。但它把"ISO 能不能用"
-  这个最直观的问题变成了"机器根本起不来"。
-- 下一步：在 `sys_setup` → `bread` → `hd_read_sectors` 各加一行 `printk`，定位最后一次打印；修好后补一条
-  "无盘启动也能进 shell 并打印 warning" 的回归（harness 支持 `--iso` 且不加 `--hda`）。
+启动横幅（`Minimal Linux 0.01 Equivalent Kernel`，由 `shell_main()` 打印）**从未出现**；串口里也
+**没有** `hd: … timeout`、**没有** `MINIX: bad magic`、**没有** `main.c` 那句
+`Warning: no root filesystem found`。
+
+**真正的根因**：不是"盘不在"，而是**启动期睡进了一个还没初始化的调度器**：
+
+1. `main()` 的顺序是 `hd_init()` → `sys_setup()` → `sched_init()`，读超级块时任务表还不存在；
+2. `hd_lock()` 拿到锁后会 `sti()`，所以 `hd_wait_bits()` 里的 `hd_irq_enabled()`（读 IF 位）**已经是真**，
+   驱动于是走"睡等 IRQ14"那条分支 → `schedule()`；
+3. 而 `sched_init()` 要等 `sys_setup()` 之后才跑，`task[]` 此时还是 BSS 的 0，`schedule()` 扫到某个
+   槽位把里面的 `0xffffffff` 当成任务指针解引用：
+   `PAGE FAULT: addr=0xffffffff err=0x0 eip=0x10eb4`（`nm -n kernel/system` → `schedule+0xc7`，
+   指令 `mov (%eax),%eax`）；
+4. 内核态页错误 → 三重故障 → CPU 复位。
+
+**为什么一直没被发现**：复位发生在**第一条启动横幅之前**，而 `check_no_reboot()` 只数横幅 —— 带盘启动
+时磁盘读偶尔在驱动入睡之前就完成了（不睡 ⇒ 不复位），于是"通常能起来"、套件 30/30 全绿；无盘时每次
+都睡、每次都崩，才暴露成"根本起不来"。
+
+**修复**（三处，缺一不可）：
+
+- `sched_init_early()`（`kernel/sched.c`）：把"任务表 + `current` + init task"从 `sched_init()` 里拆出来，
+  `main()` 在 `hd_init()`/`sys_setup()` **之前**调用。只有 `task[0]` 且它就是 `current` 时 `schedule()`
+  以 `next == current_idx` 收尾、不会走 `switch_to()`，所以这一步不需要 TSS/LDT 也是安全的；
+- `hd_wait_bits()` 改判 **`sched_ready`**（`sched_init()` 编好 8253 后才置 1）而不是 IF 位：睡下去要靠
+  jiffies 判超时，定时器没起来就不能睡、只能轮询 —— 于是"控制器在、盘不在"时会打印
+  `hd: read data: timeout while polling, status 0x00` 并正常返回失败，而不是永远 hlt；
+- `shell_main()` 在没有 `pwd`（根文件系统没挂上）时明确打印
+  `No root filesystem: ls, cat, cd and exec /bin/... will not work.`，而不是让人对着
+  `open: permission denied (mode=00 uid=0 mask=0x4 euid=0)` 猜。
+
+**回归**：场景 32 `nodisk`（harness 新增 `QEMU_HDA=`，置空即"不挂盘"）—— 断言只启动一次、不出现
+`PAGE FAULT`（`check_no_reboot()` 现在同时数 `buffer cache:` 那行，正是为了抓"横幅前复位"）、打印
+warning 并进 shell 执行 `help`/`exit`。实测修好后：无盘 0 次页错误、正常进 shell；**带盘 0 次页错误、
+0 次复位**（此前每次启动都会悄悄复位 2–3 次）。
 
 **顺带修好**：`make run-cd` 与 README/Docker 快速开始此前都**只挂 CD**，照文档做出来的系统没有文件系统
 ——用户看到的"`ls` 不能用"就是这个。三处现在都补了 `-hda minix.img`（`run-cd` 还依赖 `minix.img` 目标），

@@ -11,6 +11,20 @@ FAIL=0
 LOGDIR=${LOGDIR:-test-logs}
 mkdir -p "$LOGDIR"
 
+# Which disk to attach as the first IDE drive.  Default: the MINIX test
+# image every scenario prepares.  An empty QEMU_HDA boots with no disk at
+# all, which is what the "no root filesystem" scenario needs:
+#
+#     QEMU_HDA= run_case nodisk "$BASE" 'help\nexit\n' 'Warning: ...'
+#
+# It expands to two words on purpose (or none at all), so it must stay
+# unquoted at the call site.
+hda_args() {
+    if [ -n "${QEMU_HDA-minix.img}" ]; then
+        printf '%s' "--hda ${QEMU_HDA-minix.img}"
+    fi
+}
+
 # check_no_reboot <name> <output> <expected-boots>
 #
 #   A reboot is not a pass.  A triple fault restarts the machine, and the
@@ -21,12 +35,22 @@ mkdir -p "$LOGDIR"
 #   in the run's own output is what tells the two apart.  (Found the hard
 #   way: `cat file | cat` in Ring3 reboots the machine, and the pipeline
 #   scenario was passing after the reboot.)
+#
+#   Counting banners ALONE is not enough either: a reset that happens
+#   *before* the first banner - the kernel faults in early init, while it
+#   is still mounting the root filesystem - leaves the banner count at 1
+#   and every assertion still matches, because the retry boots all the way
+#   to the shell.  That is exactly how "no root filesystem -> reset loop"
+#   stayed invisible while the suite was green, so the early-init marker
+#   (buffer_init's one line per boot) is counted as well.  It must never
+#   appear more often than the expected number of boots.
 check_no_reboot() {
-    local name="$1" out="$2" want="$3" boots
+    local name="$1" out="$2" want="$3" boots early
     boots=$(printf '%s' "$out" | grep -cF "Minimal Linux 0.01 Equivalent Kernel")
-    if [ "$boots" -gt "$want" ]; then
-        echo "FAIL [$name]  machine rebooted ($boots boot banners, expected $want): the kernel faulted - see $LOGDIR/$name.serial"
-        gha_error "FAIL [$name] machine rebooted ($boots boot banners): the kernel faulted"
+    early=$(printf '%s' "$out" | grep -cF "buffer cache: ")
+    if [ "$boots" -gt "$want" ] || [ "$early" -gt "$want" ]; then
+        echo "FAIL [$name]  machine rebooted ($boots boot banners, $early early-init markers, expected $want): the kernel faulted - see $LOGDIR/$name.serial"
+        gha_error "FAIL [$name] machine rebooted ($boots boot banners, $early early-init markers): the kernel faulted"
         echo "---- tail $LOGDIR/$name.serial ----"
         tail -15 "$LOGDIR/$name.serial" 2>/dev/null
         echo "--------------------------------"
@@ -51,7 +75,7 @@ run_case() {
         echo "FAIL [$name]  setup failed: $prep"
         FAIL=$((FAIL+1)); return 1
     fi
-    out=$(python3 scripts/qemu-test.py --image Image --hda minix.img \
+    out=$(python3 scripts/qemu-test.py --image Image $(hda_args) \
              --hold "${TEST_HOLD:-30}" \
              --tail "${QEMU_TAIL:-${TEST_TAIL:-1.5}}" \
              --min-wait "${QEMU_MIN_WAIT:-0}" \
@@ -88,7 +112,7 @@ run_case2() {
         echo "FAIL [$name]  setup failed: $prep"
         FAIL=$((FAIL+1)); return 1
     fi
-    out=$(python3 scripts/qemu-test.py --image Image --hda minix.img \
+    out=$(python3 scripts/qemu-test.py --image Image $(hda_args) \
              --hold "${TEST_HOLD:-30}" --tail "${TEST_TAIL:-1.5}" \
              --mem "${QEMU_MEM:-16M}" \
              --type-delay "${TEST_TYPE_DELAY:-0.5}" \
@@ -96,7 +120,7 @@ run_case2() {
     printf '%s' "$out" > "$LOGDIR/$name.1.serial"
     if ! check_no_reboot "$name.1" "$out" 1; then return 1; fi
     out="$out
-$(python3 scripts/qemu-test.py --image Image --hda minix.img \
+$(python3 scripts/qemu-test.py --image Image $(hda_args) \
              --hold "${TEST_HOLD:-30}" --tail "${TEST_TAIL:-1.5}" \
              --mem "${QEMU_MEM:-16M}" \
              --type-delay "${TEST_TYPE_DELAY:-0.5}" \
@@ -418,7 +442,9 @@ run_case bigfile "$SH_PREP3" 'exec /bin/sh\nwc < /big.txt\nexit\n' \
 #   namei 拒绝穿越 /bin（`namei: cannot traverse ino=7 mode=00`）。
 #   shell 管道只是靠运气碰到那个窗口，所以这条场景用 fork N + **每个子进程 execve 同一个**
 #   /bin/cat 把它确定性地压出来。窗口要够长：4 个子进程各自按需调页并读文件，实测约 40s。
-QEMU_MIN_WAIT=60 run_case execrace \
+#   但如果同一台机器上还有别的 QEMU 在跑（并行调试时很常见），60s 会不够、场景会假失败，
+#   所以给到 90s。
+QEMU_MIN_WAIT=90 run_case execrace \
     'rm -f minix.img && make user/execrace.elf user/cat.elf && tools/mkminix minix.img user/execrace.elf:execrace user/cat.elf:cat' \
     'exec /bin/execrace 4 /bin/cat /hello.txt\n' \
     'execrace: forked 4 children' \
@@ -439,6 +465,21 @@ run_case userland 'rm -f minix.img && make minix.img' \
     't3' \
     'note.txt' \
     'exec: child 1 exit_code=0'
+
+# 场景 32: 没有根文件系统时也必须进 shell（而不是复位循环）
+#   曾经的故障链：main() 先 sys_setup() 后 sched_init()，而读超级块要经过块设备层；
+#   hd_lock() 拿到锁时会 sti()，于是 hd_wait_bits() 认为"可以睡"→ 进 schedule()，
+#   而那时 task[] 还没初始化（BSS 全 0，槽位被当成 0xffffffff 解引用）：
+#     PAGE FAULT: addr=0xffffffff err=0x0 eip=0x10eb4 (= schedule+0xc7)
+#   → 三重故障 → CPU 复位。带盘时磁盘读偶尔在睡之前就完成（不睡），所以"一般能起来"；
+#   无盘时每次都睡、每次都崩 ⇒ 无限复位。而且复位发生在**第一条启动横幅之前**，
+#   横幅计数抓不到它（这就是它长期潜伏、套件仍全绿的原因；check_no_reboot 现在
+#   也数 buffer_init 那一行）。这条场景**不挂盘**启动：必须只启动一次、不出现
+#   PAGE FAULT、打印找不到根文件系统的警告，并且照样进 shell 接受命令。
+QEMU_HDA= run_case nodisk "$BASE" 'help\nexit\n' \
+    'Warning: no root filesystem found' \
+    "Type 'help' for commands" \
+    'Goodbye.'
 
 echo
 echo "================================"
