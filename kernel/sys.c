@@ -350,7 +350,10 @@ int sys_open(const char *filename, int flag, int mode)
     for (i = 0; i < NR_FILE; i++) {
         if (!file_table[i].f_count) break;
     }
-    if (i >= NR_FILE) return -1;
+    if (i >= NR_FILE) {
+        printk("open: file_table full (%d entries)\n", NR_FILE);
+        return -1;
+    }
 
     inode = namei(filename);
     if (!inode && (flag & O_CREAT)) {
@@ -402,7 +405,10 @@ int sys_open(const char *filename, int flag, int mode)
             iput(dir);
         }
     }
-    if (!inode) return -1;
+    if (!inode) {
+        printk("open: namei returned NULL (flag=0x%x)\n", flag);
+        return -1;
+    }
 
     /* Opening an existing file needs the matching triad bit: read for
        O_RDONLY, write for O_WRONLY/O_RDWR.  O_TRUNC is a write. */
@@ -417,6 +423,9 @@ int sys_open(const char *filename, int flag, int mode)
             mask |= MAY_WRITE;
 
         if (mask && !permission(inode, mask)) {
+            printk("open: permission denied (mode=0%o uid=%d mask=0x%x "
+                   "euid=%d)\n", inode->i_mode & 07777, inode->i_uid, mask,
+                   current->euid);
             iput(inode);
             return -1;
         }
