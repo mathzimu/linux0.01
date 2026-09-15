@@ -11,6 +11,31 @@ FAIL=0
 LOGDIR=${LOGDIR:-test-logs}
 mkdir -p "$LOGDIR"
 
+# check_no_reboot <name> <output> <expected-boots>
+#
+#   A reboot is not a pass.  A triple fault restarts the machine, and the
+#   freshly booted kernel shell then consumes whatever keys the harness is
+#   still typing: it prints "$" prompts, it accepts `exit` ("Goodbye."), it
+#   even prints file contents - so every presence-based assertion can still
+#   match and a *crashed* scenario looked green.  Counting the boot banner
+#   in the run's own output is what tells the two apart.  (Found the hard
+#   way: `cat file | cat` in Ring3 reboots the machine, and the pipeline
+#   scenario was passing after the reboot.)
+check_no_reboot() {
+    local name="$1" out="$2" want="$3" boots
+    boots=$(printf '%s' "$out" | grep -cF "Minimal Linux 0.01 Equivalent Kernel")
+    if [ "$boots" -gt "$want" ]; then
+        echo "FAIL [$name]  machine rebooted ($boots boot banners, expected $want): the kernel faulted - see $LOGDIR/$name.serial"
+        gha_error "FAIL [$name] machine rebooted ($boots boot banners): the kernel faulted"
+        echo "---- tail $LOGDIR/$name.serial ----"
+        tail -15 "$LOGDIR/$name.serial" 2>/dev/null
+        echo "--------------------------------"
+        FAIL=$((FAIL+1))
+        return 1
+    fi
+    return 0
+}
+
 # run_case <name> <prep-cmd> <keys> <needle...>
 #   prep-cmd : 准备干净盘的命令（须生成 minix.img）
 #   keys     : 注入的按键（支持字面 \n 或真换行）
@@ -35,6 +60,7 @@ run_case() {
              --extra "${TEST_EXTRA:-}" \
              --keys "$keys" 2>/dev/null)
     printf '%s' "$out" > "$LOGDIR/$name.serial"
+    if ! check_no_reboot "$name" "$out" 1; then return 1; fi
     for needle in "$@"; do
         if ! printf '%s' "$out" | grep -qF "$needle"; then
             echo "FAIL [$name]  missing: \"$needle\"  (see $LOGDIR/$name.serial)"
@@ -68,6 +94,7 @@ run_case2() {
              --type-delay "${TEST_TYPE_DELAY:-0.5}" \
              --min-wait "$minwait" --keys "$keys1" 2>/dev/null)
     printf '%s' "$out" > "$LOGDIR/$name.1.serial"
+    if ! check_no_reboot "$name.1" "$out" 1; then return 1; fi
     out="$out
 $(python3 scripts/qemu-test.py --image Image --hda minix.img \
              --hold "${TEST_HOLD:-30}" --tail "${TEST_TAIL:-1.5}" \
@@ -75,6 +102,7 @@ $(python3 scripts/qemu-test.py --image Image --hda minix.img \
              --type-delay "${TEST_TYPE_DELAY:-0.5}" \
              --keys "$keys2" 2>/dev/null)"
     printf '%s' "$out" > "$LOGDIR/$name.serial"
+    if ! check_no_reboot "$name" "$out" 2; then return 1; fi
     for needle in "$@"; do
         if ! printf '%s' "$out" | grep -qF "$needle"; then
             echo "FAIL [$name]  missing: \"$needle\"  (see $LOGDIR/$name.serial)"
