@@ -87,4 +87,14 @@ void main(void)
     sti();
 
     shell_main();
+
+    /* shell_main() only returns when the user types `exit` (it prints
+       "Goodbye." first).  Falling off the end of init() means executing
+       whatever happens to follow it in memory, which shows up in a QEMU
+       exception log as a triple fault *after* a clean shutdown - confusing
+       when you are debugging something else.  Halt deliberately instead;
+       the timer tick keeps the machine here. */
+    for (;;) {
+        __asm__ volatile("sti; hlt");
+    }
 }
