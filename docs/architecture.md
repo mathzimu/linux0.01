@@ -236,8 +236,11 @@ Power On
       ├── buffer_init()    → Initialize buffer cache
       ├── mem_check()      → 启动内存地图自检（不一致即 panic）
       ├── tty_init()       → Initialize console/keyboard
+      ├── sched_init_early() → Task table + current + init task (must exist
+      │                        before sys_setup(): reading the superblock can
+      │                        call schedule())
       ├── sys_setup()      → Mount MINIX root filesystem (read superblock)
-      ├── sched_init()     → Initialize scheduler + timer + TSS/LDT
+      ├── sched_init()     → Rest of the scheduler: pwd, TSS/LDT, PIT timer
       ├── sti()            → Enable interrupts
       └── shell_main()     → interactive shell (Ring 0 in current tree; see limitations.md)
 ```

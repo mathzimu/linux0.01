@@ -75,8 +75,9 @@
   │    ├─ mem_init() — 初始化页框分配器
   │    ├─ buffer_init() — 初始化缓冲区缓存
   │    ├─ tty_init() — 初始化 TTY
+  │    ├─ sched_init_early() — 任务表 + task0（读盘会睡，必须先有）
   │    ├─ sys_setup() — 挂载根文件系统
-  │    ├─ sched_init() — 初始化调度器
+  │    ├─ sched_init() — 调度器其余部分
   │    ├─ sti() — 开中断
   │    └─ shell_main() — 内核态 Shell
   │
@@ -1388,13 +1389,17 @@ extern int sys_setup(void);     // 文件系统挂载 (fs/minix.c)
 
     tty_init();                              // ④ TTY (终端)
 
-    if (sys_setup() < 0)                     // ⑤ 文件系统
+    sched_init_early();                      // ⑤ 任务表 + current + task0：
+                                             //    下面读超级块会睡进 schedule()，
+                                             //    此时任务表必须已经存在
+
+    if (sys_setup() < 0)                     // ⑥ 文件系统
         printk("Warning: no root filesystem found\n");
 
-    sched_init();                            // ⑥ 调度器（含回写任务）
+    sched_init();                            // ⑦ 调度器的其余部分（pwd/TSS/LDT/PIT + 回写任务）
 
-    sti();                                   // ⑦ 开中断
-    shell_main();                            // ⑧ 启动内核态 Shell（不返回）
+    sti();                                   // ⑧ 开中断
+    shell_main();                            // ⑨ 启动内核态 Shell（不返回）
 ```
 
 > **两处与旧版不同**：`buffer_init` 的参数是**缓存结束地址**（旧代码传 `memory_end - 0x100000`，

@@ -18,13 +18,14 @@ head.s startup_32
   页目录+4 张内核页表（恒等映射 0–16MB），CR0.PG
   IDT/GDT，call main
 main.c
-  mem_init → buffer_init → mem_check → tty_init → sys_setup
-  sched_init（PIT + task0 + 回写任务）→ sti → shell_main
+  mem_init → buffer_init → mem_check → tty_init → sched_init_early（task0）
+  → sys_setup → sched_init（PIT + 回写任务）→ sti → shell_main
 shell
   printk 欢迎语 → "$ "
 ```
 
-**观察点：** QEMU 窗口出现 `$ `；若无盘，`sys_setup` 可能警告。
+**观察点：** QEMU 窗口出现 `$ `；若无盘，`sys_setup` 会打印
+`Warning: no root filesystem found` 后照常进 shell（场景 32 守着这条）。
 
 ---
 

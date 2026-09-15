@@ -146,6 +146,7 @@ BIOS POST
             └─ 建页目录+页表 · 开分页 (CR0.PG=1) · 设 IDT · 加载内核 GDT
                  └─ call main()
                       ├─ mem_init / buffer_init / tty_init
+                      ├─ sched_init_early()  ← 任务表 + task0（sys_setup 读盘会睡，必须先有）
                       ├─ sys_setup (挂载 MINIX) / sched_init
                       ├─ sti() 开中断
                       └─ shell_main()   ← 内核态 Shell（不返回）
