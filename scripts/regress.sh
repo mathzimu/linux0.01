@@ -500,6 +500,26 @@ run_case selfdisk 'rm -f minix.img linux.img disk-fs.img && make disk' \
 # them or every later scenario would boot linux.img with -boot c too.
 unset QEMU_HDA TEST_EXTRA
 
+# 场景 34: 同一会话里的第二个管道（wake_up 不清队列头 → 回收来的页目录被写零）
+#   症状：`exec /bin/sh` 之后连跑两条 `cat /hello.txt | wc`，第二条一敲下去机器立刻三重
+#   故障重启，串口里既没有 PAGE FAULT 也没有 panic。用 `-d int,cpu_reset` 才看见：崩在
+#   switch_to() 尾部的 `ljmp *0x8(%esp)`，页错误地址是 `_gdt+0x68`（读 GDT 里的 LDT 描述符），
+#   紧接着取 `_idt+0x70`（#PF 门）也失败 → #DF → 三重故障。也就是那一刻 CR3 指向的页目录
+#   已经不含内核恒等映射。
+#   根因在 fs/buffer.c 的 wake_up()：它只把 `(*p)->state` 置回 TASK_RUNNING，**不清队列头**，
+#   队列因此一直指着一个已被唤醒、随后退出并被回收的 task_struct。那个 task 页回到
+#   get_free_page() 后可能被当成页目录发放，而下一次 wake_up() 就把 0 写进它的偏移 0 ——
+#   那正是页目录的 PDE[0]。Linux 0.01 原版是 `(**p).state = 0; *p = NULL;`，缺的就是第二句。
+#   同一场景还守着第二个独立缺陷（它表现为第一条管道丢掉 wc 的输出）：sys_open() 在 namei()
+#   **之前**就占用 file_table[] 槽位、最后才置 f_count=1，于是并发打开会共用同一个 struct
+#   file，execve 会读回另一个进程的 inode（`wc` 那一级实际跑的是 `cat` 的镜像）。两个缺陷都
+#   修好后，每条管道都应打印一次 `1 4 21 -`。
+QEMU_MIN_WAIT=45 run_case pipe2 'rm -f minix.img && make minix.img' \
+    'exec /bin/sh\ncat /hello.txt | wc\ncat /hello.txt | wc\ncat /hello.txt | wc\nexit\n' \
+    '1 4 21 -' \
+    'Hello from MINIX v1!' \
+    'exec: child 1 exit_code=0'
+
 echo
 echo "================================"
 echo "  $PASS passed, $FAIL failed"

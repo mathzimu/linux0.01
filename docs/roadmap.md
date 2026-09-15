@@ -513,7 +513,7 @@ qemu-system-i386 -fda Image -hda minix.img -m 16M -boot a
 qemu-system-i386 -hda linux.img -m 16M -boot c       # 单文件镜像（等价于 make run-disk）
 python3 scripts/qemu-test.py --image Image --hda minix.img --keys $'cmd\n'
 python3 scripts/qemu-test.py --disk linux.img --keys $'cmd\n'   # 只挂一张盘
-make test                   # 一键回归（scripts/regress.sh，33 个场景断言）
+make test                   # 一键回归（scripts/regress.sh，34 个场景断言）
 make check                  # 静态校验：内存地图 + 文档一致性 + lint 反向自测
 make check-layout           # 只校验内存地图（含 _end 未越界）
 make check-docs             # 只校验文档里引用的布局常量/场景数与源码一致
@@ -761,23 +761,61 @@ CHS 也正好是 16/63——于是**超出最后一个整柱面的尾巴根本�
 `kernel/main.c`（读取参数）、`fs/minix.c`（打一行基准 LBA）、`tools/build.c`（显式把软盘的基准写成 0）、
 `Makefile`（`disk` / `run-disk`）、`scripts/qemu-test.py`（新增 `--disk`，便于无头验证）。
 
-## 已知问题：一个会话里的第二个管道会让内核三重故障（**未修复**）
+## B2'' — 一个会话里的第二个管道：静默三重故障 ✅ 已修复（根因两个）
 
 **最小复现**（`exec /bin/sh` 之后）：
 
 ```
-cat /hello.txt | wc      ← 第一个"两个 exec 并发"的管道：输出正常
-echo a | wc              ← 第二个管道：内核重启（串口日志出现第二条启动横幅）
+cat /hello.txt | wc      ← 第一条管道
+cat /hello.txt | wc      ← 第二条管道：内核立刻重启（串口出现第二条启动横幅）
 ```
 
-- 触发条件是"**前一个管道里有两个并发 execve**"，与是否同一个程序无关（`cat|cat` 与 `cat|wc` 都会触发）；
-  纯 `echo a | wc` 连跑两次（只有 1 个 exec）是干净的。
-- 崩溃是**静默三重故障**：没有任何 `PAGE FAULT`/`hd:` 打印，只有重启横幅。
-- **归因已排除本次修改**：在干净 HEAD（`2c58809`，用 `git worktree` 单独构建）上跑同样两步，
-  **同样重启** ⇒ 既有缺陷。它此前被 P1 挡着（第一个管道必然失败，没人走到第二步），而套件里没有任何
-  场景在一个会话里跑两个管道，所以一直是绿的——`check_no_reboot()` 是唯一能抓住它的手段。
-- 下一步建议：审计 `pipe()`/`dup2()`/`sys_exit` 的 fd↔file↔inode 引用计数，以及两个并发 execve 之后
-  `exe_inode` 与页表的状态；调试时先在一个会话里连跑两个管道，并临时打开 `NAMEI_TRACE` 与 `hd:` 级打印。
+崩溃是**静默三重故障**：没有 `PAGE FAULT`、没有 `panic`、没有 `hd:` 打印，只有重启横幅。它此前被 P1
+挡着（第一条管道必然失败，没人走到第二步），而套件里没有任何场景在一个会话里连跑两条管道，所以一直是绿的。
+
+**取证过程**（值得记住的方法）：三重故障会把证据全抹掉，所以先用 QEMU 自己的异常日志
+（`--extra "-d int,cpu_reset -D qemu.log"`）把异常链抓出来：
+
+```
+4160: v=0e (#PF) IP=0008:00011034 CR2=0002661d  CR3=0010f000
+check_exception old: 0xe new 0xe
+4161: v=08 (#DF) IP=0008:00011034 CR2=00026a73
+check_exception old: 0x8 new 0xe
+Triple fault
+```
+
+符号对照（`nm -n kernel/system`）：`0x11034 = schedule+0x22b`，正是 `switch_to()` 尾部那条
+**`ljmp *0x8(%esp)`**（硬件任务切换的远跳）；`CR2=0x2661d = _gdt+0x68`（GDT 里 task2 的 LDT 描述符）——
+远跳去读 GDT 描述符时就页错误了；紧接着投递 #PF 时要取 `_idt+0x70`（#PF 的门）也失败。也就是说：**那一刻
+CR3 指向的页目录已经不含内核恒等映射**，内核连自己的 GDT/IDT 都读不到，第一次异常就直接升级成三重故障。
+
+**根因一：`wake_up()` 不清队列头**（`fs/buffer.c`）。它只把 `(*p)->state` 置回 `TASK_RUNNING`，
+**没有** `*p = NULL`。`sleep_on()` 用这个队列头串起睡眠者，于是已唤醒的任务仍被队列指着；等它退出、
+任务页被回收、又被 `get_free_page()` 当成**页目录**发放之后，下一次 `wake_up()` 就把 0 写进了该页的
+偏移 0 —— 那正是页目录的 **PDE[0]**。实测探针：
+
+```
+alloc 0x10f000            ← 新页目录建好，PDE[0] 正常
+wakeup ptr=0x10f000 is pgdir of pid=2 queue=0x2e874 caller=0x1cbab
+switch to pid=2 pgdir=0x10f000 pde0=0x0     ← 被写零，随后 switch_to 崩
+```
+
+`0x2e874 = hd_lock_q`、`0x1cbab` 落在 `hd_unlock()` 里：第一条管道的磁盘 I/O 把某个进程挂在
+`hd_lock_q` 上，醒来后队列没清，于是第二次 `hd_unlock()` 的 `wake_up()` 命中了一个**已经变成页目录**的
+回收页。Linux 0.01 原版就是 `(**p).state = 0; *p = NULL;` —— 缺的正是第二句。修复即补上它。
+
+**根因二（独立，同一条管道上的另一个症状）：`sys_open()` 先占槽位后查名字**。它在调用 `namei()` **之前**
+就挑好了 `file_table[]` 槽位，直到最后才置 `f_count = 1`；而 `namei()` 会睡在磁盘 I/O 上，于是两个并发
+`open()` 挑中同一个条目、共用一个 `struct file`，后写者的 `f_inode` 覆盖前者（实测 `wc` 那一级读回了
+`cat` 的 inode）：镜像页是按 `current->exe_inode` 按需调入的，所以那一级实际执行的是另一个程序——这就是
+`cat /hello.txt | wc` 只打印 `cat` 的内容、没有 `wc` 那一行的原因。修法：查完之后再占用槽位并立刻标记。
+
+**回归**：场景 34 `pipe2` —— 一个会话里连跑三条 `cat /hello.txt | wc`，断言每条都打印 `1 4 21 -`
+（根因二会吃掉这行）、`check_no_reboot()` 要求只有一次启动（根因一被修前必然重启）。修复后实测 3/3：
+1 条横幅、1 条 `buffer cache:`、0 个 `PAGE FAULT`、每次管道都有 `1 4 21 -`。
+
+**顺带留下的永久诊断**：`schedule()` 在 `switch_to()` 前检查目标 `tss.cr3` 的 `PDE[0]`，缺失时打印
+`switch: task N has cr3=... pde[0]=...`（见 A1 节）。正是它把这次的"静默重启"变成了可读证据。
 
 ## A1 — 无根文件系统时进不了 shell（复位循环）✅ 已修复
 
