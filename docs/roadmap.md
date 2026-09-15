@@ -513,7 +513,7 @@ qemu-system-i386 -fda Image -hda minix.img -m 16M -boot a
 qemu-system-i386 -hda linux.img -m 16M -boot c       # 单文件镜像（等价于 make run-disk）
 python3 scripts/qemu-test.py --image Image --hda minix.img --keys $'cmd\n'
 python3 scripts/qemu-test.py --disk linux.img --keys $'cmd\n'   # 只挂一张盘
-make test                   # 一键回归（scripts/regress.sh，32 个场景断言）
+make test                   # 一键回归（scripts/regress.sh，33 个场景断言）
 make check                  # 静态校验：内存地图 + 文档一致性 + lint 反向自测
 make check-layout           # 只校验内存地图（含 _end 未越界）
 make check-docs             # 只校验文档里引用的布局常量/场景数与源码一致

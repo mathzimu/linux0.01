@@ -481,6 +481,25 @@ QEMU_HDA= run_case nodisk "$BASE" 'help\nexit\n' \
     "Type 'help' for commands" \
     'Goodbye.'
 
+# 场景 33: 单文件自启动镜像（引导扇区 + setup + 内核 + MINIX FS 合一）
+#   `make disk` 生成 linux.img：LBA 0 是引导扇区，随后是 setup 与内核镜像，MINIX 文件系统
+#   放在按柱面对齐的 LBA 上（本次 192），而这个基址由 tools/mkdisk 写进引导扇区的参数块、
+#   内核从那里读出来——两边不各自硬编码一个偏移，所以镜像和内核不会悄悄错位。
+#   这条场景**只挂这一块盘**（QEMU_HDA=linux.img + `-boot c`），验证文件系统真的在硬盘上
+#   可用：ls/cat 走 Ring0 shell，exec /bin/sh 进 Ring3 再 ls /bin 与重定向读 /readme.txt。
+QEMU_HDA=linux.img TEST_EXTRA='-boot c' \
+run_case selfdisk 'rm -f minix.img linux.img disk-fs.img && make disk' \
+    'ls\ncat /hello.txt\nexec /bin/sh\nls /bin\nwc < /readme.txt\nexit\nexit\n' \
+    'MINIX: root filesystem at LBA' \
+    'MINIX: superblock loaded, magic=0x137f' \
+    'Hello from MINIX v1!' \
+    '3 19 129 -' \
+    'user-mode shell (Ring3)' \
+    'exec: child 1 exit_code=0'
+# `VAR=value func` persists after the function returns in bash, so clear
+# them or every later scenario would boot linux.img with -boot c too.
+unset QEMU_HDA TEST_EXTRA
+
 echo
 echo "================================"
 echo "  $PASS passed, $FAIL failed"
