@@ -7,28 +7,28 @@
 
 1. 四份前置：`prereq/x86-asm.md` → `prereq/c-language.md` → `prereq/computer-architecture.md` → `prereq/os-theory.md`
 2. 先读 [limitations.md](limitations.md)（两个 Shell、每进程独立地址空间、恒等映射 0–16MB 等）
-3. 本文 §1–§6 为引导与 main 详解；§7 起见 `docs/tutorial/`
+3. 本文 §01–§06 为引导与 main 详解；§07 起见 `docs/tutorial/`
 
 ---
 
 ## 目录
 
 ### 第一部分：引导流程（本文）
-1. [概述：从通电到 main()](#第一部分概述从通电到-main)
-2. [boot.s — 引导扇区逐行解析](#2-boots--引导扇区逐行解析)
-3. [tools/build.c — 镜像构建工具逐行解析](#3-toolsbuildc--镜像构建工具逐行解析)
-4. [setup.s — 实模式到保护模式逐行解析](#4-setups--实模式到保护模式逐行解析)
-5. [head.s — 32 位内核入口逐行解析](#5-heads--32-位内核入口逐行解析)
-6. [main.c — 内核主函数逐行解析](#6-mainc--内核主函数逐行解析)
+01. [概述：从通电到 main()](#01-概述从通电到-main)
+02. [boot.s — 引导扇区逐行解析](#02-boots--引导扇区逐行解析)
+03. [tools/build.c — 镜像构建工具逐行解析](#03-toolsbuildc--镜像构建工具逐行解析)
+04. [setup.s — 实模式到保护模式逐行解析](#04-setups--实模式到保护模式逐行解析)
+05. [head.s — 32 位内核入口逐行解析](#05-heads--32-位内核入口逐行解析)
+06. [main.c — 内核主函数逐行解析](#06-mainc--内核主函数逐行解析)
 
 ### 第二部分起（分文件）
-7. [调度器](tutorial/07-sched.md) · 8. [进程](tutorial/08-process.md) · 9. [系统调用](tutorial/09-syscalls.md)  
+07. [调度器](tutorial/07-sched.md) · 08. [进程](tutorial/08-process.md) · 09. [系统调用](tutorial/09-syscalls.md)  
 10. [内存](tutorial/10-mm.md) · 11. [文件系统](tutorial/11-fs.md) · 12. [驱动](tutorial/12-drivers.md)  
 13. [Shell/库](tutorial/13-shell-lib.md) · 14. [头文件与构建](tutorial/14-headers-build.md) · 15. [端到端场景](tutorial/15-scenarios.md)
 
 ---
 
-## 第一部分：概述：从通电到 main()
+## 01. 概述：从通电到 main()
 
 ### 整体启动流程时序图
 
@@ -96,7 +96,7 @@
 
 ---
 
-## 2. boot.s — 引导扇区逐行解析
+## 02. boot.s — 引导扇区逐行解析
 
 **文件：** `boot/boot.s` (75 行)
 **作用：** 作为 BIOS 引导的第一段代码，加载 setup 和 kernel 到内存。
@@ -307,7 +307,7 @@ buf[0x1F3] = (kernel_sectors >> 8) & 0xFF;
 
 ---
 
-## 3. tools/build.c — 镜像构建工具逐行解析
+## 03. tools/build.c — 镜像构建工具逐行解析
 
 **文件：** `tools/build.c` (110 行)
 **作用：** 将三个独立文件（boot, setup, kernel）合并为一个可启动的软盘镜像。
@@ -469,7 +469,7 @@ kernel.bin ───────┐
 
 ---
 
-## 4. setup.s — 实模式到保护模式逐行解析
+## 04. setup.s — 实模式到保护模式逐行解析
 
 **文件：** `boot/setup.s` (68 行)
 **作用：** 从 16 位实模式切换到 32 位保护模式的桥梁代码。
@@ -699,7 +699,7 @@ idt_descr:
 
 ---
 
-## 5. head.s — 32 位内核入口逐行解析
+## 05. head.s — 32 位内核入口逐行解析
 
 **文件：** `boot/head.s` (280 行)
 **作用：** 保护模式下执行的第一段代码，设置分页、IDT、GDT，然后跳转到 C 语言 main()。
@@ -1303,7 +1303,7 @@ sys_call_table:
 ```
 
 > 编号与 1991 年 Linux 0.01 的 `sys_call_table` **完全一致**（stub 项同样返回 -1）。
-> 完整对应关系与 `include/unistd.h` 一致；入口汇编见 §5 `system_call`（`cmpl $73, %eax; jb` 校验范围）。
+> 完整对应关系与 `include/unistd.h` 一致；入口汇编见 §05 `system_call`（`cmpl $73, %eax; jb` 校验范围）。
 > 编号 67–72 是本内核的扩展（sigreturn / sigprocmask / sigsuspend / sigaction / sleep / select），0–66 与 0.01 逐项对齐。
 
 **sys_call_table 在 C 中的声明：**
@@ -1317,7 +1317,7 @@ extern fn_ptr sys_call_table[];
 
 ---
 
-## 6. main.c — 内核主函数逐行解析
+## 06. main.c — 内核主函数逐行解析
 
 **文件：** `kernel/main.c` (48 行)
 **作用：** C 语言内核入口，初始化所有子系统。
@@ -1422,9 +1422,9 @@ extern int sys_setup(void);     // 文件系统挂载 (fs/minix.c)
 
 | 章节 | 文件 | 源码 |
 |------|------|------|
-| §7 调度器 | [tutorial/07-sched.md](tutorial/07-sched.md) | `kernel/sched.c` |
-| §8 进程 | [tutorial/08-process.md](tutorial/08-process.md) | `kernel/process.c` |
-| §9 系统调用 | [tutorial/09-syscalls.md](tutorial/09-syscalls.md) | `sys.c` `vsprintf.c` `panic.c` `asm.s` |
+| §07 调度器 | [tutorial/07-sched.md](tutorial/07-sched.md) | `kernel/sched.c` |
+| §08 进程 | [tutorial/08-process.md](tutorial/08-process.md) | `kernel/process.c` |
+| §09 系统调用 | [tutorial/09-syscalls.md](tutorial/09-syscalls.md) | `sys.c` `vsprintf.c` `panic.c` `asm.s` |
 | §10 内存 | [tutorial/10-mm.md](tutorial/10-mm.md) | `mm/*` |
 | §11 文件系统 | [tutorial/11-fs.md](tutorial/11-fs.md) | `fs/*` |
 | §12 驱动 | [tutorial/12-drivers.md](tutorial/12-drivers.md) | `drivers/*` |

@@ -26,7 +26,7 @@
 
 | 文档 | 内容 |
 |------|------|
-| [tutorial.md](tutorial.md) | **§1–§6** 引导全流程（boot/setup/head/main）；§7 起拆到 `tutorial/` |
+| [tutorial.md](tutorial.md) | **§01–§06** 引导全流程（boot/setup/head/main）；§07 起拆到 `tutorial/` |
 | [tutorial/07-sched.md](tutorial/07-sched.md) | 调度器 sched.c |
 | [tutorial/08-process.md](tutorial/08-process.md) | fork/exit process.c |
 | [tutorial/09-syscalls.md](tutorial/09-syscalls.md) | 系统调用 sys.c / vsprintf / panic |
@@ -42,11 +42,11 @@
 
 | 源码 | 文档 |
 |------|------|
-| `boot/boot.s` | tutorial.md §2 |
-| `boot/setup.s` | tutorial.md §4 |
-| `boot/head.s` | tutorial.md §5 |
-| `tools/build.c` | tutorial.md §3 |
-| `kernel/main.c` | tutorial.md §6 |
+| `boot/boot.s` | tutorial.md §02 |
+| `boot/setup.s` | tutorial.md §04 |
+| `boot/head.s` | tutorial.md §05 |
+| `tools/build.c` | tutorial.md §03 |
+| `kernel/main.c` | tutorial.md §06 |
 | `kernel/sched.c` | tutorial/07-sched.md |
 | `kernel/process.c` | tutorial/08-process.md |
 | `kernel/sys.c` `vsprintf.c` `panic.c` `asm.s` | tutorial/09-syscalls.md |

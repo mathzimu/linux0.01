@@ -1,4 +1,4 @@
-# §7 调度器 — `kernel/sched.c`
+# §07 调度器 — `kernel/sched.c`
 
 > 前置：`../prereq/os-theory.md` 调度章 · `include/linux/sched.h` · `include/asm/system.h`
 

@@ -1,6 +1,6 @@
-# §8 进程管理 — `kernel/process.c`
+# §08 进程管理 — `kernel/process.c`
 
-> 前置：§7 调度 · `task_struct` / `tss_struct`（sched.h）
+> 前置：§07 调度 · `task_struct` / `tss_struct`（sched.h）
 
 ## 1. 导出接口
 
