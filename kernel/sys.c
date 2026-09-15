@@ -10,6 +10,7 @@
 #include <sys/times.h>
 #include <sys/utsname.h>
 #include <asm/segment.h>
+#include <asm/system.h>
 
 /* System time (seconds since epoch-ish boot).  sys_stime() can set it. */
 unsigned long boot_time = 0;
@@ -28,6 +29,190 @@ int sys_stime(unsigned long *tptr)
 {
     boot_time = get_fs_long(tptr) - jiffies / HZ;
     return 0;
+}
+
+/* --- sleep() and select(): waiting with a deadline (B5.7) -------------
+ *
+ * Until now the kernel had no way to say "wake me later": alarm() wakes a
+ * task by *delivering a signal*, and a timeout that fires a signal is not
+ * a timeout.  sleep_deadline[] is that missing piece — one jiffies
+ * deadline per task slot, checked by do_timer() (kernel/sched.c), which
+ * is what makes both of these syscalls possible.  Like the signal mask it
+ * lives outside task_struct, because that struct sits at the bottom of
+ * the task's 4KB page and the child's kernel stack is the room left above
+ * it (see the guard in sys_fork).
+ */
+unsigned long sleep_deadline[NR_TASKS];
+
+/* sleep(seconds): seconds until the deadline, or 0 when the full time was
+   slept.  A signal cuts the sleep short (POSIX sleep() semantics), and
+   the handler then runs on the way back out of this syscall. */
+int sys_sleep(unsigned long seconds)
+{
+    unsigned long left;
+
+    if (!seconds)
+        return 0;
+
+    sleep_deadline[current->pid] = jiffies + seconds * HZ;
+    current->state = TASK_INTERRUPTIBLE;
+    while (sleep_deadline[current->pid] &&
+           !(current->signal & ~sig_blocked[current->pid])) {
+        schedule();
+        current->state = TASK_INTERRUPTIBLE;
+    }
+    current->state = TASK_RUNNING;
+
+    left = sleep_deadline[current->pid]
+               ? (sleep_deadline[current->pid] - jiffies + HZ - 1) / HZ
+               : 0;
+    sleep_deadline[current->pid] = 0;
+    return (int)left;
+}
+
+/* Read/write readiness for select().  The console is the only descriptor
+   that can go from "not ready" to "ready" while we wait; pipes have their
+   own wait queue; a regular file is always ready (this kernel never
+   blocks on one). */
+#define SEL_PIPE_EMPTY(inode) ((inode).i_zone[0] == (inode).i_zone[1])
+#define SEL_PIPE_FULL(inode) \
+    ((((inode).i_zone[0] - (inode).i_zone[1]) & (PAGE_SIZE - 1)) == \
+     (PAGE_SIZE - 1))
+
+static int sel_readable(struct file *f)
+{
+    if (!f || !f->f_inode)              /* console (or an unopened fd) */
+        return tty_table[0].read_cnt > 0;
+    if (f->f_inode->i_pipe)
+        return !SEL_PIPE_EMPTY(*f->f_inode);
+    return 1;
+}
+
+static int sel_writable(struct file *f)
+{
+    if (!f || !f->f_inode)
+        return 1;                       /* the console always accepts */
+    if (f->f_inode->i_pipe)
+        return !SEL_PIPE_FULL(*f->f_inode);
+    return 1;
+}
+
+static int sel_ready_count(unsigned long bits)
+{
+    int n = 0;
+
+    while (bits) {
+        n += (int)(bits & 1);
+        bits >>= 1;
+    }
+    return n;
+}
+
+/* select(nfds, readfds, writefds, exceptfds, timeout):
+ *
+ *   - the fd sets are a single unsigned long each, so nfds <= 32;
+ *   - timeout is in *ticks* (HZ per second), NULL = wait forever, and a
+ *     pointer to 0 also means "no timeout" — there is no struct timeval
+ *     here, because this kernel has no microsecond clock to fill one;
+ *   - returns the number of ready descriptors, 0 on timeout, -1 when a
+ *     signal interrupted the wait;
+ *   - readiness is checked again after every wakeup, and the wait is
+ *     bounded by the deadline, so a descriptor that this kernel cannot
+ *     wake us for (say a pipe that only another task will write) makes
+ *     select() wait for the timeout rather than forever.
+ *
+ * A task can only be on one wait queue at a time — sleep_on() links the
+ * chain through the caller's stack — so the wait picks the most
+ * interesting source: the console if it is being watched, otherwise the
+ * first watched pipe. */
+int sys_select(int nfds, unsigned long *readfds, unsigned long *writefds,
+               unsigned long *exceptfds, unsigned long *timeout)
+{
+    unsigned long r = readfds ? get_fs_long(readfds) : 0;
+    unsigned long w = writefds ? get_fs_long(writefds) : 0;
+    unsigned long deadline = 0;
+    unsigned long r_ready, w_ready;
+    struct m_inode *pipe_wait;
+    int i, watch_console;
+
+    if (nfds < 0)
+        nfds = 0;
+    if (nfds > 32)
+        nfds = 32;
+    if (timeout) {
+        unsigned long ticks = get_fs_long(timeout);
+
+        deadline = ticks ? jiffies + ticks : 0;
+    }
+
+    for (;;) {
+        r_ready = 0;
+        w_ready = 0;
+        watch_console = 0;
+        pipe_wait = NULL;
+
+        for (i = 0; i < nfds; i++) {
+            if ((r & (1UL << i)) && sel_readable(current->filp[i]))
+                r_ready |= 1UL << i;
+            if ((w & (1UL << i)) && sel_writable(current->filp[i]))
+                w_ready |= 1UL << i;
+
+            if (r & (1UL << i)) {
+                struct file *f = current->filp[i];
+
+                if (!f || !f->f_inode)
+                    watch_console = 1;
+                else if (f->f_inode->i_pipe && !pipe_wait)
+                    pipe_wait = f->f_inode;
+            }
+        }
+
+        if (r_ready || w_ready) {
+            if (readfds)
+                put_fs_long(r_ready, readfds);
+            if (writefds)
+                put_fs_long(w_ready, writefds);
+            if (exceptfds)
+                put_fs_long(0, exceptfds);
+            return sel_ready_count(r_ready) + sel_ready_count(w_ready);
+        }
+
+        if (deadline && (long)(jiffies - (long)deadline) >= 0) {
+            if (readfds)
+                put_fs_long(0, readfds);
+            if (writefds)
+                put_fs_long(0, writefds);
+            if (exceptfds)
+                put_fs_long(0, exceptfds);
+            return 0;                   /* timed out */
+        }
+
+        if (current->signal)
+            return -1;                  /* interrupted (EINTR) */
+
+        sleep_deadline[current->pid] = deadline;   /* 0 = no deadline */
+        current->state = TASK_INTERRUPTIBLE;
+
+        if (watch_console) {
+            /* Registering under cli() is what keeps a keypress from
+               arriving between the readiness check above and the sleep
+               (the lesson from the buffer wait in B5.5). */
+            cli();
+            if (tty_table[0].read_cnt == 0) {
+                tty_table[0].read_waiter = current;
+                schedule();
+                tty_table[0].read_waiter = NULL;
+            }
+            sti();
+        } else if (pipe_wait) {
+            sleep_on(&pipe_wait->i_wait);   /* woken by read_pipe/write_pipe */
+        } else {
+            schedule();                     /* deadline is all we have */
+        }
+
+        sleep_deadline[current->pid] = 0;
+        current->state = TASK_RUNNING;
+    }
 }
 
 /* Change the current working directory.  Relative paths are resolved

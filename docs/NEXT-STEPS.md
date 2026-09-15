@@ -230,6 +230,26 @@ OOM 杀进程。而且 `execve` 仍然是**预先**把整个镜像拷进新页�
 | 自阻塞 | POSIX 要求"正在处理的信号在处理器期间被屏蔽"，所以进入处理器时 `sig_blocked |= (1<<sig) | sa_mask`，处理器因此不会被自己递归打断；旧掩码由 **`sys_sigreturn` 里的一个 C 钩子**（`sigreturn_restore_mask`）恢复——处理器是通过 sigreturn 系统调用返回的，没有别的 C 时机 |
 | 回归 | 场景 26 `sigaction`（`user/sigactiontest.c`）：处理器里给自己发 SIGUSR1 与 SIGUSR2 → 都不能在处理器运行期间投递（`usr2_hits=0`）→ 处理器返回后按序补投（usr1=2, usr2=1）→ 再发一次 SIGUSR1 仍进处理器（usr1=3，证明不用重新安装）→ `sigaction(SIG_DFL)` 之后不再进处理器 |
 
+### B5.7 — `sleep()` 与 `select()`：内核第一次有"到期唤醒" ✅（同一提交）
+
+**动因**：在此之前内核没有"过一会儿叫醒我"的手段。`alarm()` 是靠**投递信号**叫醒任务的，而
+"超时"不是信号——一个只想等 1 秒、不想被 SIGALRM 打扰的程序没有别的办法（`pause()` 会一直睡
+到有输入，循环查表就是忙等）。
+
+| 项 | 内容 |
+|----|------|
+| 新机制 | `sleep_deadline[NR_TASKS]`：每个任务一个 jiffies 截止时间，`do_timer()` 到期就把该任务置为 RUNNABLE。仍然**不放进 `task_struct`**（原因见 B5） |
+| 系统调用 | 71 `sleep(seconds)`、72 `select(nfds, rfds, wfds, efds, timeout)` |
+| `sleep` 语义 | 返回**剩余秒数**（POSIX）：睡满返回 0；被信号打断则返回剩余值，处理器随后在系统调用返回路径上运行 |
+| `select` 语义 | fd 集合各是一个 `unsigned long`（`nfds <= 32`）；timeout 以 **tick** 为单位（`NULL` 或 0 = 无限等待），不是 `struct timeval`——本内核没有微秒时钟可填；返回就绪个数，超时返回 0，被信号打断返回 -1 |
+| 就绪判定 | 控制台看 `read_cnt`；管道看 `i_zone[0]/i_zone[1]` 的 head/tail（空/满）；普通文件恒为就绪（本内核不会在文件上阻塞） |
+| 等待与唤醒 | 控制台输入由键盘中断唤醒 `read_waiter`（注册时 `cli()`，避免 B5.5 那类丢唤醒）；管道睡在自己的 `i_wait` 上；两者都由截止时间兜底。一个任务同时只能挂在一个等待队列上（`sleep_on` 用调用者栈串链），所以 select 只挑"最有关"的那个源 |
+| 回归 | 场景 27 `seltest`（`user/seltest.c`）：`sleep(2)` 真的睡够；无人输入时 `select(fd0, 1s)` 返回 0 且清空集合；控制台可写所以 `select(fd1)` 立刻返回 1；`alarm(1)` 打断 `sleep(10)` 后返回 9 且处理器已运行 |
+
+**顺带修**：`init_task` 的位置初始化列表早已落后于 `struct task_struct`（M3 加了 `pg_dir` 与
+code/data 组、B3 加了镜像表），gcc 报 `braces around scalar initializer`、注释也指错了成员——
+改成 C99 指定初始化（`.priority = 15, .counter = 15`），其余全部零初始化。
+
 **还没做**：可重启的系统调用（`SA_RESTART` 现在只是被接受、不生效），以及把投递点补到缺页
 返回路径上（现在靠 tick 兜底，最坏 10ms 延迟）。
 
@@ -354,7 +374,7 @@ swap 后耗尽门槛是**内存+swap**（695 帧 + 512 槽 ≈ 1207 页），子
 ## 当前状态（一句话）
 
 **67 个系统调用（编号与 1991 Linux 0.01 完全一致）＋ 3 个本内核扩展（67 sigreturn /
-68 sigprocmask / 69 sigsuspend / 70 sigaction）**、23 条 Shell 命令的教学内核：
+68 sigprocmask / 69 sigsuspend / 70 sigaction / 71 sleep / 72 select）**、23 条 Shell 命令的教学内核：
 进程生命周期完整（fork/execve/waitpid/信号/管道）、MINIX FS 增删改查 + 硬链接/重命名 +
 **权限模型**、
 Ring3 用户态 + 编程工具链（`make prog NAME=xxx` → `exec /xxx`）、内存隔离、chdir。
@@ -451,7 +471,7 @@ make Image                # 引导镜像
 # 运行/验证
 qemu-system-i386 -fda Image -hda minix.img -m 16M -boot a
 python3 scripts/qemu-test.py --image Image --hda minix.img --keys $'cmd\n'
-make test                   # 一键回归（scripts/regress.sh，26 个场景断言）
+make test                   # 一键回归（scripts/regress.sh，27 个场景断言）
 make check                  # 静态校验：内存地图 + 文档一致性 + lint 反向自测
 make check-layout           # 只校验内存地图（含 _end 未越界）
 make check-docs             # 只校验文档里引用的布局常量/场景数与源码一致

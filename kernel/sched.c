@@ -13,30 +13,20 @@ int jiffies = 0;
 struct task_struct *current = NULL;
 struct task_struct *task[NR_TASKS] = {NULL,};
 
+/* The idle task (pid 0) that becomes the shell.  Only the two scheduling
+   fields are non-zero: everything else — the signal handlers, pwd/root,
+   the exe_* image table, the TSS, the LDT, filp[] — is zero, and C99
+   designated initializers give us that for free.
+ *
+ * It used to be a positional list with a comment per field, and it had
+ * silently drifted out of step with struct task_struct: M3 added pg_dir
+ * and the code/data/brk group, B3 added the image table, and nobody moved
+ * the list along.  The values still came out zero by luck, but gcc warned
+ * ("braces around scalar initializer") and the comments pointed at the
+ * wrong members.  Naming the fields we mean makes that impossible. */
 static struct task_struct init_task = {
-    0,            /* state */
-    15,           /* counter */
-    15,           /* priority */
-    0,            /* signal */
-    0,            /* exit_code */
-    {0},          /* handlers[32] — all SIG_DFL */
-    NULL,         /* pwd — set in sched_init after sys_setup mounts the fs */
-    NULL,         /* root — NULL means the fs root */
-    0,0,0,        /* uid, euid, suid (root) */
-    0,0,0,        /* gid, egid, sgid */
-    0,            /* alarm */
-    0,            /* umask */
-    {0},          /* tss */
-    {NULL,},      /* filp */
-    0,            /* pid */
-    0,            /* parent */
-    0,            /* pgrp */
-    0,            /* session */
-    0,            /* leader */
-    0,0,0,0,      /* time */
-    0,0,0,0,      /* code/data */
-    0,0,          /* brk, stack */
-    {{0,0},{0,0},{0,0}} /* ldt */
+    .counter = 15,
+    .priority = 15,
 };
 
 void sched_init(void)
@@ -196,6 +186,21 @@ void do_timer(void)
         p->signal |= (1 << SIGALRM);
         p->alarm = 0;
         if (p->state == TASK_INTERRUPTIBLE)
+            p->state = TASK_RUNNING;
+    }
+
+    /* Deadline sleepers (sleep/select): this is the kernel's only "wake me
+       later" mechanism.  alarm() could not be reused — it wakes a task by
+       delivering SIGALRM, and a timeout is not a signal.  A task whose
+       deadline passed is made runnable; it re-checks its own condition. */
+    for (i = 0; i < NR_TASKS; i++) {
+        struct task_struct *p = task[i];
+        if (!p || !sleep_deadline[i])
+            continue;
+        if ((long)(jiffies - (long)sleep_deadline[i]) < 0)
+            continue;
+        sleep_deadline[i] = 0;
+        if (p->state == TASK_INTERRUPTIBLE || p->state == TASK_UNINTERRUPTIBLE)
             p->state = TASK_RUNNING;
     }
 

@@ -86,6 +86,8 @@
 #define __NR_sigprocmask 68
 #define __NR_sigsuspend 69
 #define __NR_sigaction 70
+#define __NR_sleep 71
+#define __NR_select 72
 
 /* open flags (Linux 0.01) */
 #define O_RDONLY 0
@@ -145,6 +147,18 @@ static inline type name(atype a, btype b, ctype c) \
         : "=a"(__res) \
         : "0"(__NR_##name), "b"((long)(a)), "c"((long)(b)), \
           "d"((long)(c)) \
+        : "memory"); \
+    return (type)__res; \
+}
+
+#define _syscall5(type, name, atype, a, btype, b, ctype, c, dtype, d, etype, e) \
+static inline type name(atype a, btype b, ctype c, dtype d, etype e) \
+{ \
+    long __res; \
+    __asm__ volatile("int $0x80" \
+        : "=a"(__res) \
+        : "0"(__NR_##name), "b"((long)(a)), "c"((long)(b)), \
+          "d"((long)(c)), "S"((long)(d)), "D"((long)(e)) \
         : "memory"); \
     return (type)__res; \
 }
@@ -214,5 +228,12 @@ _syscall1(int, sigsuspend, unsigned long *, mask)
    pointers so this header does not have to depend on it. */
 _syscall3(int, sigaction, int, sig, unsigned long *, act,
           unsigned long *, oldact)
+
+/* B5.7: waiting with a deadline.  select()'s sets are one unsigned long
+   each (nfds <= 32) and its timeout is in ticks, not a struct timeval. */
+_syscall1(int, sleep, unsigned long, seconds)
+_syscall5(int, select, int, nfds, unsigned long *, readfds,
+          unsigned long *, writefds, unsigned long *, exceptfds,
+          unsigned long *, timeout)
 
 #endif

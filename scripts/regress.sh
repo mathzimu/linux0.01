@@ -341,6 +341,19 @@ run_case sigaction "$BASE && make prog NAME=sigactiontest" 'exec /bin/sigactiont
     'sigaction: after a second raise: usr1=3 (want 3)' \
     'sigaction: PASS'
 
+# 场景 27: sleep() 与 select()（B5.7）—— 内核第一次有"到期唤醒"
+#   在此之前内核没有"过一会儿叫醒我"的手段：alarm() 是靠**投递信号**叫醒任务的，
+#   而"超时"不是信号。sleep_deadline[]（按 pid 一个 jiffies 截止时间，由 do_timer 检查）
+#   补上了这一层，两个系统调用都建在它上面。这条场景验证：sleep 真的睡够、select 在
+#   无人输入时按超时返回 0 且清空集合、控制台可写所以 select(fd1) 立刻返回 1、
+#   以及信号能打断 sleep 并报告剩余秒数（POSIX 语义）。
+run_case seltest "$BASE && make prog NAME=seltest" 'exec /bin/seltest\n' \
+    'seltest: sleep(2) -> 0' \
+    'seltest: select(fd0, 1s) -> 0, rfds=0' \
+    'seltest: select(fd1, no timeout) -> 1, wfds=2' \
+    'seltest: sleep(10) with alarm(1) -> 9 left, hits=1' \
+    'seltest: PASS'
+
 echo
 echo "================================"
 echo "  $PASS passed, $FAIL failed"

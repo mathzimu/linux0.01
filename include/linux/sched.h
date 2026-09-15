@@ -235,6 +235,13 @@ int sys_signal(int sig, unsigned long handler);
 int sys_sigprocmask(int how, unsigned long *set, unsigned long *oldset);
 int sys_sigsuspend(unsigned long *mask);
 int sys_sigaction(int sig, unsigned long *act, unsigned long *oldact);
+int sys_sleep(unsigned long seconds);
+int sys_select(int nfds, unsigned long *readfds, unsigned long *writefds,
+               unsigned long *exceptfds, unsigned long *timeout);
+/* Per-task "wake me at this jiffie" deadline, set by sleep()/select() and
+   cleared by do_timer().  0 = no deadline.  Outside task_struct for the
+   same reason the signal mask is (see above). */
+extern unsigned long sleep_deadline[NR_TASKS];
 /* Called from sys_sigreturn (kernel/asm.s) to put the caller's signal
    mask back after a handler has run with its own signal blocked. */
 void sigreturn_restore_mask(void);

@@ -65,8 +65,8 @@
 2. **段选择子**：`KERNEL_CS=0x08` `KERNEL_DS=0x10` `USER_CS=0x1B` `USER_DS=0x23`
 3. **两个 Shell**：内核态 `$`（`main()` 直接 `shell_main()`）与 Ring3 的 `/bin/sh`
    （`exec /bin/sh`，自己 fork+execve 子程序）；用户程序经 `int 0x80` 自动切回内核栈
-4. **67 个系统调用，编号与 1991 Linux 0.01 的 sys_call_table 完全一致**（外加 67–70 四个扩展：
-   sigreturn / sigprocmask / sigsuspend / sigaction）；`include/unistd.h`
+4. **67 个系统调用，编号与 1991 Linux 0.01 的 sys_call_table 完全一致**（外加 67–72 五个扩展：
+   sigreturn / sigprocmask / sigsuspend / sigaction / sleep / select）；`include/unistd.h`
    提供 `int 0x80` 包装宏；waitpid=7、execve=11、pipe=42、signal=48…dup2=63、setsid=66；
    stub 项与 0.01 自身的 -ENOSYS 一致）
 5. **MINIX FS 已打通读写**：挂 `minix.img`（`make minix.img`）后 `ls`/`cat` 可用，
