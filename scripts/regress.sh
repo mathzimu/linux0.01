@@ -425,6 +425,21 @@ QEMU_MIN_WAIT=60 run_case execrace \
     'execrace: 4/4 children' \
     'execrace: PASS'
 
+# 场景 31: 默认镜像自带一套用户态工具
+#   `make minix.img` 现在除了 mkminix 自带的 /bin/hello，还注入
+#   /bin/{ls,cat,cp,grep,touch,wc,sh}，所以 `exec /bin/sh` 之后敲 ls/cat/wc/cp
+#   是真能跑起来的，而不是 `sh: /bin/ls: cannot execute`。
+#   这条场景锁住那个默认值：Makefile 里的注入列表一旦被改坏（例如用 patsubst
+#   生成 "path:name"，它只替换第一个 %，名字会变成字面量 '%'），这里立刻红。
+run_case userland 'rm -f minix.img && make minix.img' \
+    'exec /bin/sh\ncat /hello.txt\nwc < /readme.txt\ncp /hello.txt /c2\ntouch /t3\nls /\nls /docs\nexit\n' \
+    'Hello from MINIX v1!' \
+    '3 19 129 -' \
+    'cp: /hello.txt -> /c2 done' \
+    't3' \
+    'note.txt' \
+    'exec: child 1 exit_code=0'
+
 echo
 echo "================================"
 echo "  $PASS passed, $FAIL failed"

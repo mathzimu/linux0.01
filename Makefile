@@ -167,9 +167,23 @@ user/%.elf: user/crt.o user/%.o user/lib.o
 prog: tools/mkminix user/$(NAME).elf
 	tools/mkminix minix.img user/$(NAME).elf:$(NAME)
 
-# MINIX v1 test disk image (used with: qemu -hda minix.img)
-minix.img: tools/mkminix user/hello.elf
-	tools/mkminix minix.img
+# The userland that ships in the default image.  tools/mkminix always
+# adds hello.txt/readme.txt/big.txt and /bin/hello; these are the
+# programs that make the Ring3 shell usable the moment you get there
+# (`exec /bin/sh` -> ls, cat, wc, cp, grep, touch and a nested sh all
+# resolve instead of printing "sh: /bin/ls: cannot execute").
+DEFAULT_USERLAND = ls cat cp grep touch wc sh
+DEFAULT_ELVES    = $(patsubst %,user/%.elf,$(DEFAULT_USERLAND))
+# NB: patsubst substitutes only the first '%' in the replacement, so the
+# "path:name" spec pairs are built with foreach instead.
+DEFAULT_SPECS    = $(foreach p,$(DEFAULT_USERLAND),user/$(p).elf:$(p))
+
+# MINIX v1 test disk image (used with: qemu -hda minix.img).
+# Scenario preps call tools/mkminix directly with their own injections and
+# keep working unchanged: mkminix only ever adds /bin/hello by default,
+# and skips it silently when user/hello.elf is not built yet.
+minix.img: tools/mkminix user/hello.elf $(DEFAULT_ELVES)
+	tools/mkminix minix.img $(DEFAULT_SPECS)
 
 # One-shot regression suite (see scripts/regress.sh): builds a clean
 # MINIX disk per scenario, boots QEMU, and asserts the serial output.

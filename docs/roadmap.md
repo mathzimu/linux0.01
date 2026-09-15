@@ -510,7 +510,7 @@ make Image                # 引导镜像
 # 运行/验证
 qemu-system-i386 -fda Image -hda minix.img -m 16M -boot a
 python3 scripts/qemu-test.py --image Image --hda minix.img --keys $'cmd\n'
-make test                   # 一键回归（scripts/regress.sh，30 个场景断言）
+make test                   # 一键回归（scripts/regress.sh，31 个场景断言）
 make check                  # 静态校验：内存地图 + 文档一致性 + lint 反向自测
 make check-layout           # 只校验内存地图（含 _end 未越界）
 make check-docs             # 只校验文档里引用的布局常量/场景数与源码一致
@@ -639,6 +639,31 @@ inode 表只用了 **4/64** ⇒ 不是表满；也没有 `hd:` 报错 ⇒ 不是
 
 **回归**：场景 30 `execrace`（`user/execrace.c`）—— 先 fork 4 个子进程，**每个都 execve 同一个**
 `/bin/cat`，比 shell 管道确定得多；断言 `execrace: 4/4 children` 与 `PASS`。
+
+## U1 — 默认镜像自带一套用户态工具（可用性）✅ 已完成
+
+**问题**：`make minix.img` 以前只把 `/bin/hello`（mkminix 的默认注入）放进镜像，于是进了 Ring3 shell
+（`exec /bin/sh`）之后敲 `ls`/`cat`/`wc` 只会得到 `sh: /bin/ls: cannot execute`：镜像"能启动、不能用"。
+从使用者视角看就是"生成出来的 `minix.img` 测试不了"——但镜像本身是好的（默认配置下 Ring0 shell 的
+`ls`/`cat`/`wtest` 与 `make test` 全绿），缺的是 `/bin` 里的程序集合。
+
+**改动**：
+
+- `Makefile` 新增 `DEFAULT_USERLAND = ls cat cp grep touch wc sh`，`minix.img` 目标依赖对应的
+  `user/*.elf`，并把它们以 `path:name` 注入 `/bin`；
+- 注入名用 `$(foreach ...)` 生成，**不能用 `patsubst`**：`$(patsubst %,user/%.elf:%,...)` 只会替换
+  替换串里的**第一个** `%`，名字会变成字面量 `%`（实测真的注入成了 `/bin/%`，程序全挤在一个名字上）。
+  踩过一次，所以写在这里；
+- `tools/mkminix` 里那条注入日志此前写成 `as /<name>`（参数名也叫 `root_zone`），而所有调用方传的都是
+  `bin_zone` —— 打印与注释一起订正为 `/bin/<name>`，避免下一个人被误导。
+
+**影响面仅限 `make minix.img`**：场景 prep 一律直接调 `tools/mkminix` 并自带 `path:name`；mkminix 只在
+`user/hello.elf` 存在时额外注入 `/bin/hello`，不存在则静默跳过 —— 所以 30 个既有场景的镜像内容不变。
+
+**回归**：场景 31 `userland` —— 用默认镜像启动，`exec /bin/sh` 后连跑
+`cat` / `wc <` / `cp` / `touch` / `ls /` / `ls /docs`，断言各程序**真实输出**
+（`Hello from MINIX v1!`、`3 19 129 -`、`cp: /hello.txt -> /c2 done`、`t3`、`note.txt`），
+而不是只断言"文件存在"。
 
 ## 已知问题：一个会话里的第二个管道会让内核三重故障（**未修复**）
 

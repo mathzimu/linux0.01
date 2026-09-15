@@ -349,14 +349,16 @@ exec: child 1 exit_code=7
 **已内置示例**：`hello`（argv）· `catfile`（读文件）· `memtest`（堆复用）· `printf`（格式演示）· `ls`（列目录）· `str`（libc 演示）· `sigchld`（SIGCHLD 语义）· `pipedemo`（管道通信）· `sysdemo`（0.01 对齐 syscall）· `bigdir`（目录扩容）· `bigalloc`（堆与缓冲区缓存不重叠）· `sigdemo`（自定义信号处理器）· `cowtest`（fork 写时复制隔离）· `demandtest`（按需调页）· `oomtest`（内存耗尽只杀肇事进程）· `sh`（Ring3 shell）· `echotest`（Ring3 stdin）。
 **基础应用程序**：`cat`（读文件输出）· `wc`（统计行/词/字节）· `grep`（行内搜索）· `cp`（复制文件）· `touch`（创建空文件）。
 
+这些程序**默认就在镜像里**：`make minix.img` 会把 `ls`、`cat`、`cp`、`grep`、`touch`、`wc`、`sh` 一起注入 `/bin`，所以 `exec /bin/sh` 进去之后直接敲 `ls`、`cat /hello.txt`、`wc < /readme.txt` 就能用，不需要先 `make prog NAME=...`。
+
 ---
 
 ## 🧪 自动化验证
 
-**一键回归**（30 个场景：exec / 管道 / chdir / 硬链接 / fork-waitpid / 信号 / 系统调用 / 内存隔离 / 目录扩容 / 基础应用 / 堆与缓存不重叠 / 启动自检 / 自定义信号处理器 / **Ring3 shell** / **定时回写** / **写时复制** / **按需调页** / **内存耗尽** / **文件权限** / **shell 管道与重定向** / **中断驱动磁盘** / **内存压力下的页回收** / **信号投递时机** / **匿名页换出** / **信号屏蔽与 sigsuspend** / **sigaction** / **sleep 与 select** / **后台任务与 wait** / **间接块大文件** / **并发 exec**）：
+**一键回归**（31 个场景：exec / 管道 / chdir / 硬链接 / fork-waitpid / 信号 / 系统调用 / 内存隔离 / 目录扩容 / 基础应用 / 堆与缓存不重叠 / 启动自检 / 自定义信号处理器 / **Ring3 shell** / **定时回写** / **写时复制** / **按需调页** / **内存耗尽** / **文件权限** / **shell 管道与重定向** / **中断驱动磁盘** / **内存压力下的页回收** / **信号投递时机** / **匿名页换出** / **信号屏蔽与 sigsuspend** / **sigaction** / **sleep 与 select** / **后台任务与 wait** / **间接块大文件** / **并发 exec** / **默认镜像用户态**）：
 
 ```bash
-make test                    # 等价于 scripts/regress.sh（30 个场景，TCG 下约 10.5 分钟）
+make test                    # 等价于 scripts/regress.sh（31 个场景，TCG 下约 11 分钟）
 make test-fast               # 快集：跳过 autosync/oom/evict 三个重场景（CI 的 PR 跑这个）
 ```
 

@@ -149,8 +149,10 @@ static void fill(int zone, const char *text, int len)
 
 static int next_inode = 8;      /* inodes 1-7 are used by the base fs */
 
-/* Inject an ELF file as a root-dir file: spec = "path:name". */
-static int inject_elf(const char *spec, int root_zone)
+/* Inject an ELF file as a /bin file: spec = "path:name".  (The directory
+   zone is a parameter; every caller passes bin_zone, but the name is kept
+   generic so a future caller can inject elsewhere.) */
+static int inject_elf(const char *spec, int dir_zone)
 {
     static unsigned char buf[512 * 1024];
     char path[160], name[15];
@@ -211,8 +213,8 @@ static int inject_elf(const char *spec, int root_zone)
         zones[7] = (unsigned short)ind;
         put_inode(next_inode, MODE_REG, (unsigned long)elen, 1, zones, 8);
     }
-    add_dir_entry(root_zone, next_inode, name);
-    printf("mkminix: injected %s as /%s (inode %d, %d bytes, %d zones)\n",
+    add_dir_entry(dir_zone, next_inode, name);
+    printf("mkminix: injected %s as /bin/%s (inode %d, %d bytes, %d zones)\n",
            path, name, next_inode, elen, nz);
     next_inode++;
     return 0;
