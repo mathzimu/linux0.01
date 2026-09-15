@@ -39,11 +39,20 @@ struct partition {
     unsigned long nr_sects;
 };
 
+/* LBAs here are relative to the start of the root image, not to the start
+   of the device: see the comment on root_lba in drivers/hd.c.  On the
+   single-file disk image the filesystem sits behind the kernel, and the
+   offset comes from the boot sector via the boot parameter block. */
 int hd_read_sectors(unsigned int lba, unsigned int nsects, char *buf);
 int hd_write_sectors(unsigned int lba, unsigned int nsects, char *buf);
 void hd_out(unsigned int drive, unsigned int nsect,
             unsigned int sect, unsigned int head,
             unsigned int cyl, unsigned int cmd);
+
+/* Install / read the root image's base LBA (main() sets it from
+   BOOT_FS_BASE_ADDR before sys_setup() does the first read). */
+void hd_set_root_lba(unsigned int lba);
+unsigned int hd_root_lba(void);
 
 /* Unmask IRQ14 so the drive's own interrupt can wake a sleeping task
    (drivers/hd.c); called from main() before the first disk access. */

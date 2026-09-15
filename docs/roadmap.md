@@ -506,10 +506,13 @@ make                      # 内核（i686-elf 交叉工具链）
 make minix.img            # MINIX 测试盘（注入 hello + 参数程序）
 make prog NAME=xxx        # 编译 user/xxx.c 并注入
 make Image                # 引导镜像
+make disk                 # 单文件自启动镜像 linux.img（内核 + 文件系统同一张盘）
 
 # 运行/验证
 qemu-system-i386 -fda Image -hda minix.img -m 16M -boot a
+qemu-system-i386 -hda linux.img -m 16M -boot c       # 单文件镜像（等价于 make run-disk）
 python3 scripts/qemu-test.py --image Image --hda minix.img --keys $'cmd\n'
+python3 scripts/qemu-test.py --disk linux.img --keys $'cmd\n'   # 只挂一张盘
 make test                   # 一键回归（scripts/regress.sh，32 个场景断言）
 make check                  # 静态校验：内存地图 + 文档一致性 + lint 反向自测
 make check-layout           # 只校验内存地图（含 _end 未越界）
@@ -565,7 +568,8 @@ make check-docs-selftest    # 反向测试 check-docs（8 个坏样本必须被�
 | `user/crt.s` | 用户程序入口（读 `USER_ARGC_ADDR`/`USER_ARGV_ADDR`） |
 | `user/hello.c … bigalloc.c` | 示例程序（printf / readdir / libc / SIGCHLD / 隔离 / 堆-缓存不重叠） |
 | `tools/mkminix.c` | 镜像制作（`tools/mkminix minix.img prog.elf:name` 注入；目录含 . / ..） |
-| `tools/build.c` | 引导镜像拼接 |
+| `tools/build.c` | 引导镜像拼接（软盘 `Image`；基准 LBA 显式写 0） |
+| `tools/mkdisk.c` | ★ 单文件自启动镜像（算出 fs 基准 LBA → 写进引导扇区 → 拼上文件系统，见 D1） |
 | `scripts/qemu-test.py` | 无头回归驱动 |
 | `docs/limitations.md` | 实现边界（权威：源码 > 本文件） |
 
@@ -664,6 +668,98 @@ inode 表只用了 **4/64** ⇒ 不是表满；也没有 `hd:` 报错 ⇒ 不是
 `cat` / `wc <` / `cp` / `touch` / `ls /` / `ls /docs`，断言各程序**真实输出**
 （`Hello from MINIX v1!`、`3 19 129 -`、`cp: /hello.txt -> /c2 done`、`t3`、`note.txt`），
 而不是只断言"文件存在"。
+
+## D1 — 单文件自启动镜像：一张盘启动整个系统 ✅ 已完成
+
+**问题**：到今天为止，系统要**两个文件**才能跑起来：`Image`（1.44MB 软盘：引导扇区 + setup +
+内核）和 `minix.img`（3MB 裸镜像 = 1MB MINIX v1 文件系统 + 2MB swap），后者被内核当作**第一块
+IDE 盘**（dev 0x301）挂成根文件系统：
+
+```bash
+qemu-system-i386 -fda Image -m 16M -boot a -hda minix.img
+```
+
+"软盘 + 硬盘"是今天的运行方式，也是使用者第一次跑这个内核最容易漏掉的一件事（漏挂 `-hda` 就
+没有文件系统，见文末的已知问题）。现在有一个文件就够：
+
+```bash
+make disk
+qemu-system-i386 -hda linux.img -m 16M -boot c     # 或 make run-disk
+```
+
+`Image`、`minix.img`、`make run`、`make run-cd`、`make debug` 与整套回归的**行为**一行没改：
+单文件镜像用的是**同一个** `kernel/system.bin`，`Image` 仍是 1474560 字节、仍走原来那条软盘 CHS
+载入路径（引导扇区多了"介质是硬盘"时的一段分支和 4 字节基准 LBA 字段，软盘分支逐条未动）。
+
+**布局**（`tools/mkdisk` 写出；单位都是 512 字节扇区，数字取自本机的实际构建）：
+
+| 区域 | 位置 | 内容 |
+|------|------|------|
+| 引导扇区 | LBA 0 | `Image` 的引导扇区（同一段代码）+ 写进 0x1F4 的基准 LBA |
+| setup | LBA 1..4 | 同 `Image` |
+| 内核 | LBA 5..188 | `kernel/system.bin`（184 扇区） |
+| 根文件系统 | LBA 192 起 | MINIX v1（1MB）+ 裸 swap（2MB），即 `disk-fs.img` |
+| 补齐 | 到 LBA 7056 | 全零，凑满整柱面 |
+
+**基准 LBA 是算出来的，不是硬编码的**：`tools/mkdisk` 取"内核最后一扇区之后的下一个 1KB 边界"
+（`fs_base`），**同时**把文件系统放在那里、把这个数字写进**它自己正在生成的那张镜像的引导扇区**
+（偏移 0x1F4）。传递链只有一条：
+
+```
+boot/boot.s     从自己的引导扇区读出 fs_base_lba，用 %ebx 交给 setup.s
+setup.s         mov %ebx,(4) —— 存进 0x10004，紧挨着 INT 15h 结果所在的 0x10002
+kernel/main.c   从 BOOT_FS_BASE_ADDR(0x10004) 读出 → hd_set_root_lba() 装进驱动
+drivers/hd.c    hd_read_sectors/hd_write_sectors 里 lba += root_lba
+```
+
+镜像里写着偏移、内核从镜像里读偏移，两边不可能对不上——这也是**同一份内核二进制**能被软盘
+`Image`（基准 0，因为 `minix.img` 是独立设备、文件系统就在它的 LBA 0）和单文件镜像（基准 192）
+同时使用的原因。内核变大导致 `fs_base` 变化时，`boot.s` 与内核里也没有任何需要跟着改的常量。
+
+**为什么选"可配置基准 LBA"而不是分区表**（两条路都可行，这里是选型理由）：
+
+- 内核**完全没有分区表解析**（`sys_setup()` 直接 `bread(0x301, 1)`）。走分区表要先教 setup.s /
+  内核读 MBR、再教块层"分区内偏移 + 分区边界"两件事，而这里真正需要的只是一个**偏移量**；
+- 而且无论哪条路，偏移量都得从镜像传给内核——**传递通道才是要设计的东西**。分区表只是把同一个
+  数字抄了第二份，多出一个可能与"实际布局"不一致的来源；
+- 把数字放进**引导扇区**（而不是编译进内核）还带来一个额外好处：同一个内核二进制既能被软盘引导
+  也能被单文件盘引导，`Image` 这张软盘的大小/布局/软盘载入路径都不变，31 个回归场景走的还是
+  原来那条代码路径（`hd.c` 里那次加法在基准 0 时是空操作）；
+- 代价：这张盘**没有 MBR 分区表**，靠 BIOS 直接执行 LBA 0（SeaBIOS/QEMU 就是这样）。要"活动分区 +
+  VBR"那种分区链路才肯引导的软件不支持——见 `docs/limitations.md`。
+
+**硬盘怎么读**：软盘的 CHS 路径（2 磁头 / 18 扇区每道）对硬盘不成立（内核的 IDE 驱动按
+**16 磁头 / 63 扇区每道**算 CHS），所以 `boot/boot.s` 对 `%dl >= 0x80` 的介质改走
+**INT 13h AH=42h（EDD LBA 读）**，与几何无关。仍然一次读一扇区（理由和 CHS 路径一样：SeaBIOS 的
+多扇区读出现过"报告成功但少传"），循环状态同样全部放在内存里（INT 13h 会破坏寄存器）。
+
+**镜像尺寸为什么要凑整柱面**：`linux.img` 被补齐到**整数个柱面**（16 × 63 = 1008 扇区）。
+QEMU 对没在命令行指定几何的 IDE 盘，按 `柱面数 = 总扇区 / 1008`（向下取整）猜几何，内核的
+CHS 也正好是 16/63——于是**超出最后一个整柱面的尾巴根本读不到**，而 swap 区恰恰在镜像末尾：
+旧的 `minix.img`（6144 扇区 = 6.09 个柱面）就丢了最后 96 扇区 ≈ 12 个 swap 槽。`tools/mkdisk`
+把镜像补到 7056 扇区（7 个整柱面），swap 的每一槽都落在可寻址范围内。
+
+**验证**（两条都能自己复现；本机留的全文在 `test-logs/`，该目录不入库）：
+
+- 无头冷启动 `python3 scripts/qemu-test.py --disk linux.img --keys $'ls\ncat /hello.txt\nexec /bin/sh\nls /bin\nwc < /readme.txt\nexit\n'`
+  的串口输出里只有**一条**启动横幅（这正是 `check_no_reboot()` 的判据，复位循环跑不出来），
+  并依次出现 `MINIX: root filesystem at LBA 192 (single-image disk)`、
+  `MINIX: superblock loaded, magic=0x137f`、`hd: IRQ14 enabled`，随后
+  `ls`、`cat /hello.txt`、`exec /bin/sh`、`ls /bin`、`wc < /readme.txt` 全部正常；
+- swap 区专测：`tools/mkminix test-logs/sw-fs.img user/swaptest.elf:swaptest` 造一张带 swaptest 的
+  文件系统，`tools/mkdisk test-logs/sw-disk.img Image test-logs/sw-fs.img` 拼进单文件镜像，
+  再用 `--disk` + `--mem 4M` 跑 `exec /bin/swaptest`——仍然 `PASS`，且
+  `114 pages swapped out, 50 swapped back in, 512 slots free`。这条专盯"镜像末尾的裸 swap 区在
+  单文件布局里真的可寻址"：常规套件跑的是 `Image` + `minix.img`，覆盖不到单文件镜像的高 LBA；
+- 既有两条启动路径未受影响：`Image` + `minix.img` 与 `-cdrom kernel.iso -hda minix.img`（El Torito 软盘
+  仿真 ⇒ `%dl=0` ⇒ CHS 路径、基准 0）冷启动都是**一条**横幅、**一行** `buffer cache:`、**0 次** `PAGE FAULT`；
+- 回归：`TEST_SKIP_HEAVY=1 scripts/regress.sh` 28/28，全量 `scripts/regress.sh` 32/32，`make check` 全绿。
+
+**新增/改动的文件**：`tools/mkdisk.c`（新，镜像组装）、`boot/boot.s`（EDD 路径 + 转发基准 LBA）、
+`boot/setup.s`（把 %ebx 存进启动参数块）、`include/linux/memmap.h`（`BOOT_FS_BASE_ADDR`）、
+`drivers/hd.c` + `include/linux/hdreg.h`（`hd_set_root_lba`/`hd_root_lba`，偏移只在驱动里加一次）、
+`kernel/main.c`（读取参数）、`fs/minix.c`（打一行基准 LBA）、`tools/build.c`（显式把软盘的基准写成 0）、
+`Makefile`（`disk` / `run-disk`）、`scripts/qemu-test.py`（新增 `--disk`，便于无头验证）。
 
 ## 已知问题：一个会话里的第二个管道会让内核三重故障（**未修复**）
 

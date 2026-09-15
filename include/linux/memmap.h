@@ -19,6 +19,21 @@
  * INT 15h extended-memory size here as a 16-bit KB count). */
 #define BOOT_PARAM_ADDR     0x0010002
 
+/* The next slot of the same block: the 512-byte LBA at which the root
+ * filesystem starts on the boot device (32-bit).  boot/boot.s reads it
+ * out of its own boot sector - where tools/mkdisk wrote it - and setup.s
+ * copies it here before the kernel starts; main() hands it to the disk
+ * driver (hd_set_root_lba()).
+ *
+ * It is a *parameter*, not a constant compiled into the kernel, on
+ * purpose: tools/mkdisk derives the offset from the kernel size and lays
+ * the filesystem down at exactly that sector in the same image, so the
+ * two cannot disagree.  A floppy-booted Image carries 0, which is what
+ * the two-file setup (Image + minix.img) needs, since minix.img is a
+ * device of its own whose filesystem starts at its LBA 0.
+ * See docs/roadmap.md, "单文件自启动镜像". */
+#define BOOT_FS_BASE_ADDR   0x0010004
+
 /* Nothing below this is ever handed out by the page allocator; it holds
  * the boot code, the kernel image and the VGA/BIOS holes. */
 #define KERNEL_LOW_MEM      0x00100000

@@ -34,6 +34,16 @@ int sys_setup(void)
     struct minix_superblock *sb;
     int dev = 0x301;
 
+    /* The filesystem is not necessarily at LBA 0 of the device: on the
+       single-file hard-disk image it sits behind the boot sector, setup
+       and the kernel.  main() has already handed that offset to the disk
+       driver (from the boot sector, via the boot parameter block), so
+       block 1 below - byte 1024 of the image - lands on the superblock
+       either way. */
+    if (hd_root_lba())
+        printk("MINIX: root filesystem at LBA %u (single-image disk)\n",
+               hd_root_lba());
+
     bh = bread(dev, 1);
     if (!bh) return -1;
 

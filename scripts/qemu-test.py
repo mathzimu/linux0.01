@@ -76,6 +76,9 @@ def main():
     ap.add_argument('--image', help='floppy image (Image)')
     ap.add_argument('--iso', help='bootable ISO')
     ap.add_argument('--hda', help='IDE disk image (MINIX fs)')
+    ap.add_argument('--disk', help='single self-booting image (Makefile '
+                                   'target `disk`): kernel *and* root '
+                                   'filesystem on IDE 0:0, booted from it')
     ap.add_argument('--out', default='/tmp/qtest', help='output prefix')
     ap.add_argument('--hold', type=float, default=30.0,
                     help='MAXIMUM seconds to wait for the guest to be ready.  '
@@ -120,12 +123,22 @@ def main():
     cmd = [args.qemu, '-m', args.mem, '-vga', 'std', '-display', 'none',
            '-serial', 'file:%s' % serial,
            '-monitor', 'unix:%s,server,nowait' % mon]
-    if args.image:
+    if args.disk:
+        # One image, one medium: the whole system (boot sector, setup,
+        # kernel and the MINIX filesystem) is on the first IDE disk, so
+        # there is no floppy to attach and nothing to attach beside it.
+        if args.image or args.iso or args.hda:
+            print('--disk is the whole system: do not combine it with '
+                  '--image/--iso/--hda', file=sys.stderr)
+            sys.exit(2)
+        cmd += ['-drive', 'file=%s,format=raw,if=ide,index=0' % args.disk,
+                '-boot', 'c']
+    elif args.image:
         cmd += ['-drive', 'file=%s,format=raw,if=floppy,index=0' % args.image]
     elif args.iso:
         cmd += ['-cdrom', args.iso, '-boot', 'd']
     else:
-        print('need --image or --iso', file=sys.stderr)
+        print('need --disk, --image or --iso', file=sys.stderr)
         sys.exit(2)
     if args.hda:
         cmd += ['-drive', 'file=%s,format=raw,if=ide,index=0' % args.hda]

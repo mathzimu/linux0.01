@@ -12,6 +12,15 @@ _start:
     mov %ax, %ss
     mov $0x0800, %sp
 
+    /* Park the root-filesystem base LBA that boot.s left in %ebx in the
+       boot parameter block (linear 0x10004, the 32-bit slot next to the
+       INT 15h result at 0x10002).  Writing over setup's own first
+       instructions is deliberate and safe: they have already executed,
+       and setup never jumps back to _start - the same idiom as the
+       `mov %ax,(2)` below.  The kernel reads this in main()
+       (BOOT_FS_BASE_ADDR); see docs/roadmap.md. */
+    mov %ebx, (4)
+
     mov $0x88, %ah
     int $0x15
     mov %ax, (2)

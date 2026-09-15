@@ -28,6 +28,15 @@ void main(void)
     else
         phys_mem_end = (1 << 20) + ((unsigned long)ext_kb << 10);
 
+    /* The next slot holds where the root filesystem starts on the boot
+       device.  boot/boot.s copies it out of its own boot sector (tools/
+       mkdisk patched it there, tools/build left it 0 for the floppy), so
+       a single-file image can put the filesystem behind the kernel
+       without the kernel hard-coding an offset that could drift from the
+       image.  Installed here because sys_setup() reads the superblock
+       before anything else touches the disk. */
+    hd_set_root_lba(*((unsigned int *)BOOT_FS_BASE_ADDR));
+
     /* boot/head.s identity-maps KERNEL_IDENTITY_TOP bytes (16MB, four
        page tables), so usable RAM cannot extend past it.  mem_check()
        panics if this leaves less than the layout needs. */

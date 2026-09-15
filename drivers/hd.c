@@ -37,6 +37,36 @@
 #define HD_TIMEOUT_TICKS 50        /* ~0.5s at 100Hz */
 #define HD_POLL_LIMIT    1000000UL /* spins when interrupts are off */
 
+/* ====================================================================
+ * Where the root image starts on the boot device.
+ *
+ * Every LBA this driver takes is relative to the start of the *root
+ * image* - the MINIX filesystem plus the raw swap area behind it - not to
+ * the start of the physical device.  On the two-file setup (floppy Image
+ * + minix.img) the image starts at LBA 0, and that is what the boot
+ * sector carries.  On the single-file hard-disk image the same bytes hold
+ * the offset of the filesystem behind the boot sector, setup and the
+ * kernel, and boot/boot.s forwards it through the boot parameter block
+ * (BOOT_FS_BASE_ADDR); main() installs it before sys_setup() reads the
+ * superblock.
+ *
+ * The offset lives here, in the one place that actually talks to the
+ * controller, so the filesystem block layer (fs/buffer.c) and the swap
+ * code (mm/memory.c, which writes at SWAP_START_LBA of the same image)
+ * cannot disagree about where the image begins.
+ * ==================================================================== */
+static unsigned int root_lba = 0;
+
+void hd_set_root_lba(unsigned int lba)
+{
+    root_lba = lba;
+}
+
+unsigned int hd_root_lba(void)
+{
+    return root_lba;
+}
+
 static struct task_struct *hd_wait = NULL;     /* waiting for the drive */
 static struct task_struct *hd_lock_q = NULL;   /* waiting for the lock  */
 static volatile int hd_locked = 0;
@@ -170,6 +200,7 @@ int hd_read_sectors(unsigned int lba, unsigned int nsects, char *buf)
     unsigned int cyl, head, sect;
     int j, ret = 0;
 
+    lba += root_lba;                 /* image-relative -> device LBA */
     hd_geometry(lba, &cyl, &head, &sect);
 
     hd_lock();
@@ -198,6 +229,7 @@ int hd_write_sectors(unsigned int lba, unsigned int nsects, char *buf)
     unsigned int cyl, head, sect;
     int j, ret = 0;
 
+    lba += root_lba;                 /* image-relative -> device LBA */
     hd_geometry(lba, &cyl, &head, &sect);
 
     hd_lock();

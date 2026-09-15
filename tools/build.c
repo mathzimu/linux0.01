@@ -67,6 +67,14 @@ int main(int argc, char *argv[])
     buf[0x1F1] = (setup_sectors >> 8) & 0xFF;
     buf[0x1F2] = kernel_sectors & 0xFF;
     buf[0x1F3] = (kernel_sectors >> 8) & 0xFF;
+    /* 0x1F4 = root filesystem base LBA.  This image is the *floppy*
+       medium: the MINIX filesystem lives on a device of its own
+       (minix.img) and starts at its LBA 0, so the value boot.s forwards
+       to the kernel is 0.  tools/mkdisk builds the single-file hard-disk
+       image and patches the same four bytes with the offset it puts the
+       filesystem at.  Zeroing it here keeps the two producers explicit
+       instead of relying on the assembler's padding. */
+    buf[0x1F4] = buf[0x1F5] = buf[0x1F6] = buf[0x1F7] = 0;
 
     /* --- Open output image --- */
     out = fopen("Image", "wb");

@@ -61,6 +61,24 @@ docker run --rm -v $(pwd):/kernel -w /kernel linux-0.01-builder make clean all i
 qemu-system-i386 -cdrom kernel.iso -m 16M -boot d -hda minix.img
 ```
 
+### 一张盘启动整个系统（单文件镜像，推荐）
+
+`make disk` 把**内核与 MINIX 文件系统装进同一个** `linux.img`，于是不再需要 `-fda Image` +
+`-hda minix.img` 两个文件，也不用管 `-boot a/d` 的顺序：
+
+```bash
+make disk
+qemu-system-i386 -hda linux.img -m 16M -boot c     # 等价于 make run-disk
+```
+
+- 布局（`[引导扇区][setup][内核][MINIX fs + swap]`）、根文件系统基准 LBA 是怎么从内核大小
+  算出来并传给内核的、以及为什么不用分区表：见 `docs/roadmap.md` 的 **D1**；
+- 内嵌的文件系统来自 `disk-fs.img`（默认用户态：`/bin/{ls,cat,cp,grep,touch,wc,sh}` + `/bin/hello`）。
+  它**不是** `minix.img`——回归场景会用各自的 `/bin` 内容重建 `minix.img`，两者互不影响；
+- 无头验证：`python3 scripts/qemu-test.py --disk linux.img --keys $'ls\ncat /hello.txt\n'`
+- 限制：磁盘引导走 EDD（INT 13h AH=42h），且这张盘**没有 MBR 分区表**（内核不解析分区表），
+  见 `docs/limitations.md`。软盘 `Image` / 光盘 `kernel.iso` 的用法**完全不变**。
+
 ### VMware / VirtualBox（可选）
 
 镜像都是标准格式，可以直接挂进虚拟机，但有**两个硬性要求**：
@@ -68,11 +86,13 @@ qemu-system-i386 -cdrom kernel.iso -m 16M -boot d -hda minix.img
 1. **必须同时挂上 `minix.img`**（作为 **IDE 硬盘**）。MINIX 文件系统在它里面；不挂就没有文件系统
    可用——内核现在会打印 `Warning: no root filesystem found` 并照常进 shell（场景 32 守着这条），
    但 shell 里 `ls`/`cat`/`exec /bin/...` 都无文件可操作。
+   唯一例外是上一步的 `linux.img`：它**自带**文件系统，一张盘就够（推荐）。
 2. **硬盘控制器必须是 IDE**（Primary Master）。内核只有 PIIX 风格的 PIO 驱动（IRQ14、端口 0x1F0），
    没有 SATA/AHCI/SCSI/NVMe 驱动。
 
 | 用途 | 文件 | 在虚拟机里怎么挂 |
 |------|------|------------------|
+| 启动 + 文件系统（单文件） | `linux.img` | **硬盘（IDE / Primary Master）** → `linux.img`（`make disk` 生成，一张盘即可） |
 | 启动（软盘） | `Image` | 软盘设备 → `Image`（界面只认 `.flp` 时，复制一份成 `Image.flp`） |
 | 启动（光盘） | `kernel.iso` | CD/DVD → `kernel.iso`（El Torito **软盘仿真**，BIOS 可直接引导） |
 | 文件系统 | `minix.img` | **硬盘（IDE / Primary Master）** → `minix.img`（`make minix.img` 生成） |
@@ -81,11 +101,21 @@ qemu-system-i386 -cdrom kernel.iso -m 16M -boot d -hda minix.img
 即可；想把内核输出抓成文本文件，加一个**串口 → 输出到文件**（内核把控制台输出镜像到 COM1，测试 harness
 就是这么读日志的）。
 
+单文件镜像转成 VMware 磁盘（只换容器格式，镜像内容不变；仍须挂在 **IDE 0:0**）：
+
+```bash
+qemu-img convert -f raw -O vmdk -o adapter_type=ide linux.img linux.vmdk
+```
+
+（这条路径**没有实测**：本仓库只在 QEMU 上验证过；另外内核与 BIOS 的引导方式见 `docs/limitations.md`。）
+
 ### 构建产物
 
 | 文件 | 说明 |
 |------|------|
 | `Image` | 1.44MB 软盘镜像（`-fda Image` 直接启动） |
+| `linux.img` | **单文件自启动镜像**（`make disk`）：内核 + MINIX 文件系统在同一张盘上，`-hda linux.img -boot c` 一张盘启动（`make run-disk`） |
+| `disk-fs.img` | `linux.img` 内嵌的 MINIX 文件系统（1MB fs + 2MB swap，由 `tools/mkminix` 生成，默认用户态） |
 | `kernel.iso` | El Torito 启动光盘（**只含内核**；必须配 `-hda minix.img` 才有文件系统，否则 `ls`/`cat` 都无从谈起） |
 | `minix.img` | MINIX v1 测试盘（`make minix.img`，挂载真实文件系统用） |
 

@@ -31,7 +31,7 @@
 | 剩余页池 | 16MB 下约 3700 页（`memstat` 可查）；任务页/管道页/所有用户页共用 |
 | COW / 按需调页 | **已实现**（M3/B3）：用户页首次访问才分配（`do_no_page` 按区域校验后建页）；fork 让父子共享只读页并在 PTE 上打软件 COW 位，写缺页时 `un_wp_page` 复制。区域外的访问仍然杀进程 |
 | 页回收（B3/B4） | `get_free_page()` 在池子空时调用 `try_to_free_page()`，按代价从低到高：**全零页**（memset 即可重建）→ **只读镜像页**（下次取指由 `page_in_image()` 从可执行文件读回）→ **私有脏页换出**（B4：写到镜像末尾的裸 swap 区，槽号记在页表项里，缺页时读回）→ **COW 共享页**只解除映射（帧留给另一个 owner，仅作兜底、不产生空闲帧）。`memstat` 报 `pages evicted` / `COW mappings dropped` / `pages swapped out \| swapped back in \| slots free` |
-| 交换区（B4） | 镜像布局 `[MINIX fs 1MB][raw swap 2MB]`（`tools/mkminix.c` 追加，`SWAP_START_LBA` 与内核一致）：512 槽 × 4KB，**裸设备而非文件**，所以回收路径可以直接按 LBA 读写、不需要缓冲区或 inode。页表项编码 = present 0 + bit11 标记 + 槽号在高位（CPU 忽略非存在项的其他位）。fork 遇到已换出的页会先换入再 COW 共享（否则子进程会把它当成"从未访问"而拿到零页）；进程退出时 `free_page_tables` 归还槽位——`slots free` 回到 512 就是这条的回归 |
+| 交换区（B4） | 镜像布局 `[MINIX fs 1MB][raw swap 2MB]`（`tools/mkminix.c` 追加，`SWAP_START_LBA` 与内核一致）：512 槽 × 4KB，**裸设备而非文件**，所以回收路径可以直接按 LBA 读写、不需要缓冲区或 inode。页表项编码 = present 0 + bit11 标记 + 槽号在高位（CPU 忽略非存在项的其他位）。fork 遇到已换出的页会先换入再 COW 共享（否则子进程会把它当成"从未访问"而拿到零页）；进程退出时 `free_page_tables` 归还槽位——`slots free` 回到 512 就是这条的回归。**这些 LBA 都相对于根镜像起点**（驱动里统一加 `root_lba`），所以同一份 swap 代码在 `minix.img`（起点 LBA 0）和单文件镜像（起点在内核之后）上都成立 |
 | 程序镜像 | `execve` **不再预拷贝** LOAD 段：把段位置记进 `exe_regions[]` 并持有可执行文件 inode，缺页时才从文件读进新帧（`N image pages read back from the executable` 可见）。镜像页因此天然可回收，无需交换区 |
 | 用户堆 | `user/lib.c` 的 first-fit + bump（`[0x08100000,0x08200000)`，1MB），页由内核按需提供；`sys_brk` 只记录 `task_struct.brk`，堆边界由用户库自己管 |
 | fork 的用户栈 | 与父进程**共享只读页 + 写时复制**，不再有独立「子进程栈区」，也没有栈大小上限（受限于物理页） |
@@ -51,7 +51,7 @@
 | 项目 | 事实 |
 |------|------|
 | 类型 | MINIX v1 |
-| `sys_setup` | 读超级块到 `super_block[0]`（无分区表解析，dev 硬编码 0x301） |
+| `sys_setup` | 读超级块到 `super_block[0]`（无分区表解析，dev 硬编码 0x301）；文件系统**不必从设备的 LBA 0 开始**：基准 LBA 由镜像的引导扇区携带（`tools/mkdisk` 写入，`boot/boot.s` → setup.s → `BOOT_FS_BASE_ADDR` 0x10004 → `main()` → `hd_set_root_lba()`），块层再做 `lba += root_lba`。软盘 `Image` 的基准是 0（`minix.img` 是独立设备），单文件镜像的基准在内核之后（D1） |
 | 写路径 | **已打通**：`file_write` → 脏缓冲 → `sync_dev`/`sys_sync` → `ll_rw_block(WRITE)` → `hd_write_sectors` 落盘；inode 同步经 `write_inode` |
 | 缓冲 | `getblk` 复用前回写脏块、并从旧哈希链摘除（避免链环死循环）；`iget` 复用脏 inode 槽前先写盘；**定时回写已实现**（M2-3）：`do_timer` 置标志并唤醒专用回写任务（`kernel/sync.c`，占最后一个任务槽，保持用户 pid 从 1 开始），每 5 秒 `sync_dev()` 一次，只在真的写了块时打印 `sync: N block(s) written back`。缓存条数 256（见 §2：条数由内存地图派生，写死会压到用户堆） |
 | Shell ls/cat | **已实现**，走 open/read/close 系统调用；`wtest` 演示写路径 |
@@ -66,7 +66,7 @@
 |------|------|
 | 控制台 | VGA 文本 0xB8000；**作为 fd 0/1/2 出现在描述符表里**（`struct file tty_file`，`f_inode == NULL` 即"控制台"），所以 `dup2` 能把 stdout 换成文件或管道——重定向是靠这一点成立的，而不是靠 `sys_write` 里的硬编码分支 |
 | 键盘 | PS/2 扫描码 + Shift；IRQ 处理时**排空 8042 输出缓冲**（快速连击不丢键） |
-| 硬盘 | IDE PIO 读写；**中断驱动**（B2）：`hd_init()` 打开 IRQ14（从片掩码 0xFF→0xBF，此前整片屏蔽、`hd_interrupt_handler` 是死代码），发命令的任务 `sleep_on(&hd_wait)` 让出 CPU，由 IRQ14 唤醒；`jiffies` 截止时间 + 定时器保证"丢中断"只是超时而不是死机；开机阶段（`sti()` 之前）中断未开、`jiffies` 不走，此时退回有界轮询。因为任务会在驱动里睡眠，整次操作由 `hd_lock` 串行化。`memstat` 会打印累计 IRQ14 次数 |
+| 硬盘 | IDE PIO 读写；**中断驱动**（B2）：`hd_init()` 打开 IRQ14（从片掩码 0xFF→0xBF，此前整片屏蔽、`hd_interrupt_handler` 是死代码），发命令的任务 `sleep_on(&hd_wait)` 让出 CPU，由 IRQ14 唤醒；`jiffies` 截止时间 + 定时器保证"丢中断"只是超时而不是死机；开机阶段（`sti()` 之前）中断未开、`jiffies` 不走，此时退回有界轮询。因为任务会在驱动里睡眠，整次操作由 `hd_lock` 串行化。`memstat` 会打印累计 IRQ14 次数。**只有 PIIX 风格的主通道（0x1F0/IRQ14）主盘**：`hd_out(0,…)` 写死 drv=0，没有从盘/第二通道/SATA/AHCI；CHS 按 **16 磁头 / 63 扇区每道** 换算（与 QEMU 对未指定几何的 IDE 盘猜出来的几何一致）；所有 LBA 都相对**根镜像起点**，驱动里加 `root_lba` |
 | 串口 | **COM1 已实现**：控制台输出镜像，供 `-serial file:` 无头测试捕获精确文本 |
 
 ## 6. 构建与运行
@@ -76,7 +76,8 @@
 | 目标 | i386 32-bit freestanding |
 | macOS | Homebrew `i686-elf-gcc` + `i686-elf-binutils` 直接构建（Makefile 自动检测），或 Docker |
 | 运行 | QEMU `-fda Image` 或 `-cdrom kernel.iso`（**ISO 只含内核**：MINIX 文件系统在 `minix.img` 里，必须再加 `-hda minix.img`，否则 guest 没有文件系统可用），内存 **16M**（内核页表恒等映射 16MB）；MINIX 测试盘 `make minix.img` + `-hda minix.img` |
-| 自动化 | `scripts/qemu-test.py` 无头驱动（串口文本 + sendkey，含大写与 `\| < > ( ) & *` 等需要 shift 的键；`--mem` 缩小客户机内存以制造压力；`--type-delay` 调打字速度；`--min-wait` 让需要观察周期性事件的用例不被“输出静止”提前收尾），`scripts/regress.sh` **32 个场景**（`make test`；`make test-fast` / `TEST_SKIP_HEAVY=1` 跳过 autosync/oom/evict/swap 四个重场景，CI 的 PR 跑快集），失败时发 GitHub 注解 + step summary（CI 日志要 admin 权限，注解不用），`scripts/ppm2png.py` 转截图 |
+| 运行（单文件镜像，D1） | `make disk` → `linux.img`，`qemu-system-i386 -hda linux.img -m 16M -boot c`（`make run-disk`）一张盘即内核 + 文件系统。**软盘/ISO 那条路一行没改**。限制：磁盘引导靠 **INT 13h AH=42h（EDD LBA 读）**，没有 EDD 的 BIOS 起不来（`Image` 的软盘 CHS 路径不受影响）；**没有 MBR 分区表**（内核不解析分区表，偏移由引导扇区携带），所以"必须看到活动分区/VBR 链路"的引导器或虚拟化前端可能拒认，QEMU 正常；镜像被补齐到整数个 16×63 扇区的柱面（否则 QEMU 猜出的几何覆盖不到镜像末尾的 swap 区，见 `tools/mkdisk.c`）；`linux.img` 内嵌的文件系统是 `disk-fs.img`（默认用户态，与 `minix.img` 无关——回归场景会重建 `minix.img`） |
+| 自动化 | `scripts/qemu-test.py` 无头驱动（串口文本 + sendkey，含大写与 `\| < > ( ) & *` 等需要 shift 的键；`--mem` 缩小客户机内存以制造压力；`--type-delay` 调打字速度；`--min-wait` 让需要观察周期性事件的用例不被“输出静止”提前收尾；`--disk` 只挂一张自启动盘，D1），`scripts/regress.sh` **32 个场景**（`make test`；`make test-fast` / `TEST_SKIP_HEAVY=1` 跳过 autosync/oom/evict/swap 四个重场景，CI 的 PR 跑快集），失败时发 GitHub 注解 + step summary（CI 日志要 admin 权限，注解不用），`scripts/ppm2png.py` 转截图 |
 | 回归耗时 | 全集在本机容器内（TCG，无 KVM，与 CI 同模式）实测 **约 10.5 分钟**，而 CI 作业预算 30 分钟（含 apt/构建/静态检查）。时间几乎都花在 harness 按键上（每字符 `TEST_TYPE_DELAY` 默认 0.5 秒）——**不要靠压低它省时间**：低于 ~0.2 秒实测会丢键（8042 只有一个字节的输出缓冲，guest 跟不上就整条命令丢掉），所以拆成快集/全集而不是压速度 |
 | 静态校验（无需编译器） | `make check` = `check-layout` + `check-docs` + `check-docs-selftest`。`scripts/check-layout.py`：内存地图有序/不重叠、用户区必须整体落在一个页目录项内、`memlayout.inc` 与 `memlayout.h` 一致、缓存装得进窗口、**用户区地址没有被硬编码到布局头之外**，已构建 `kernel/system` 时还校验链接期 `_end` 未越界。`scripts/check-docs.py`：文档里的旧地址/旧宏必须带历史标注、`0x08xxxxxx` 必须是布局常量、场景数必须等于 `regress.sh` 实际条数、`-m` 参数必须与测试驱动一致 |
 

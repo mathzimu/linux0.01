@@ -25,6 +25,11 @@ core
 minix.img
 tools/mkminix
 
+# Single self-booting disk image (task D) and the filesystem it embeds
+linux.img
+disk-fs.img
+tools/mkdisk
+
 # Regression test serial logs
 test-logs/
 

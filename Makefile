@@ -185,6 +185,42 @@ DEFAULT_SPECS    = $(foreach p,$(DEFAULT_USERLAND),user/$(p).elf:$(p))
 minix.img: tools/mkminix user/hello.elf $(DEFAULT_ELVES)
 	tools/mkminix minix.img $(DEFAULT_SPECS)
 
+# --- one image that boots the whole system from the first IDE disk -----
+#
+# `make run` needs two files (Image + minix.img).  `make disk` produces a
+# single self-booting image instead:
+#
+#   LBA 0              boot sector       (from Image)
+#   LBA 1..4           setup
+#   LBA 5..            kernel image
+#   fs_base..          MINIX v1 filesystem + raw swap (disk-fs.img)
+#
+# fs_base is chosen by tools/mkdisk - the first 1024-byte boundary behind
+# the kernel, padded out to a whole cylinder - and written into the boot
+# sector of the image it is building.  boot/boot.s forwards it to the
+# kernel through the boot parameter block, so no offset is hard-coded on
+# both sides and the image and the kernel cannot drift apart.  See
+# docs/roadmap.md ("单文件自启动镜像") for why an explicit base LBA was
+# chosen over a partition table.
+#
+# The embedded filesystem is deliberately NOT minix.img: the regression
+# scenarios rebuild minix.img with their own /bin contents, and `make
+# disk` has to keep embedding the default userland whatever the last test
+# left behind.
+DISK_IMG = linux.img
+DISK_FS  = disk-fs.img
+
+tools/mkdisk: tools/mkdisk.c
+	$(HOST_CC) -O2 -Wall -o $@ $<
+
+$(DISK_FS): tools/mkminix user/hello.elf $(DEFAULT_ELVES)
+	tools/mkminix $(DISK_FS) $(DEFAULT_SPECS)
+
+disk: $(DISK_IMG)
+
+$(DISK_IMG): Image $(DISK_FS) tools/mkdisk
+	tools/mkdisk $(DISK_IMG) Image $(DISK_FS)
+
 # One-shot regression suite (see scripts/regress.sh): builds a clean
 # MINIX disk per scenario, boots QEMU, and asserts the serial output.
 # The full run takes ~10 minutes under TCG (no KVM) on a dev machine -
@@ -235,10 +271,11 @@ docker-build:
 clean:
 	rm -f *.d */*.d
 	rm -f Image kernel.iso kernel/system kernel/system.bin
+	rm -f linux.img disk-fs.img
 	rm -f system system.bin
 	rm -f boot/boot boot/setup
 	rm -f $(OBJS) $(HEAD_OBJ) $(SETUP_OBJ) $(BOOT_OBJ)
-	rm -f tools/build
+	rm -f tools/build tools/mkdisk
 	rm -f user/*.o user/*.elf user/*.bin user/user_data.c
 	rm -f *~ core .image_floppy_padded
 	rm -rf .iso_tmp
@@ -260,4 +297,11 @@ run-cd: kernel.iso minix.img
 debug: Image minix.img
 	qemu-system-i386 -fda Image -m 16M -boot a -hda minix.img -s -S
 
-.PHONY: all clean run run-cd debug iso docker-build test test-fast
+# The single-image boot: the whole system - kernel and filesystem - lives
+# on the first IDE disk, so this is the only file to attach.  QEMU would
+# pick the disk without '-boot c' (there is no other medium), but say it
+# anyway: it is the command the README and docs/roadmap.md show.
+run-disk: $(DISK_IMG)
+	qemu-system-i386 -hda $(DISK_IMG) -m 16M -boot c
+
+.PHONY: all clean run run-cd debug run-disk disk iso docker-build test test-fast
