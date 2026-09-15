@@ -381,7 +381,7 @@ python3 scripts/qemu-test.py --image Image --hda minix.img \
 | 6 | [`docs/git-workflow.md`](docs/git-workflow.md) — 分支 / 提交 / 版本规范 |
 | 7 | [`docs/roadmap.md`](docs/roadmap.md) — 保存的后续工作清单 |
 
-> **权威顺序**：源码 > LIMITATIONS/TUTORIAL > HLD/SRS。文档与代码冲突时以源码为准。
+> **权威顺序**：源码 > limitations.md/tutorial.md > architecture.md/requirements.md。文档与代码冲突时以源码为准。
 
 ---
 

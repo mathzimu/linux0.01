@@ -82,7 +82,7 @@
 
 ## 7. 与文档/设计稿的关系
 
-- **权威顺序**：源码 > LIMITATIONS/TUTORIAL > HLD/SRS
-- HLD/SRS 是早期设计稿，部分表述（如 move_to_user_mode、syscall 编号）与当前实现
+- **权威顺序**：源码 > limitations.md/tutorial.md > architecture.md/requirements.md
+- architecture.md/requirements.md 是早期设计稿，部分表述（如 move_to_user_mode、syscall 编号）与当前实现
   有差异；以源码与本文档为准。当前内核已实现 0.01 对齐的 67 个系统调用（编号见 README），
   另有 67–72 六个扩展（sigreturn / sigprocmask / sigsuspend / sigaction / sleep / select）

@@ -1,4 +1,4 @@
-# Minimal Linux 0.01 Equivalent Kernel - 需求规格说明书 (SRS)
+# Minimal Linux 0.01 Equivalent Kernel - 需求规格说明书 (Software Requirements Spec)
 
 ## 1. 引言
 
@@ -166,8 +166,8 @@
 
 | 交付物 | 截止日期 | 负责人 |
 |--------|---------|--------|
-| SRS (本文档) | 5月29日 | 需求分析师 |
-| HLD | 6月2日 | 系统架构师 |
+| requirements.md (本文档) | 5月29日 | 需求分析师 |
+| architecture.md | 6月2日 | 系统架构师 |
 | 评审会议 | 6月3日 | Alex Chen |
 | 内核v0.1 (最小引导) | 6月10日 | 开发团队 |
 | 内核v0.2 (进程+内存) | 6月20日 | 开发团队 |

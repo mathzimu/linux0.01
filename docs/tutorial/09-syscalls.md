@@ -1,6 +1,6 @@
 # §9 系统调用与内核输出 — `sys.c` / `vsprintf.c` / `panic.c` / `asm.s`
 
-> 入口汇编见 TUTORIAL §5 `system_call`；表在 `head.s` `sys_call_table`。
+> 入口汇编见 tutorial.md §5 `system_call`；表在 `head.s` `sys_call_table`。
 
 ## 1. 调用约定
 

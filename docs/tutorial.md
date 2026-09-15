@@ -1,7 +1,7 @@
 # Linux 0.01 内核完整实现教程
 
 > **总索引：** [index.md](index.md) · **已知限制：** [limitations.md](limitations.md)  
-> **权威顺序：** 源码 > LIMITATIONS/本教程 > HLD/SRS
+> **权威顺序：** 源码 > limitations.md/本教程 > architecture.md/requirements.md
 
 ### 阅读前
 

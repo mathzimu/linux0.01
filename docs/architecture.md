@@ -1,4 +1,4 @@
-# Minimal Linux 0.01 Equivalent Kernel - 高层次架构设计 (HLD)
+# Minimal Linux 0.01 Equivalent Kernel - 高层次架构设计 (High-Level Design)
 
 ## 1. 架构概览
 

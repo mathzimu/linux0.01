@@ -7,7 +7,7 @@
 ```
 第 0 步  README.md          项目是什么、如何编译运行
 第 1 步  本文件 index.md    建立全局地图
-第 2 步  PREREQ 四件套      补齐硬件/语言/OS 理论
+第 2 步  prereq/ 四件套      补齐硬件/语言/OS 理论
 第 3 步  tutorial.md        按章节读源码实现
 第 4 步  limitations.md     明确本仓库「做了什么 / 没做什么」
 第 5 步  architecture.md / requirements.md    （可选）设计与需求背景
@@ -26,7 +26,7 @@
 
 | 文档 | 内容 |
 |------|------|
-| [tutorial.md](tutorial.md) | 总目录 + 引导全流程（boot/setup/head/main） |
+| [tutorial.md](tutorial.md) | **§1–§6** 引导全流程（boot/setup/head/main）；§7 起拆到 `tutorial/` |
 | [tutorial/07-sched.md](tutorial/07-sched.md) | 调度器 sched.c |
 | [tutorial/08-process.md](tutorial/08-process.md) | fork/exit process.c |
 | [tutorial/09-syscalls.md](tutorial/09-syscalls.md) | 系统调用 sys.c / vsprintf / panic |
@@ -42,11 +42,11 @@
 
 | 源码 | 文档 |
 |------|------|
-| `boot/boot.s` | TUTORIAL §2 |
-| `boot/setup.s` | TUTORIAL §4 |
-| `boot/head.s` | TUTORIAL §5 |
-| `tools/build.c` | TUTORIAL §3 |
-| `kernel/main.c` | TUTORIAL §6 |
+| `boot/boot.s` | tutorial.md §2 |
+| `boot/setup.s` | tutorial.md §4 |
+| `boot/head.s` | tutorial.md §5 |
+| `tools/build.c` | tutorial.md §3 |
+| `kernel/main.c` | tutorial.md §6 |
 | `kernel/sched.c` | tutorial/07-sched.md |
 | `kernel/process.c` | tutorial/08-process.md |
 | `kernel/sys.c` `vsprintf.c` `panic.c` `asm.s` | tutorial/09-syscalls.md |
