@@ -287,11 +287,12 @@ run_case perm "$BASE && make prog NAME=permtest" 'exec /bin/permtest\n' \
 #   数值是算得出来的：alpha beta gamma\n = 17B，delta\n = 6B，追加后 23B/2 行/4 词。
 QEMU_MIN_WAIT=60 run_case shpipe \
     'rm -f minix.img && make user/sh.elf user/cat.elf user/wc.elf user/hello.elf && tools/mkminix minix.img user/sh.elf:sh user/cat.elf:cat user/wc.elf:wc user/hello.elf:hello' \
-    'exec /bin/sh\necho alpha beta gamma > /p.txt\necho delta > /q.txt\ncat /q.txt >> /p.txt\ncat /p.txt\nwc < /p.txt\ncat /p.txt | wc\nexit\n' \
+    'exec /bin/sh\necho alpha beta gamma > /p.txt\necho delta > /q.txt\ncat /q.txt >> /p.txt\ncat /p.txt\nwc < /p.txt\ncat /p.txt | wc\ncat /q.txt | wc\nexit\n' \
     'sh: supports < > >> | and &' \
     'alpha beta gamma' \
     'delta' \
     '2 4 23 -' \
+    '1 1 6 -' \
     'exec: child 1 exit_code=0'
 
 # 场景 21: 中断驱动磁盘（B2）

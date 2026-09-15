@@ -403,6 +403,7 @@ static int run_one(struct cmd *c)
         if (is_builtin(c->argv[0]))
             exit(builtin_run(c));           /* e.g. echo inside a pipeline */
         exec_program(c);
+        exit(1);            /* execve failed: this was a child, so stop here */
     }
 
     waitpid(pid, &code, 0);
@@ -457,6 +458,7 @@ static int run_pipeline(struct cmd *cmds, int ncmds)
                 strcmp(cmds[i].argv[0], "pwd") != 0)
                 exit(builtin_run(&cmds[i]));
             exec_program(&cmds[i]);
+            exit(1);        /* execve failed: never continue as a second shell */
         }
 
         pids[i] = pid;
