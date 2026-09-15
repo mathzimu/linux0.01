@@ -260,7 +260,7 @@ run_case perm "$BASE && make prog NAME=permtest" 'exec /bin/permtest\n' \
 QEMU_MIN_WAIT=60 run_case shpipe \
     'rm -f minix.img && make user/sh.elf user/cat.elf user/wc.elf user/hello.elf && tools/mkminix minix.img user/sh.elf:sh user/cat.elf:cat user/wc.elf:wc user/hello.elf:hello' \
     'exec /bin/sh\necho alpha beta gamma > /p.txt\necho delta > /q.txt\ncat /q.txt >> /p.txt\ncat /p.txt\nwc < /p.txt\ncat /p.txt | wc\nexit\n' \
-    'sh: supports < > >> and |' \
+    'sh: supports < > >> | and &' \
     'alpha beta gamma' \
     'delta' \
     '2 4 23 -' \
@@ -353,6 +353,23 @@ run_case seltest "$BASE && make prog NAME=seltest" 'exec /bin/seltest\n' \
     'seltest: select(fd1, no timeout) -> 1, wfds=2' \
     'seltest: sleep(10) with alarm(1) -> 9 left, hits=1' \
     'seltest: PASS'
+
+# 场景 28: Shell 的后台任务与 wait（B5.8）
+#   `cmd &` 用**子 shell**实现：父 shell fork 之后立刻回到提示符，子进程照常调用
+#   run_pipeline()——所以 run_pipeline/run_one 完全不需要知道"后台"这回事。
+#   没有作业控制（没有 SIGSTOP/SIGCONT，也没有和终端绑定的进程组），所以只能跟踪 pid、
+#   每次打印提示符前用 WNOHANG 收尸、`wait` 阻塞等待。`sleep` 现在是 shell 内建命令，
+#   它直接调用内核的新系统调用 71，正好把 B5.7 的能力暴露给使用者。
+#   注：harness 只断言"这些行出现过"，不断言先后顺序；因此这条场景检查的是功能
+#   （后台任务被记录、能收尸、wait 不吞前台状态、sleep 内建可用），而不是时序。
+SH_PREP2='rm -f minix.img && make user/sh.elf user/hello.elf && tools/mkminix minix.img user/sh.elf:sh user/hello.elf:hello'
+QEMU_MIN_WAIT=40 run_case shbg "$SH_PREP2" \
+    'exec /bin/sh\nsleep 1\nsleep 2 &\necho foreground ran\nwait\nexit\n' \
+    'sh: slept 1 s, 0 left' \
+    'sh: [2] running in background' \
+    'foreground ran' \
+    'sh: [2] done (status 0)' \
+    'exec: child 1 exit_code=0'
 
 echo
 echo "================================"

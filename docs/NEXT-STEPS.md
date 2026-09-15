@@ -253,6 +253,27 @@ code/data 组、B3 加了镜像表），gcc 报 `braces around scalar initialize
 **还没做**：可重启的系统调用（`SA_RESTART` 现在只是被接受、不生效），以及把投递点补到缺页
 返回路径上（现在靠 tick 兜底，最坏 10ms 延迟）。
 
+### B5.8 — Shell 的后台任务与 `wait` ✅（同一提交）
+
+**做法**：`cmd &` 由**子 shell** 执行——父 shell fork 之后立刻回到提示符，子进程照常调用
+`run_pipeline()` 再 `exit()`。这样 `run_pipeline()` / `run_one()` 完全不需要知道"后台"这件
+事（真实 shell 也是这么分的）。`&` 在**解析之前**从行尾剥掉，解析器仍然只认"单词 / 重定向 /
+管道"。
+
+| 项 | 内容 |
+|----|------|
+| 记账 | `bg_pid[MAX_BG]`（8 个）；`&` 之后打印 `sh: [pid] running in background` |
+| 收尸 | 每次打印提示符前 `waitpid(pid, &code, WNOHANG)` 扫一遍，完成的打印 `sh: [pid] done (status N)` |
+| `wait` | 内建命令：`wait` 等所有后台任务，`wait <pid>` 等指定那个。**按 pid 等待**（而不是 `-1`）是关键：否则会吞掉前台命令的退出状态 |
+| `sleep` | 内建命令，直接调用 B5.7 的 `sleep()`（系统调用 71），把新的超时能力暴露给使用者 |
+| 没有作业控制 | 本内核没有 SIGSTOP/SIGCONT，也没有和终端绑定的进程组，所以后台任务**不能**被挂起或拉回前台；文档与 `help` 都直说 |
+| 回归 | 场景 28 `shbg`：`sleep 1`（内建，打印 slept 1 s）、`sleep 2 &`、前台 `echo foreground ran` 在任务结束前就打印、`wait` 收到 `done (status 0)`、shell 正常 `exit` |
+
+> 注意 harness 的断言是"这些行出现过"，**不检查先后顺序**，所以这条场景验证的是功能而不是
+> 时序；日志里"前台先跑完、后台后结束"的顺序是肉眼可见的旁证（见 `test-logs/shbg.serial`）。
+
+
+
 ## B5.5 — 一次丢失的唤醒：`bh->b_wait` 从来没有人叫过 ✅ 已修复
 
 **症状**（做 B5 时撞上，早于 B5）：批量 fork 出来的子进程**成批卡死**。最小复现
@@ -374,7 +395,7 @@ swap 后耗尽门槛是**内存+swap**（695 帧 + 512 槽 ≈ 1207 页），子
 ## 当前状态（一句话）
 
 **67 个系统调用（编号与 1991 Linux 0.01 完全一致）＋ 3 个本内核扩展（67 sigreturn /
-68 sigprocmask / 69 sigsuspend / 70 sigaction / 71 sleep / 72 select）**、23 条 Shell 命令的教学内核：
+68 sigprocmask / 69 sigsuspend / 70 sigaction / 71 sleep / 72 select）**、25 条 Shell 命令的教学内核：
 进程生命周期完整（fork/execve/waitpid/信号/管道）、MINIX FS 增删改查 + 硬链接/重命名 +
 **权限模型**、
 Ring3 用户态 + 编程工具链（`make prog NAME=xxx` → `exec /xxx`）、内存隔离、chdir。
@@ -471,7 +492,7 @@ make Image                # 引导镜像
 # 运行/验证
 qemu-system-i386 -fda Image -hda minix.img -m 16M -boot a
 python3 scripts/qemu-test.py --image Image --hda minix.img --keys $'cmd\n'
-make test                   # 一键回归（scripts/regress.sh，27 个场景断言）
+make test                   # 一键回归（scripts/regress.sh，28 个场景断言）
 make check                  # 静态校验：内存地图 + 文档一致性 + lint 反向自测
 make check-layout           # 只校验内存地图（含 _end 未越界）
 make check-docs             # 只校验文档里引用的布局常量/场景数与源码一致

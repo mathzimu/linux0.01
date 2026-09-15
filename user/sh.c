@@ -220,11 +220,68 @@ static int apply_redirs(struct cmd *c)
 
 /* --- builtins ------------------------------------------------------ */
 
+/* --- background jobs (B5.8) -------------------------------------------
+ *
+ * `cmd &` runs the command in a *child shell*: the parent forks, the
+ * child calls the ordinary run_pipeline() and exits, and the parent
+ * records the pid and goes straight back to the prompt.  That is how a
+ * real shell does it, and it means run_pipeline()/run_one() need no
+ * notion of "background" at all.
+ *
+ * There is no job control (no SIGSTOP/SIGCONT, no process groups wired to
+ * the terminal), so a job cannot be suspended or brought to the
+ * foreground; the shell only tracks pids, reaps them with WNOHANG before
+ * each prompt, and `wait` blocks for them.  The kernel's wait(pid) makes
+ * that safe: waiting for a specific pid never steals the status of a
+ * foreground command.
+ */
+#define MAX_BG 8
+
+static int bg_pid[MAX_BG];
+
+static void bg_add(int pid)
+{
+    int i;
+
+    for (i = 0; i < MAX_BG; i++) {
+        if (!bg_pid[i]) {
+            bg_pid[i] = pid;
+            return;
+        }
+    }
+    printf("sh: too many background jobs (max %d)\n", MAX_BG);
+}
+
+/* Reap finished background jobs.  blocking=0 is the "did anything finish
+   while I was at the prompt?" sweep; blocking=1 is `wait`. */
+static void bg_reap(int blocking, int only_pid)
+{
+    int i, r;
+    unsigned long code;
+
+    for (i = 0; i < MAX_BG; i++) {
+        if (!bg_pid[i])
+            continue;
+        if (only_pid && bg_pid[i] != only_pid)
+            continue;
+
+        code = 0;
+        r = waitpid(bg_pid[i], &code, blocking ? 0 : WNOHANG);
+        if (r == bg_pid[i]) {
+            printf("sh: [%d] done (status %lu)\n", bg_pid[i], code);
+            bg_pid[i] = 0;
+        } else if (r < 0) {
+            bg_pid[i] = 0;              /* already reaped / gone */
+        }
+    }
+}
+
 static int is_builtin(const char *name)
 {
     return strcmp(name, "cd") == 0 || strcmp(name, "pwd") == 0 ||
            strcmp(name, "echo") == 0 || strcmp(name, "help") == 0 ||
-           strcmp(name, "exit") == 0;
+           strcmp(name, "exit") == 0 || strcmp(name, "wait") == 0 ||
+           strcmp(name, "sleep") == 0;
 }
 
 /* Run a builtin; returns its exit status.  Runs in whatever process
@@ -247,6 +304,21 @@ static int builtin_run(struct cmd *c)
         printf("sh: run       <program> [args]      (from /bin)\n");
         printf("sh: redirect  < file   > file   >> file\n");
         printf("sh: pipe      cmd1 | cmd2 | cmd3\n");
+        printf("sh: background cmd &   then:  wait [pid]\n");
+        printf("sh: sleep <seconds>   (kernel syscall 71)\n");
+        return 0;
+    }
+    if (strcmp(c->argv[0], "wait") == 0) {
+        int only = c->argc > 1 ? atoi(c->argv[1]) : 0;
+
+        bg_reap(1, only);               /* blocks until the job finishes */
+        return 0;
+    }
+    if (strcmp(c->argv[0], "sleep") == 0) {
+        unsigned long secs = c->argc > 1 ? (unsigned long)atoi(c->argv[1]) : 1;
+        int left = sleep(secs);
+
+        printf("sh: slept %lu s, %d left\n", secs, left);
         return 0;
     }
     if (strcmp(c->argv[0], "cd") == 0) {
@@ -411,13 +483,14 @@ int main(int argc, char *argv[])
 {
     char line[LINE_MAX];
     struct cmd cmds[MAX_CMDS];
-    int n, status;
+    int n, status, background, i;
 
     printf("sh: user-mode shell (Ring3), pid=%d\n", getpid());
-    printf("sh: builtins: cd pwd echo exit help; other names run /bin/<name>\n");
-    printf("sh: supports < > >> and |  (type 'help')\n");
+    printf("sh: builtins: cd pwd echo exit help wait sleep; other names run /bin/<name>\n");
+    printf("sh: supports < > >> | and & (type 'help')\n");
 
     for (;;) {
+        bg_reap(0, 0);                  /* report jobs that finished */
         write(1, "$ ", 2);
 
         n = read_line(line, sizeof(line));
@@ -428,6 +501,17 @@ int main(int argc, char *argv[])
         if (n == 0)
             continue;
 
+        /* A trailing '&' (spaces allowed after it) means background.  It
+           is handled here, before parsing, so the parser stays a plain
+           "words, redirections and pipes" parser. */
+        background = 0;
+        for (i = n - 1; i >= 0 && (line[i] == ' ' || line[i] == '\t'); i--)
+            ;
+        if (i >= 0 && line[i] == '&') {
+            background = 1;
+            line[i] = ' ';
+        }
+
         n = parse_pipeline(line, cmds, MAX_CMDS);
         if (n < 0) {
             printf("sh: syntax error\n");
@@ -435,6 +519,21 @@ int main(int argc, char *argv[])
         }
         if (n == 0)
             continue;
+
+        if (background) {
+            int pid = fork();
+
+            if (pid < 0) {
+                printf("sh: fork failed\n");
+                continue;
+            }
+            if (pid == 0) {
+                exit(run_pipeline(cmds, n));   /* the child shell */
+            }
+            bg_add(pid);
+            printf("sh: [%d] running in background\n", pid);
+            continue;
+        }
 
         status = run_pipeline(cmds, n);
         if (want_exit)
