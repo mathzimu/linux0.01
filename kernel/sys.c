@@ -406,7 +406,8 @@ int sys_open(const char *filename, int flag, int mode)
         }
     }
     if (!inode) {
-        printk("open: namei returned NULL (flag=0x%x)\n", flag);
+        printk("open: namei returned NULL (flag=0x%x, inode table %d/%d "
+               "used)\n", flag, iget_used(), NR_INODE);
         return -1;
     }
 

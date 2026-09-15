@@ -405,12 +405,25 @@ QEMU_MIN_WAIT=40 run_case shbg "$SH_PREP2" \
 #   i_zone[7] 指向的单级间接块（mkminix 生成时就是这么布置的）。用**重定向**读它并
 #   断言精确字节数 18432：任何一个间接块读错，行数/字数/字节数都会变。
 #   （单级间接 = 7 + 512 块 ≈ 519KB，已经覆盖整个 1MB 文件系统，所以不需要双级间接。）
-#   ⚠️ 别用 `cat /big.txt | wc` 来测这条：管道读那条路现在有 bug（见 docs/roadmap.md
-#   "已知问题：管道里 wc 读到的东西不对"），它会对任何输入都报同样的错误数字。
+#   ⚠️ 别用 `cat /big.txt | wc` 来测这条：一个会话里的第二个管道会触发另一个既有缺陷
+#   （见 docs/roadmap.md「已知问题：一个会话里的第二个管道会让内核三重故障」）。
 SH_PREP3='rm -f minix.img && make user/sh.elf user/wc.elf && tools/mkminix minix.img user/sh.elf:sh user/wc.elf:wc'
 run_case bigfile "$SH_PREP3" 'exec /bin/sh\nwc < /big.txt\nexit\n' \
     '1008 1009 18432 -' \
     'exec: child 1 exit_code=0'
+
+# 场景 30: 同一个程序被并发 exec（inode 缓存加载竞态，P1）
+#   `cat f | cat` 曾经必然失败：iget() 在 read_inode()（要睡在磁盘读上）完成之前就把槽位
+#   （i_dev/i_num/i_count）暴露出去，第二个并发查找命中它，拿到 i_mode==0 的 inode，于是
+#   namei 拒绝穿越 /bin（`namei: cannot traverse ino=7 mode=00`）。
+#   shell 管道只是靠运气碰到那个窗口，所以这条场景用 fork N + **每个子进程 execve 同一个**
+#   /bin/cat 把它确定性地压出来。窗口要够长：4 个子进程各自按需调页并读文件，实测约 40s。
+QEMU_MIN_WAIT=60 run_case execrace \
+    'rm -f minix.img && make user/execrace.elf user/cat.elf && tools/mkminix minix.img user/execrace.elf:execrace user/cat.elf:cat' \
+    'exec /bin/execrace 4 /bin/cat /hello.txt\n' \
+    'execrace: forked 4 children' \
+    'execrace: 4/4 children' \
+    'execrace: PASS'
 
 echo
 echo "================================"

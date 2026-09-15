@@ -510,7 +510,7 @@ make Image                # 引导镜像
 # 运行/验证
 qemu-system-i386 -fda Image -hda minix.img -m 16M -boot a
 python3 scripts/qemu-test.py --image Image --hda minix.img --keys $'cmd\n'
-make test                   # 一键回归（scripts/regress.sh，29 个场景断言）
+make test                   # 一键回归（scripts/regress.sh，30 个场景断言）
 make check                  # 静态校验：内存地图 + 文档一致性 + lint 反向自测
 make check-layout           # 只校验内存地图（含 _end 未越界）
 make check-docs             # 只校验文档里引用的布局常量/场景数与源码一致
@@ -599,35 +599,61 @@ make check-docs-selftest    # 反向测试 check-docs（8 个坏样本必须被�
 
 ---
 
-## 最新进展（本会话）：并发 exec 的根因 = inode 缓存竞态 + 槽位损坏（未修复，诊断已就位）
+## P1 — 并发 exec 失败：`iget` 加载竞态 ✅ 已修复（含一次误判的订正）
 
-给 `namei`/`iget` 加打印后，一次复现就拿到决定性的两行：
+**症状**：`cat f | cat`（同一个程序被两个进程并发 exec）必然失败，sh 报 `sh: /bin/cat: cannot execute`。
+这是当时唯一挡住"日常可用"的正确性缺陷。
+
+**订正上一轮的误判**：上一版把根因写成"inode 槽位被偷用、根 inode 被写成 ino=5/size=1"——那是**读错了
+自己的诊断**。当时 `kernel/vsprintf.c` 不支持精度，而且**未识别的说明符不消费参数**，于是同一条 printk
+里后续每个 `%d/%ld` 都读错了槽位。那条"证据"
+`namei: no entry '%.15s' (len 1072864) in dir ino=5 size=1` 的真实解码是：
+`len 1072864` = `name[]` 的**栈地址**、`dir ino=5` = **namelen=5**、`size=1` = **i_num=1（根目录，完全正常）**。
+⇒ 不存在"槽位损坏"，也不需要审计 `new_inode`/`iput` 的引用计数。`printk` 的格式能力已补齐
+（标志/宽度/精度都会被解析并消费，`%.Ns` 可用），这类"诊断说谎"不会再发生。
+
+**真实根因（一次复现即定位）**：
 
 ```
-open: namei returned NULL (flag=0x0)                       ← sys_open 打开 /bin/cat 失败
-namei: no entry (len 1072864) in dir ino=5 size=1          ← 关键：dir 是 inode 5（big.txt），size 与 namelen 都是垃圾
+$ cat /p.txt | cat
+namei: cannot traverse ino=7 mode=00 (is_dir=0 exec_ok=0, euid=0 uid=0 egid=0 gid=0)
+open: namei returned NULL (flag=0x0, inode table 4/64 used)
 ```
 
-结论：不是"找不到条目"，而是 `namei` 拿到的**目录 inode 本身是坏的**——本应 `iget(dev,1)` 拿到根目录
-（`i_num=1`），实际拿到 `i_num=5`（big.txt）且 `i_size=1`。垃圾 `namelen` 说明路径解析也连带偏了。
+`iget(dev, 7)` 在 `read_inode()`（要睡在磁盘读上）**完成之前**就把槽位（i_dev/i_num/i_count）暴露给了
+并发查找；第二个查找命中该槽位，拿到 `i_mode == 0` 的 inode，于是 `namei` 拒绝穿越 `/bin`。
+inode 表只用了 **4/64** ⇒ 不是表满；也没有 `hd:` 报错 ⇒ 不是读盘失败。
 
-这暴露了 **两个独立问题**：
+**修复**（`fs/inode.c`，Linux 0.11 式纪律）：
 
-1. **`iget` 加载竞态**：槽位在 `read_inode()`（要睡在磁盘读上）**完成之前**就把
-   `i_count=1, i_dev, i_num` 暴露给了并发查找，第二个 `iget` 同一 inode 会拿到半初始化的 inode。
-   Linux 0.11 式修复方向正确（查找路径 `wait_on_inode`、分配路径 `i_lock=1`→读→`i_lock=0`+`wake_up`）。
-   **踩过的坑**：`struct m_inode` 的 `i_wait` 字段从未被初始化（`iget`/`get_empty_inode`/`read_inode`
-   都不碰它），直接 `sleep_on(&inode->i_wait)` 会解引用垃圾指针导致三重故障——所以必须先
-   `i_wait=NULL` 再加进 `iget` 分配路径与 `get_empty_inode`。第一次修复尝试就栽在这里、并因此被回退。
-2. **槽位被偷用 / 引用计数失衡**（更根本、尚未定位）：`echo alpha > /p.txt` 的 O_CREAT 路径里
-   `new_inode`/`get_empty_inode` 疑似复用了仍被 `pwd`/`root` 引用的根目录槽位（某个 `iput` 多减了
-   一格），根目录槽位被覆盖后 `namei("/")` 就拿到 `i_num=5`。下一步：审计 `sys_open` 的 O_CREAT
-   分支与 `new_inode`/`dir_add_entry`/`get_empty_inode` 的 `iput` 配对，以及 `namei` 对
-   `current->root`/`pwd` 的引用计数。
+- 新增 `wait_on_inode()`：`cli()` 包住"判断-注册"，与 `wait_on_buffer` 同款；
+- 查找命中后先等 `i_lock`，**复核 `i_dev/i_num` 未变**再 `i_count++`（变了就重扫）；
+- 分配路径：`i_lock=1` → `read_inode()` → `i_lock=0` → `wake_up(&inode->i_wait)`；
+- `i_wait` 字段此前**从未被初始化**（槽位复用后会解引用垃圾指针 → 三重故障）：现在 `iget` 分配路径与
+  `get_empty_inode` 都显式置 `i_wait = NULL`；
+- `read_inode()` 读盘失败时 `iget` 返回 NULL，而不是把一个"空壳 inode"交给调用者。
 
-**当前树状态**：`fs/inode.c` 的 `iget` 修复已回退（不完整，会让第二次并发 exec 重启）；保留
-`fs/namei.c` 两处行为中性诊断。⚠️ 磁盘上的 `Image` 是回退前那版构建（含坏修复），
-**再跑任何测试前必须先 `rm -f Image && make`**（判据 1474560 字节）。
+**诊断能力**（这次误判的直接产物）：`iget_used()` 报告 inode 槽占用；`namei` 的**四个** NULL 出口
+（起始 inode 取不到 / `find_entry` 未命中 / `iget` 返回 NULL / 无法穿越目录）都有打印，且都带表占用数；
+`find_entry` 那条默认静默（`NAMEI_TRACE`），因为 O_CREAT 的"文件不存在"是正常路径。
 
-**复现**：`exec /bin/sh` 里 `echo alpha > /p.txt` 就触发 `dir ino=5` 那条打印；`cat /p.txt | cat`
-第一次能跑通、第二次重启。
+**回归**：场景 30 `execrace`（`user/execrace.c`）—— 先 fork 4 个子进程，**每个都 execve 同一个**
+`/bin/cat`，比 shell 管道确定得多；断言 `execrace: 4/4 children` 与 `PASS`。
+
+## 已知问题：一个会话里的第二个管道会让内核三重故障（**未修复**）
+
+**最小复现**（`exec /bin/sh` 之后）：
+
+```
+cat /hello.txt | wc      ← 第一个"两个 exec 并发"的管道：输出正常
+echo a | wc              ← 第二个管道：内核重启（串口日志出现第二条启动横幅）
+```
+
+- 触发条件是"**前一个管道里有两个并发 execve**"，与是否同一个程序无关（`cat|cat` 与 `cat|wc` 都会触发）；
+  纯 `echo a | wc` 连跑两次（只有 1 个 exec）是干净的。
+- 崩溃是**静默三重故障**：没有任何 `PAGE FAULT`/`hd:` 打印，只有重启横幅。
+- **归因已排除本次修改**：在干净 HEAD（`2c58809`，用 `git worktree` 单独构建）上跑同样两步，
+  **同样重启** ⇒ 既有缺陷。它此前被 P1 挡着（第一个管道必然失败，没人走到第二步），而套件里没有任何
+  场景在一个会话里跑两个管道，所以一直是绿的——`check_no_reboot()` 是唯一能抓住它的手段。
+- 下一步建议：审计 `pipe()`/`dup2()`/`sys_exit` 的 fd↔file↔inode 引用计数，以及两个并发 execve 之后
+  `exe_inode` 与页表的状态；调试时先在一个会话里连跑两个管道，并临时打开 `NAMEI_TRACE` 与 `hd:` 级打印。

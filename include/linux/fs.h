@@ -165,6 +165,8 @@ int file_read(struct m_inode *inode, struct file *filp, char *buf, int count);
 int file_write(struct m_inode *inode, struct file *filp, const char *buf, int count);
 void free_inode(struct m_inode *inode);
 struct m_inode *new_inode(int dev);
+/* Read-only diagnostic: inode slots currently held (see iget/namei). */
+int iget_used(void);
 int new_block(int dev);
 void free_block(int dev, int block);
 struct super_block *get_super(int dev);

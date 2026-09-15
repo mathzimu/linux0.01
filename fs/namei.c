@@ -4,6 +4,13 @@
 #include <string.h>
 #include <asm/segment.h>
 
+/* Set to 1 to trace every failed directory lookup.  A miss on the *last*
+   component is the normal "file does not exist" case for O_CREAT, so this
+   is off by default: otherwise every file creation writes a line into the
+   regression logs and buries the failures that matter.  Turn it on when a
+   lookup that should succeed comes back NULL. */
+#define NAMEI_TRACE 0
+
 static int next_entry(struct m_inode *dir, int i,
                       struct buffer_head **bh_out, struct minix_dir_entry **de_out)
 {
@@ -160,7 +167,15 @@ struct m_inode *namei(const char *pathname)
     if (*pathname == '\0')
         return inode;              /* "/" or "" -> root or pwd */
 
-    if (!inode) return NULL;
+    if (!inode) {
+        /* The starting point itself (root or pwd) could not be read: a
+           full inode table reaches here, and so does an unreadable root
+           block.  This used to return silently, which made "namei
+           returned NULL" unattributable. */
+        printk("namei: cannot get the starting inode (inode table %d/%d "
+               "used)\n", iget_used(), NR_INODE);
+        return NULL;
+    }
 
     p = pathname;
     while (1) {
@@ -182,15 +197,28 @@ struct m_inode *namei(const char *pathname)
         }
 
         if (find_entry(inode, name, namelen, &ino) < 0) {
-            printk("namei: no entry '%.15s' (len %d) in dir ino=%d size=%ld\n",
-                   name, namelen, inode->i_num, inode->i_size);
+#if NAMEI_TRACE
+            {
+                int k;
+
+                printk("namei: no entry '");
+                for (k = 0; k < namelen; k++)
+                    printk("%c", name[k]);
+                printk("' (len %d) in dir ino=%d mode=0%o size=%d count=%d, "
+                       "inode table %d/%d used\n",
+                       namelen, inode->i_num, inode->i_mode,
+                       (int)inode->i_size, inode->i_count,
+                       iget_used(), NR_INODE);
+            }
+#endif
             iput(inode);
             return NULL;
         }
         iput(inode);
         inode = iget(dev, ino);
         if (!inode) {
-            printk("namei: iget returned NULL for ino=%d\n", ino);
+            printk("namei: iget(%d, %d) returned NULL (inode table %d/%d "
+                   "used)\n", dev, ino, iget_used(), NR_INODE);
             return NULL;
         }
 
@@ -198,6 +226,13 @@ struct m_inode *namei(const char *pathname)
 
         /* not the last component: it must be a usable directory */
         if (!(inode->i_mode & S_IFDIR) || !permission(inode, MAY_EXEC)) {
+            printk("namei: cannot traverse ino=%d mode=0%o (is_dir=%d "
+                   "exec_ok=%d, euid=%d uid=%d egid=%d gid=%d)\n",
+                   inode->i_num, inode->i_mode,
+                   !!(inode->i_mode & S_IFDIR),
+                   permission(inode, MAY_EXEC),
+                   current->euid, inode->i_uid,
+                   current->egid, inode->i_gid);
             iput(inode);
             return NULL;
         }

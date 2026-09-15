@@ -125,6 +125,24 @@ void truncate_inode(struct m_inode *inode)
     inode->i_dirt = 1;
 }
 
+/* Wait until another task has finished loading this inode from disk.
+ *
+ * iget() exposes a freshly claimed slot (i_dev/i_num/i_count) *before*
+ * read_inode() has filled it in, and read_inode() sleeps on the disk read.
+ * A second task looking up the same inode therefore got it with a zeroed
+ * body - which is how "the second concurrent exec of the same program
+ * fails" showed up: namei resolved /bin to ino 7 and then refused to
+ * traverse it because i_mode was still 0.  cli() closes the check/sleep
+ * window exactly like wait_on_buffer(); the queue is the inode's own
+ * i_wait, which iget() and get_empty_inode() reset to NULL on claim. */
+static void wait_on_inode(struct m_inode *inode)
+{
+    cli();
+    while (inode->i_lock)
+        sleep_on(&inode->i_wait);
+    sti();
+}
+
 struct m_inode *iget(int dev, int nr)
 {
     struct m_inode *inode;
@@ -133,6 +151,11 @@ struct m_inode *iget(int dev, int nr)
     for (i = 0; i < NR_INODE; i++) {
         inode = &inode_table[i];
         if (inode->i_dev == dev && inode->i_num == nr) {
+            wait_on_inode(inode);
+            /* The slot may have been recycled while we slept: only take
+               it if it is still the inode we asked for. */
+            if (inode->i_dev != dev || inode->i_num != nr)
+                continue;
             inode->i_count++;
             return inode;
         }
@@ -150,18 +173,43 @@ struct m_inode *iget(int dev, int nr)
             inode->i_count = 1;
             inode->i_dev = dev;
             inode->i_num = nr;
+            inode->i_lock = 1;          /* "loading": see wait_on_inode */
             inode->i_dirt = 0;
-            inode->i_lock = 0;
+            inode->i_wait = NULL;       /* wait queue must start empty */
             inode->i_pipe = 0;
             inode->i_mount = 0;
             inode->i_seek = 0;
             inode->i_update = 0;
             read_inode(inode);
+            inode->i_lock = 0;
+            wake_up(&inode->i_wait);
+
+            /* read_inode() gives up (and clears i_dev/i_count) when the
+               inode block cannot be read.  Returning that slot would hand
+               the caller an inode with a zeroed body, which is the same
+               damage the load race caused - so report failure instead. */
+            if (inode->i_dev != dev)
+                return NULL;
             return inode;
         }
     }
 
+    printk("iget: inode table full (%d of %d slots in use), dev=%d nr=%d\n",
+           iget_used(), NR_INODE, dev, nr);
     return NULL;
+}
+
+/* How many inode slots are currently held.  Read-only diagnostic used by
+   the namei/open failure reports: "namei returned NULL" with a full table
+   is a completely different bug from a missing directory entry. */
+int iget_used(void)
+{
+    int i, n = 0;
+
+    for (i = 0; i < NR_INODE; i++)
+        if (inode_table[i].i_count)
+            n++;
+    return n;
 }
 
 /* Grab an inode-table slot without reading anything from disk
@@ -179,6 +227,7 @@ struct m_inode *get_empty_inode(void)
             inode->i_num = 0;
             inode->i_dirt = 0;
             inode->i_lock = 0;
+            inode->i_wait = NULL;       /* wait queue must start empty */
             inode->i_pipe = 0;
             inode->i_mount = 0;
             inode->i_seek = 0;
