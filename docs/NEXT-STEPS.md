@@ -274,6 +274,36 @@ code/data 组、B3 加了镜像表），gcc 报 `braces around scalar initialize
 
 
 
+## 已知问题：管道里 `wc` 读到的东西不对（做场景 29 时发现，**尚未修复**）
+
+`user/wc.c` 走**重定向**读文件是对的：
+
+```
+$ wc < /big.txt
+1008 1009 18432 -          ← 18432 = 18 个块，正是 i_zone[7] 单级间接块那段
+```
+
+但同样一个文件走**管道**就完全不对，而且对**任何**输入都返回同一组数字：
+
+```
+$ cat /big.txt | wc
+1 4 29 -                   ← 应该是 1008 1009 18432
+$ cat /p.txt | wc           ← shpipe 场景里的那条（/p.txt 23 字节、2 行 4 词）
+1 4 29 -                   ← 也是这一组：29 字节、1 行
+```
+
+两条命令的输入差了三个数量级却得到**逐字相同**的结果 ⇒ 管道里 `wc` 根本没有读到
+`cat` 写进管子的数据（更像是读到了别的固定内容或提前 EOF）。
+
+**注意**：`scripts/regress.sh` 的场景 20（`shpipe`）现在把 `1 4 29 -` 当作**期望值**断言，
+所以这条场景目前是"因为错误值被固化而通过"——修好管道读之后必须同时改这个断言，否则
+测试会反过来把修复判成回归。
+
+**下一步**：`fs/pipe.c` 的 `read_pipe()` / `write_pipe()` 与 `user/wc.c` 的读循环是首要
+怀疑对象（`PIPE_SIZE`/head/tail 的边界、`read_pipe` 返回 0 与 EOF 的区分、管道两端 `i_count`
+的判定）。场景 29 `bigfile` 故意只用重定向，就是为了把"间接块读写"与"管道读"这两件事分开，
+免得一个未修的 bug 掩盖另一个已修的功能。
+
 ## B5.5 — 一次丢失的唤醒：`bh->b_wait` 从来没有人叫过 ✅ 已修复
 
 **症状**（做 B5 时撞上，早于 B5）：批量 fork 出来的子进程**成批卡死**。最小复现
@@ -492,7 +522,7 @@ make Image                # 引导镜像
 # 运行/验证
 qemu-system-i386 -fda Image -hda minix.img -m 16M -boot a
 python3 scripts/qemu-test.py --image Image --hda minix.img --keys $'cmd\n'
-make test                   # 一键回归（scripts/regress.sh，28 个场景断言）
+make test                   # 一键回归（scripts/regress.sh，29 个场景断言）
 make check                  # 静态校验：内存地图 + 文档一致性 + lint 反向自测
 make check-layout           # 只校验内存地图（含 _end 未越界）
 make check-docs             # 只校验文档里引用的布局常量/场景数与源码一致

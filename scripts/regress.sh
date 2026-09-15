@@ -371,6 +371,18 @@ QEMU_MIN_WAIT=40 run_case shbg "$SH_PREP2" \
     'sh: [2] done (status 0)' \
     'exec: child 1 exit_code=0'
 
+# 场景 29: 间接块大文件（文件系统）
+#   /big.txt 是 18KB = 18 个块，而 inode 只有 7 个直接块，所以第 8..18 块必须走
+#   i_zone[7] 指向的单级间接块（mkminix 生成时就是这么布置的）。用**重定向**读它并
+#   断言精确字节数 18432：任何一个间接块读错，行数/字数/字节数都会变。
+#   （单级间接 = 7 + 512 块 ≈ 519KB，已经覆盖整个 1MB 文件系统，所以不需要双级间接。）
+#   ⚠️ 别用 `cat /big.txt | wc` 来测这条：管道读那条路现在有 bug（见 NEXT-STEPS
+#   "已知问题：管道里 wc 读到的东西不对"），它会对任何输入都报同样的错误数字。
+SH_PREP3='rm -f minix.img && make user/sh.elf user/wc.elf && tools/mkminix minix.img user/sh.elf:sh user/wc.elf:wc'
+run_case bigfile "$SH_PREP3" 'exec /bin/sh\nwc < /big.txt\nexit\n' \
+    '1008 1009 18432 -' \
+    'exec: child 1 exit_code=0'
+
 echo
 echo "================================"
 echo "  $PASS passed, $FAIL failed"
