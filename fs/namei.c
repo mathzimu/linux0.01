@@ -182,12 +182,17 @@ struct m_inode *namei(const char *pathname)
         }
 
         if (find_entry(inode, name, namelen, &ino) < 0) {
+            printk("namei: no entry '%.15s' (len %d) in dir ino=%d size=%ld\n",
+                   name, namelen, inode->i_num, inode->i_size);
             iput(inode);
             return NULL;
         }
         iput(inode);
         inode = iget(dev, ino);
-        if (!inode) return NULL;
+        if (!inode) {
+            printk("namei: iget returned NULL for ino=%d\n", ino);
+            return NULL;
+        }
 
         if (*p == '\0') return inode;
 

@@ -643,3 +643,39 @@ make check-docs-selftest    # 反向测试 check-docs（8 个坏样本必须被�
   伸进页分配器池（0x18A000 以上）；现为 `KERNEL_HEAP_END`
 - **恒等映射下 `get_free_page` 能撞用户区**（M1）：页分配器从 0x100000 顺序扫描，
   不设上限会走到用户程序镜像所在的物理页；现在越界即 `panic`
+
+
+---
+
+## 最新进展（本会话）：并发 exec 的根因 = inode 缓存竞态 + 槽位损坏（未修复，诊断已就位）
+
+给 `namei`/`iget` 加打印后，一次复现就拿到决定性的两行：
+
+```
+open: namei returned NULL (flag=0x0)                       ← sys_open 打开 /bin/cat 失败
+namei: no entry (len 1072864) in dir ino=5 size=1          ← 关键：dir 是 inode 5（big.txt），size 与 namelen 都是垃圾
+```
+
+结论：不是"找不到条目"，而是 `namei` 拿到的**目录 inode 本身是坏的**——本应 `iget(dev,1)` 拿到根目录
+（`i_num=1`），实际拿到 `i_num=5`（big.txt）且 `i_size=1`。垃圾 `namelen` 说明路径解析也连带偏了。
+
+这暴露了 **两个独立问题**：
+
+1. **`iget` 加载竞态**：槽位在 `read_inode()`（要睡在磁盘读上）**完成之前**就把
+   `i_count=1, i_dev, i_num` 暴露给了并发查找，第二个 `iget` 同一 inode 会拿到半初始化的 inode。
+   Linux 0.11 式修复方向正确（查找路径 `wait_on_inode`、分配路径 `i_lock=1`→读→`i_lock=0`+`wake_up`）。
+   **踩过的坑**：`struct m_inode` 的 `i_wait` 字段从未被初始化（`iget`/`get_empty_inode`/`read_inode`
+   都不碰它），直接 `sleep_on(&inode->i_wait)` 会解引用垃圾指针导致三重故障——所以必须先
+   `i_wait=NULL` 再加进 `iget` 分配路径与 `get_empty_inode`。第一次修复尝试就栽在这里、并因此被回退。
+2. **槽位被偷用 / 引用计数失衡**（更根本、尚未定位）：`echo alpha > /p.txt` 的 O_CREAT 路径里
+   `new_inode`/`get_empty_inode` 疑似复用了仍被 `pwd`/`root` 引用的根目录槽位（某个 `iput` 多减了
+   一格），根目录槽位被覆盖后 `namei("/")` 就拿到 `i_num=5`。下一步：审计 `sys_open` 的 O_CREAT
+   分支与 `new_inode`/`dir_add_entry`/`get_empty_inode` 的 `iput` 配对，以及 `namei` 对
+   `current->root`/`pwd` 的引用计数。
+
+**当前树状态**：`fs/inode.c` 的 `iget` 修复已回退（不完整，会让第二次并发 exec 重启）；保留
+`fs/namei.c` 两处行为中性诊断。⚠️ 磁盘上的 `Image` 是回退前那版构建（含坏修复），
+**再跑任何测试前必须先 `rm -f Image && make`**（判据 1474560 字节）。
+
+**复现**：`exec /bin/sh` 里 `echo alpha > /p.txt` 就触发 `dir ino=5` 那条打印；`cat /p.txt | cat`
+第一次能跑通、第二次重启。
