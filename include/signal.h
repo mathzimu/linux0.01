@@ -43,4 +43,23 @@
    USER_SIGRETURN_ENTRY — see include/memlayout.h. */
 #define SIGFRAME_MAGIC 0x51475346UL   /* "FSGQ" */
 
+/* sigaction() (B5 step 3): install a handler that *stays* installed, and
+   say which signals should additionally be blocked while it runs.  The
+   signal being handled is always blocked for the duration of its own
+   handler (POSIX requires it), so a handler that is sent its own signal
+   again does not recurse into itself.
+ *
+ * sa_mask covers signals 1..17 (the ones this kernel defines): the kernel
+ * keeps a 16-bit word per (task, signal), so bits for signals that do not
+ * exist here cost nothing.
+ * SA_RESTART is accepted for source compatibility, but interrupted
+ * syscalls are not restarted in this kernel (see docs/LIMITATIONS.md). */
+struct sigaction {
+    unsigned long sa_handler;    /* SIG_DFL, SIG_IGN or a Ring3 address */
+    unsigned long sa_mask;       /* extra signals to block (1..17) */
+    unsigned long sa_flags;      /* SA_RESTART */
+};
+
+#define SA_RESTART 1
+
 #endif

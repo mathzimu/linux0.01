@@ -220,8 +220,18 @@ OOM 杀进程。而且 `execve` 仍然是**预先**把整个镜像拷进新页�
 | 顺带修的老 bug | `sys_sigreturn` 曾以 `movl $0,%eax` 返回，而 `ret_from_sys_call` 会把 eax 存回"被中断系统调用的返回值槽"——于是**每次从 handler 返回，被打断的系统调用的返回值都被清成 0**。`sigdemo` 只检查 `pause()`（返回值没人看），所以这个 bug 一直藏着；现在返回恢复出来的 eax |
 | 回归 | 场景 25 `sigblock`（`user/sigblock.c`）：阻塞 → 给自己发信号（handler 不得运行）→ 解除阻塞（pending 信号立刻送达）→ 子进程发信号 + `sigsuspend`（返回 -1、hits=2、掩码随后恢复）→ SIGKILL 仍不可屏蔽 |
 
-**还没做**：`sigaction`（持久处理器 + `sa_mask` 在处理器运行期间屏蔽自身）、可重启的系统调用
-（`SA_RESTART`），以及把投递点补到缺页返回路径上（现在靠 tick 兜底，最坏 10ms 延迟）。
+### B5 第 3 步 — `sigaction`：持久处理器 + `sa_mask` ✅（同一提交）
+
+| 项 | 内容 |
+|----|------|
+| 新系统调用 | 70 `sigaction(sig, act, oldact)`：`struct sigaction { sa_handler, sa_mask, sa_flags }`（`include/signal.h`）。成功返回 0（POSIX），旧动作写进 `oldact` |
+| 持久处理器 | `signal()` 的处理器跑之前重置成 `SIG_DFL`（posix 之外的经典语义，`sys_signal` 保持原样）；`sigaction()` 装的处理器**保持有效**：内核按 pid 记一个 `sig_sa[]` 位图，`do_signal` 只对没这一位的信号做重置 |
+| `sa_mask` | 处理器执行期间额外屏蔽的信号，按 (任务, 信号) 存 16 位（信号 1..17，即本内核定义的那些）；表 64×18×2 = 2304 字节 BSS，仍然**不进 `task_struct`**（原因见上） |
+| 自阻塞 | POSIX 要求"正在处理的信号在处理器期间被屏蔽"，所以进入处理器时 `sig_blocked |= (1<<sig) | sa_mask`，处理器因此不会被自己递归打断；旧掩码由 **`sys_sigreturn` 里的一个 C 钩子**（`sigreturn_restore_mask`）恢复——处理器是通过 sigreturn 系统调用返回的，没有别的 C 时机 |
+| 回归 | 场景 26 `sigaction`（`user/sigactiontest.c`）：处理器里给自己发 SIGUSR1 与 SIGUSR2 → 都不能在处理器运行期间投递（`usr2_hits=0`）→ 处理器返回后按序补投（usr1=2, usr2=1）→ 再发一次 SIGUSR1 仍进处理器（usr1=3，证明不用重新安装）→ `sigaction(SIG_DFL)` 之后不再进处理器 |
+
+**还没做**：可重启的系统调用（`SA_RESTART` 现在只是被接受、不生效），以及把投递点补到缺页
+返回路径上（现在靠 tick 兜底，最坏 10ms 延迟）。
 
 ## B5.5 — 一次丢失的唤醒：`bh->b_wait` 从来没有人叫过 ✅ 已修复
 
@@ -344,7 +354,7 @@ swap 后耗尽门槛是**内存+swap**（695 帧 + 512 槽 ≈ 1207 页），子
 ## 当前状态（一句话）
 
 **67 个系统调用（编号与 1991 Linux 0.01 完全一致）＋ 3 个本内核扩展（67 sigreturn /
-68 sigprocmask / 69 sigsuspend）**、23 条 Shell 命令的教学内核：
+68 sigprocmask / 69 sigsuspend / 70 sigaction）**、23 条 Shell 命令的教学内核：
 进程生命周期完整（fork/execve/waitpid/信号/管道）、MINIX FS 增删改查 + 硬链接/重命名 +
 **权限模型**、
 Ring3 用户态 + 编程工具链（`make prog NAME=xxx` → `exec /xxx`）、内存隔离、chdir。
@@ -441,7 +451,7 @@ make Image                # 引导镜像
 # 运行/验证
 qemu-system-i386 -fda Image -hda minix.img -m 16M -boot a
 python3 scripts/qemu-test.py --image Image --hda minix.img --keys $'cmd\n'
-make test                   # 一键回归（scripts/regress.sh，25 个场景断言）
+make test                   # 一键回归（scripts/regress.sh，26 个场景断言）
 make check                  # 静态校验：内存地图 + 文档一致性 + lint 反向自测
 make check-layout           # 只校验内存地图（含 _end 未越界）
 make check-docs             # 只校验文档里引用的布局常量/场景数与源码一致

@@ -85,6 +85,7 @@
 #define __NR_sigreturn 67
 #define __NR_sigprocmask 68
 #define __NR_sigsuspend 69
+#define __NR_sigaction 70
 
 /* open flags (Linux 0.01) */
 #define O_RDONLY 0
@@ -209,5 +210,9 @@ _syscall0(int, sigreturn)
 _syscall3(int, sigprocmask, int, how, unsigned long *, set,
           unsigned long *, oldset)
 _syscall1(int, sigsuspend, unsigned long *, mask)
+/* struct sigaction lives in <signal.h>; the wrapper takes untyped
+   pointers so this header does not have to depend on it. */
+_syscall3(int, sigaction, int, sig, unsigned long *, act,
+          unsigned long *, oldact)
 
 #endif

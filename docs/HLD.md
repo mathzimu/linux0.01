@@ -447,6 +447,7 @@ sys_call_table[NR_syscalls] = {
     sys_sigreturn,   // 67  本内核扩展：处理器返回后恢复被中断的上下文
     sys_sigprocmask, // 68  本内核扩展：阻塞/解除阻塞信号
     sys_sigsuspend,  // 69  本内核扩展：原子换掩码并等待
+    sys_sigaction,   // 70  本内核扩展：持久处理器 + sa_mask
 };
 ```
 

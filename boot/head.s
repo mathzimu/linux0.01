@@ -216,7 +216,7 @@ system_call:
     /* syscalls: numbers 0..66 are the Linux 0.01 table, 67 is this
        kernel's sigreturn.  Keep this bound in step with sys_call_table
        (an entry added without widening it is silently unreachable). */
-    cmpl $70, %eax
+    cmpl $71, %eax
     jb 1f
     movl $-1, %eax
     jmp 2f
@@ -419,3 +419,4 @@ sys_call_table:
     .long sys_sigreturn          /* 67: not in Linux 0.01; see kernel/asm.s */
     .long sys_sigprocmask        /* 68: not in Linux 0.01 (B5) */
     .long sys_sigsuspend         /* 69: not in Linux 0.01 (B5) */
+    .long sys_sigaction          /* 70: not in Linux 0.01 (B5) */

@@ -81,7 +81,7 @@ PIT → IRQ0 → 0x20 → timer_interrupt
   int $0x80
 system_call:
   存 syscall_esp，切 DS/ES/GS=内核，FS=USER_DS
-  cmpl $70,%eax; jb → call sys_call_table[eax]（越界返回 -1）
+  cmpl $71,%eax; jb → call sys_call_table[eax]（越界返回 -1）
   返回值写回栈上 eax 槽 → iret
 ```
 

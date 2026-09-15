@@ -234,6 +234,10 @@ int sys_execve(const char *filename, char **argv, char **envp);
 int sys_signal(int sig, unsigned long handler);
 int sys_sigprocmask(int how, unsigned long *set, unsigned long *oldset);
 int sys_sigsuspend(unsigned long *mask);
+int sys_sigaction(int sig, unsigned long *act, unsigned long *oldact);
+/* Called from sys_sigreturn (kernel/asm.s) to put the caller's signal
+   mask back after a handler has run with its own signal blocked. */
+void sigreturn_restore_mask(void);
 int sys_chdir(const char *filename);
 int sys_chmod(const char *filename, int mode);
 int sys_chown(const char *filename, int uid, int gid);

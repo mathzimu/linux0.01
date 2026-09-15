@@ -330,6 +330,17 @@ run_case sigblock "$BASE && make prog NAME=sigblock" 'exec /bin/sigblock\n' \
     'sigblock: SIGKILL is still unblockable (hits=2)' \
     'sigblock: PASS'
 
+# 场景 26: sigaction（B5 第 3 步）—— 持久处理器 + sa_mask
+#   signal() 的处理器在运行前会被重置成 SIG_DFL（所以程序必须在处理器里重新装一次，
+#   见场景 25 的测试程序）；sigaction() 装的处理器**保持有效**。POSIX 还要求"正在
+#   处理的信号在处理器执行期间被屏蔽"，否则处理器会被自己递归打断。这条场景同时验证
+#   自阻塞、sa_mask 生效、以及处理器返回后 pending 的信号按序补投。
+run_case sigaction "$BASE && make prog NAME=sigactiontest" 'exec /bin/sigactiontest\n' \
+    'sigaction: in handler: usr2_hits=0 (want 0)' \
+    'sigaction: after one raise: usr1=2 usr2=1' \
+    'sigaction: after a second raise: usr1=3 (want 3)' \
+    'sigaction: PASS'
+
 echo
 echo "================================"
 echo "  $PASS passed, $FAIL failed"

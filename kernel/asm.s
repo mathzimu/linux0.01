@@ -52,6 +52,13 @@ sys_sigreturn:
 
     movl $sigreturn_frame, %esi
 
+    /* The handler ran with its own signal (plus sa_mask) blocked, so put
+       the caller's mask back now that it has returned.  Done before the
+       frame is rewritten below, and %esi is reloaded afterwards because
+       the C call clobbers the registers it uses. */
+    call sigreturn_restore_mask
+    movl $sigreturn_frame, %esi
+
     cmpl $0x51475346, 0(%esi)           /* magic  */
     jne sig_bad
     /* The frame carries the return address it was built with; compare

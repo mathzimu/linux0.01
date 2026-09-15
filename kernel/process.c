@@ -50,6 +50,53 @@ static void sig_restore_suspend_mask(void)
     }
 }
 
+/* --- B5 step 3: sigaction() -------------------------------------------
+ *
+ * `signal()` resets a handler to SIG_DFL before running it (classic
+ * semantics, still what sys_signal() does); sigaction() installs a
+ * handler that stays installed, and can name extra signals to block
+ * while it runs.  All of it lives out here for the same reason the mask
+ * does — see the comment above — and is indexed by pid.
+ */
+
+/* bit sig: this handler was installed with sigaction() and must not be
+   reset when it runs. */
+static unsigned long sig_sa[NR_TASKS];
+
+/* sa_mask of the action installed for (task, signal), signals 1..17 (the
+   ones this kernel defines).  A 16-bit word each: 64 tasks x 18 x 2 bytes
+   = 2304 bytes, which the kernel image can afford; a full 32-bit word per
+   signal would be 4.6KB for bits that can never be set here. */
+#define SIG_SA_MAX 18
+static unsigned short sig_sa_mask[NR_TASKS][SIG_SA_MAX];
+
+/* The mask a handler is running with, and where to put it back.  POSIX
+   blocks the signal being handled (plus sa_mask) for the duration of the
+   handler; that mask is installed when the handler is entered and undone
+   by sys_sigreturn (kernel/asm.s calls sigreturn_restore_mask for that,
+   because the handler returns through the sigreturn syscall, not through
+   any C code we control). */
+static unsigned long sig_handler_mask[NR_TASKS];
+static unsigned char sig_handler_mask_saved[NR_TASKS];
+
+void sigreturn_restore_mask(void)
+{
+    if (sig_handler_mask_saved[current->pid]) {
+        sig_handler_mask_saved[current->pid] = 0;
+        sig_blocked[current->pid] = sig_handler_mask[current->pid];
+    }
+}
+
+/* sa_mask for (task, signal), 0 for the signals this kernel does not
+   define (a user may pass any number 1..31; the table only has rows for
+   the ones that exist, so every access goes through here). */
+static unsigned short sig_action_mask(unsigned long pid, int sig)
+{
+    if (sig > 0 && sig < SIG_SA_MAX)
+        return sig_sa_mask[pid][sig];
+    return 0;
+}
+
 /* USER_STACK_TOP and CHILD_USER_STACK_TOP both come from
  * include/memlayout.h alongside every other user-visible address. */
 int sys_fork(void)
@@ -115,6 +162,16 @@ int sys_fork(void)
        exiting task's mask is overwritten here when its slot is handed
        out again. */
     sig_blocked[pid] = sig_blocked[current->pid];
+    /* B5 step 3: which handlers came from sigaction(), and the masks they
+       block while running, are per-process state as well. */
+    sig_sa[pid] = sig_sa[current->pid];
+    sig_handler_mask[pid] = sig_handler_mask[current->pid];
+    sig_handler_mask_saved[pid] = 0;
+    {
+        int k;
+        for (k = 0; k < SIG_SA_MAX; k++)
+            sig_sa_mask[pid][k] = sig_sa_mask[current->pid][k];
+    }
     p->counter = p->priority;
     p->state = TASK_RUNNING;
 
@@ -397,6 +454,50 @@ int sys_signal(int sig, unsigned long handler)
     old = current->handlers[sig];
     current->handlers[sig] = handler;
     return (int)old;
+}
+
+/* sigaction(sig, act, oldact): persistent handler + a mask to block while
+   it runs.  Returns 0, or -1 for a bad signal or a handler outside the
+   user program image (same validation as sys_signal).  SIGKILL cannot be
+   caught or blocked. */
+int sys_sigaction(int sig, unsigned long *act, unsigned long *oldact)
+{
+    unsigned long handler, mask, flags;
+
+    if (sig < 1 || sig >= 32 || sig == SIGKILL)
+        return -1;
+
+    if (oldact) {
+        put_fs_long(current->handlers[sig], oldact);
+        put_fs_long(sig_action_mask(current->pid, sig), oldact + 1);
+        put_fs_long((sig_sa[current->pid] & (1UL << sig)) ? SA_RESTART : 0,
+                    oldact + 2);
+    }
+    if (!act)
+        return 0;                      /* query only */
+
+    handler = get_fs_long(act);
+    mask = get_fs_long(act + 1);
+    flags = get_fs_long(act + 2);
+
+    if (handler != SIG_DFL && handler != SIG_IGN &&
+        (handler < USER_PROG_START || handler >= USER_PROG_END))
+        return -1;
+
+    current->handlers[sig] = handler;
+    /* Asked for by sigaction(), so it survives its own execution.  A
+       SIG_DFL/SIG_IGN action is not a handler and needs no bit. */
+    if (handler == SIG_DFL || handler == SIG_IGN) {
+        sig_sa[current->pid] &= ~(1UL << sig);
+        sig_sa_mask[current->pid][sig] = 0;
+    } else {
+        sig_sa[current->pid] |= (1UL << sig);
+        if (sig < SIG_SA_MAX)
+            sig_sa_mask[current->pid][sig] = (unsigned short)(mask & 0x1FFFFUL);
+    }
+    (void)flags;                       /* SA_RESTART: accepted, not used */
+
+    return 0;                          /* POSIX: 0, not the old handler */
 }
 
 /* Wait for a child to become a zombie and reap it: hand out the exit
@@ -856,13 +957,23 @@ void do_signal(unsigned char *kf)
             if (cpl == 3) {
                 /* `signal()` semantics: a handler is reset to SIG_DFL
                    before it runs, except for SIGCHLD (0.01 did the
-                   same).  Interrupted syscalls are not restarted; the
-                   handler resumes at the next instruction. */
-                if (sig != SIGCHLD)
+                   same).  A handler installed with sigaction() stays
+                   installed (B5 step 3).  Interrupted syscalls are not
+                   restarted; the handler resumes at the next
+                   instruction. */
+                if (sig != SIGCHLD && !(sig_sa[current->pid] & (1UL << sig)))
                     current->handlers[sig] = SIG_DFL;
                 /* The temporary mask from sigsuspend() stays in force
                    until the handler is about to run. */
                 sig_restore_suspend_mask();
+                /* POSIX: the handler runs with its own signal blocked,
+                   plus whatever sa_mask asked for.  sys_sigreturn puts
+                   the caller's mask back when the handler returns. */
+                sig_handler_mask[current->pid] = sig_blocked[current->pid];
+                sig_handler_mask_saved[current->pid] = 1;
+                sig_blocked[current->pid] |=
+                    (1UL << sig) |
+                    (unsigned long)sig_action_mask(current->pid, sig);
                 deliver_signal(sig, handler, kf);
                 return;
             }

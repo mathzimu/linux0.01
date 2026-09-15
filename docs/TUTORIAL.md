@@ -1303,8 +1303,8 @@ sys_call_table:
 ```
 
 > 编号与 1991 年 Linux 0.01 的 `sys_call_table` **完全一致**（stub 项同样返回 -1）。
-> 完整对应关系与 `include/unistd.h` 一致；入口汇编见 §5 `system_call`（`cmpl $70, %eax; jb` 校验范围）。
-> 编号 67–69 是本内核的扩展（sigreturn / sigprocmask / sigsuspend），0–66 与 0.01 逐项对齐。
+> 完整对应关系与 `include/unistd.h` 一致；入口汇编见 §5 `system_call`（`cmpl $71, %eax; jb` 校验范围）。
+> 编号 67–70 是本内核的扩展（sigreturn / sigprocmask / sigsuspend / sigaction），0–66 与 0.01 逐项对齐。
 
 **sys_call_table 在 C 中的声明：**
 
