@@ -79,6 +79,10 @@ def main():
     ap.add_argument('--disk', help='single self-booting image (Makefile '
                                    'target `disk`): kernel *and* root '
                                    'filesystem on IDE 0:0, booted from it')
+    ap.add_argument('--disk-format', default='raw',
+                    help='format of --disk/--hda (raw, vmdk, qcow2, ...); '
+                         'pass vmdk to boot the VMware image `make vmdk` '
+                         'produces, which is how the conversion is checked')
     ap.add_argument('--out', default='/tmp/qtest', help='output prefix')
     ap.add_argument('--hold', type=float, default=30.0,
                     help='MAXIMUM seconds to wait for the guest to be ready.  '
@@ -131,7 +135,8 @@ def main():
             print('--disk is the whole system: do not combine it with '
                   '--image/--iso/--hda', file=sys.stderr)
             sys.exit(2)
-        cmd += ['-drive', 'file=%s,format=raw,if=ide,index=0' % args.disk,
+        cmd += ['-drive', 'file=%s,format=%s,if=ide,index=0'
+                % (args.disk, args.disk_format),
                 '-boot', 'c']
     elif args.image:
         cmd += ['-drive', 'file=%s,format=raw,if=floppy,index=0' % args.image]
@@ -141,7 +146,8 @@ def main():
         print('need --disk, --image or --iso', file=sys.stderr)
         sys.exit(2)
     if args.hda:
-        cmd += ['-drive', 'file=%s,format=raw,if=ide,index=0' % args.hda]
+        cmd += ['-drive', 'file=%s,format=%s,if=ide,index=0'
+                % (args.hda, args.disk_format)]
     if args.extra:
         cmd += args.extra.split()
 

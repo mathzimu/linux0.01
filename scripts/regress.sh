@@ -25,6 +25,27 @@ hda_args() {
     fi
 }
 
+# What gets attached and booted.  The normal case is a floppy Image plus the
+# scenario's MINIX disk; a scenario that boots one self-contained disk (the
+# single-file image, or its VMDK conversion) sets QEMU_DISK instead, and then
+# there is no floppy and no second disk:
+#
+#     QEMU_DISK=linux.img run_case selfdisk ...
+#     QEMU_DISK=linux.vmdk QEMU_DISK_FORMAT=vmdk run_case vmdk ...
+#
+# Expands to several words (or none), so it must stay unquoted at the call
+# site.
+boot_args() {
+    if [ -n "${QEMU_DISK:-}" ]; then
+        printf '%s' "--disk ${QEMU_DISK} --disk-format ${QEMU_DISK_FORMAT:-raw}"
+    else
+        printf '%s' "--image Image"
+        if [ -n "${QEMU_HDA-minix.img}" ]; then
+            printf '%s' " --hda ${QEMU_HDA-minix.img}"
+        fi
+    fi
+}
+
 # check_no_reboot <name> <output> <expected-boots>
 #
 #   A reboot is not a pass.  A triple fault restarts the machine, and the
@@ -75,7 +96,7 @@ run_case() {
         echo "FAIL [$name]  setup failed: $prep"
         FAIL=$((FAIL+1)); return 1
     fi
-    out=$(python3 scripts/qemu-test.py --image Image $(hda_args) \
+    out=$(python3 scripts/qemu-test.py $(boot_args) \
              --hold "${TEST_HOLD:-30}" \
              --tail "${QEMU_TAIL:-${TEST_TAIL:-1.5}}" \
              --min-wait "${QEMU_MIN_WAIT:-0}" \
@@ -112,7 +133,7 @@ run_case2() {
         echo "FAIL [$name]  setup failed: $prep"
         FAIL=$((FAIL+1)); return 1
     fi
-    out=$(python3 scripts/qemu-test.py --image Image $(hda_args) \
+    out=$(python3 scripts/qemu-test.py $(boot_args) \
              --hold "${TEST_HOLD:-30}" --tail "${TEST_TAIL:-1.5}" \
              --mem "${QEMU_MEM:-16M}" \
              --type-delay "${TEST_TYPE_DELAY:-0.5}" \
@@ -120,7 +141,7 @@ run_case2() {
     printf '%s' "$out" > "$LOGDIR/$name.1.serial"
     if ! check_no_reboot "$name.1" "$out" 1; then return 1; fi
     out="$out
-$(python3 scripts/qemu-test.py --image Image $(hda_args) \
+$(python3 scripts/qemu-test.py $(boot_args) \
              --hold "${TEST_HOLD:-30}" --tail "${TEST_TAIL:-1.5}" \
              --mem "${QEMU_MEM:-16M}" \
              --type-delay "${TEST_TYPE_DELAY:-0.5}" \
@@ -485,9 +506,10 @@ QEMU_HDA= run_case nodisk "$BASE" 'help\nexit\n' \
 #   `make disk` 生成 linux.img：LBA 0 是引导扇区，随后是 setup 与内核镜像，MINIX 文件系统
 #   放在按柱面对齐的 LBA 上（本次 192），而这个基址由 tools/mkdisk 写进引导扇区的参数块、
 #   内核从那里读出来——两边不各自硬编码一个偏移，所以镜像和内核不会悄悄错位。
-#   这条场景**只挂这一块盘**（QEMU_HDA=linux.img + `-boot c`），验证文件系统真的在硬盘上
-#   可用：ls/cat 走 Ring0 shell，exec /bin/sh 进 Ring3 再 ls /bin 与重定向读 /readme.txt。
-QEMU_HDA=linux.img TEST_EXTRA='-boot c' \
+#   这条场景**只挂这一块盘**（`QEMU_DISK=linux.img`，等价于
+#   `qemu-system-i386 -hda linux.img -boot c`），验证文件系统真的在硬盘上可用：ls/cat 走
+#   Ring0 shell，exec /bin/sh 进 Ring3 再 ls /bin 与重定向读 /readme.txt。
+QEMU_DISK=linux.img \
 run_case selfdisk 'rm -f minix.img linux.img disk-fs.img && make disk' \
     'ls\ncat /hello.txt\nexec /bin/sh\nls /bin\nwc < /readme.txt\nexit\nexit\n' \
     'MINIX: root filesystem at LBA' \
@@ -496,9 +518,28 @@ run_case selfdisk 'rm -f minix.img linux.img disk-fs.img && make disk' \
     '3 19 129 -' \
     'user-mode shell (Ring3)' \
     'exec: child 1 exit_code=0'
-# `VAR=value func` persists after the function returns in bash, so clear
-# them or every later scenario would boot linux.img with -boot c too.
-unset QEMU_HDA TEST_EXTRA
+# `VAR=value func` persists after the function returns in bash, so clear it
+# or every later scenario would boot linux.img as well.
+unset QEMU_DISK
+
+# 场景 35: VMware/VirtualBox 用的 VMDK（同一张单文件系统盘换容器格式）
+#   VMware 与 VirtualBox 都不能挂裸镜像，`make vmdk` 用 qemu-img 把 linux.img 包成 VMDK：
+#   `adapter_type=ide`（内核只有 PIIX PIO 驱动），描述符里带 7 柱面 / 16 磁头 / 63 扇区
+#   —— 与内核自己做 LBA→CHS 换算所用的几何一致，这也是 tools/mkdisk 把镜像补齐到整数
+#   柱面的原因；两个 hypervisor 都不需要分区表（引导扇区就是入口，文件系统位置由它里面的
+#   基址决定）。
+#   这条场景用 QEMU 的 vmdk 驱动把**转换后的文件真的启动一遍**（`--disk-format vmdk`），
+#   证明转换是忠实的、文件系统仍在盘上。VMware 自身的 BIOS 只能在 VMware 里验，但引导只用到
+#   INT 13h AH=42h（EDD）与 IDE PIO，两者都支持（见 docs/limitations.md）。
+QEMU_DISK=linux.vmdk QEMU_DISK_FORMAT=vmdk \
+run_case vmdk 'rm -f linux.img linux.vmdk disk-fs.img && make vmdk' \
+    'ls\ncat /hello.txt\nexec /bin/sh\nls /bin\nwc < /readme.txt\nexit\nexit\n' \
+    'MINIX: root filesystem at LBA' \
+    'Hello from MINIX v1!' \
+    '3 19 129 -' \
+    'user-mode shell (Ring3)' \
+    'exec: child 1 exit_code=0'
+unset QEMU_DISK QEMU_DISK_FORMAT
 
 # 场景 34: 同一会话里的第二个管道（wake_up 不清队列头 → 回收来的页目录被写零）
 #   症状：`exec /bin/sh` 之后连跑两条 `cat /hello.txt | wc`，第二条一敲下去机器立刻三重

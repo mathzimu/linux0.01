@@ -221,6 +221,32 @@ disk: $(DISK_IMG)
 $(DISK_IMG): Image $(DISK_FS) tools/mkdisk
 	tools/mkdisk $(DISK_IMG) Image $(DISK_FS)
 
+# --- VMware / VirtualBox: the same one-file system as a VMDK -----------
+#
+# VMware and VirtualBox cannot attach a raw image, so wrap linux.img in a
+# VMDK.  It has to be an IDE adapter (the kernel's disk driver is PIIX
+# PIO-only: IRQ14, ports 0x1F0) and qemu-img's descriptor carries the
+# geometry the kernel does its own LBA->CHS maths with - 7 cylinders, 16
+# heads, 63 sectors, matching tools/mkdisk's cylinder padding.  Neither
+# hypervisor needs a partition table: the boot sector is what gets control
+# and the kernel finds the filesystem through the base LBA in it.
+#
+# qemu-img lives in the build container:
+#   docker run --rm -v $(PWD):/kernel -w /kernel linux-0.01-builder make vmdk
+VMDK_IMG = linux.vmdk
+VMDK_FLAT = linux-flat.vmdk
+
+vmdk: $(VMDK_IMG)
+
+$(VMDK_IMG): $(DISK_IMG)
+	qemu-img convert -f raw -O vmdk -o adapter_type=ide $< $@
+
+# monolithicFlat instead of the default monolithicSparse: two files (a small
+# text descriptor plus a raw data extent), which some VMware versions and
+# older VirtualBox builds prefer.  Both were checked to boot.
+$(VMDK_FLAT): $(DISK_IMG)
+	qemu-img convert -f raw -O vmdk -o adapter_type=ide,subformat=monolithicFlat $< $@
+
 # One-shot regression suite (see scripts/regress.sh): builds a clean
 # MINIX disk per scenario, boots QEMU, and asserts the serial output.
 # The full run takes ~10 minutes under TCG (no KVM) on a dev machine -
@@ -271,7 +297,7 @@ docker-build:
 clean:
 	rm -f *.d */*.d
 	rm -f Image kernel.iso kernel/system kernel/system.bin
-	rm -f linux.img disk-fs.img
+	rm -f linux.img disk-fs.img linux.vmdk linux-flat.vmdk linux-flat-flat.vmdk
 	rm -f system system.bin
 	rm -f boot/boot boot/setup
 	rm -f $(OBJS) $(HEAD_OBJ) $(SETUP_OBJ) $(BOOT_OBJ)
@@ -304,4 +330,4 @@ debug: Image minix.img
 run-disk: $(DISK_IMG)
 	qemu-system-i386 -hda $(DISK_IMG) -m 16M -boot c
 
-.PHONY: all clean run run-cd debug run-disk disk iso docker-build test test-fast
+.PHONY: all clean run run-cd debug run-disk disk vmdk iso docker-build test test-fast

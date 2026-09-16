@@ -104,10 +104,19 @@ qemu-system-i386 -hda linux.img -m 16M -boot c     # 等价于 make run-disk
 单文件镜像转成 VMware 磁盘（只换容器格式，镜像内容不变；仍须挂在 **IDE 0:0**）：
 
 ```bash
-qemu-img convert -f raw -O vmdk -o adapter_type=ide linux.img linux.vmdk
+make vmdk                     # -> linux.vmdk（monolithicSparse；qemu-img 在构建容器里）
+make linux-flat.vmdk          # 需要 monolithicFlat（描述符 + 裸数据两个文件）时
 ```
 
-（这条路径**没有实测**：本仓库只在 QEMU 上验证过；另外内核与 BIOS 的引导方式见 `docs/limitations.md`。）
+不用 `make` 的等价命令：`qemu-img convert -f raw -O vmdk -o adapter_type=ide linux.img linux.vmdk`
+（本机没有 qemu-img 时，在构建容器里跑：`docker run --rm -v $(pwd):/kernel -w /kernel linux-0.01-builder make vmdk`）。
+
+**验到什么程度**：两个变体都在 QEMU 的 vmdk 驱动下**实测启动成功**（场景 35：1 条启动横幅、0 个
+`PAGE FAULT`、`MINIX: root filesystem at LBA 192`，`ls`/`cat /hello.txt`/`exec /bin/sh`/`ls /bin`/
+`wc < /readme.txt` 全部正常），描述符里的 `ddb.geometry` 正是内核 CHS 换算用的 **7 柱面 / 16 磁头 /
+63 扇区**。**没实测**的只剩 VMware/VirtualBox 自身的 BIOS：引导只用到 INT 13h AH=42h（EDD）与 IDE PIO，
+两者都支持；但内核的 IDE 几何是硬编码 16/63，万一某个 hypervisor 不认 `ddb.geometry` 而按别的几何
+暴露磁盘，读盘就会错位——真机上出问题先怀疑这一条。
 
 ### 构建产物
 
@@ -388,10 +397,10 @@ exec: child 1 exit_code=7
 
 ## 🧪 自动化验证
 
-**一键回归**（34 个场景：exec / 管道 / chdir / 硬链接 / fork-waitpid / 信号 / 系统调用 / 内存隔离 / 目录扩容 / 基础应用 / 堆与缓存不重叠 / 启动自检 / 自定义信号处理器 / **Ring3 shell** / **定时回写** / **写时复制** / **按需调页** / **内存耗尽** / **文件权限** / **shell 管道与重定向** / **中断驱动磁盘** / **内存压力下的页回收** / **信号投递时机** / **匿名页换出** / **信号屏蔽与 sigsuspend** / **sigaction** / **sleep 与 select** / **后台任务与 wait** / **间接块大文件** / **并发 exec** / **默认镜像用户态** / **无根文件系统启动** / **单文件自启动镜像** / **同会话第二个管道**）：
+**一键回归**（35 个场景：exec / 管道 / chdir / 硬链接 / fork-waitpid / 信号 / 系统调用 / 内存隔离 / 目录扩容 / 基础应用 / 堆与缓存不重叠 / 启动自检 / 自定义信号处理器 / **Ring3 shell** / **定时回写** / **写时复制** / **按需调页** / **内存耗尽** / **文件权限** / **shell 管道与重定向** / **中断驱动磁盘** / **内存压力下的页回收** / **信号投递时机** / **匿名页换出** / **信号屏蔽与 sigsuspend** / **sigaction** / **sleep 与 select** / **后台任务与 wait** / **间接块大文件** / **并发 exec** / **默认镜像用户态** / **无根文件系统启动** / **单文件自启动镜像** / **同会话第二个管道** / **VMware VMDK**）：
 
 ```bash
-make test                    # 等价于 scripts/regress.sh（34 个场景，TCG 下约 13 分钟）
+make test                    # 等价于 scripts/regress.sh（35 个场景，TCG 下约 15 分钟）
 make test-fast               # 快集：跳过 autosync/oom/evict 三个重场景（CI 的 PR 跑这个）
 ```
 
