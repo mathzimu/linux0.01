@@ -514,10 +514,12 @@ unset QEMU_HDA TEST_EXTRA
 #   **之前**就占用 file_table[] 槽位、最后才置 f_count=1，于是并发打开会共用同一个 struct
 #   file，execve 会读回另一个进程的 inode（`wc` 那一级实际跑的是 `cat` 的镜像）。两个缺陷都
 #   修好后，每条管道都应打印一次 `1 4 21 -`。
+#   注意别断言 `Hello from MINIX v1!` 也出现在串口里：`cat` 的输出是写进管道交给 `wc` 的，
+#   正常情况下**不会**到控制台——它以前之所以出现在控制台，正是因为 root cause 二让 `wc`
+#   那一级跑成了 `cat`。所以"文件内容没漏出来 + 每级都打印计数"才是正确行为。
 QEMU_MIN_WAIT=45 run_case pipe2 'rm -f minix.img && make minix.img' \
     'exec /bin/sh\ncat /hello.txt | wc\ncat /hello.txt | wc\ncat /hello.txt | wc\nexit\n' \
     '1 4 21 -' \
-    'Hello from MINIX v1!' \
     'exec: child 1 exit_code=0'
 
 echo
