@@ -679,9 +679,10 @@ inode 表只用了 **4/64** ⇒ 不是表满；也没有 `hd:` 报错 ⇒ 不是
 `user/hello.elf` 存在时额外注入 `/bin/hello`，不存在则静默跳过 —— 所以既有场景的镜像内容不变。
 
 **回归**：场景 31 `userland` —— 用默认镜像启动，`exec /bin/sh` 后连跑
-`cat` / `wc <` / `cp` / `touch` / `mkdir` / `rm` / `ls /` / `ls /docs`，断言各程序**真实输出**
-（`Hello from MINIX v1!`、`3 19 129 -`、`cp: /hello.txt -> /c2 done`、`t3`、`nested`、
-`ls: /c2: cannot open`、`note.txt`），而不是只断言"文件存在"。
+`cat` / `wc <` / `cp` / `ln` / `mv` / `head | wc` / `tail | wc` / `touch` / `mkdir` / `rm` /
+`ls /` / `ls /docs`，断言各程序**真实输出**（`Hello from MINIX v1!`、`3 19 129 -`、
+`cp: /hello.txt -> /c2 done`、`t3`、`c4`、`nested`、`1 4 21 -`、`2 2 4 -`、
+`ls: /c3: cannot open`、`ls: /c2: cannot open`、`note.txt`），而不是只断言"文件存在"。
 
 ## U2 — `make iso` 把整个仓库塞进 ISO，第二次运行还会读自己在写的文件 ✅ 已修复
 
