@@ -474,22 +474,31 @@ QEMU_MIN_WAIT=90 run_case execrace \
 
 # 场景 31: 默认镜像自带一套用户态工具
 #   `make minix.img` 现在除了 mkminix 自带的 /bin/hello，还注入
-#   /bin/{ls,cat,cp,grep,touch,wc,mkdir,rm,sh}，所以 `exec /bin/sh` 之后敲
-#   ls/cat/wc/cp/mkdir/rm 是真能跑起来的，而不是 `sh: /bin/ls: cannot execute`。
+#   /bin/{ls,cat,head,cp,mv,ln,grep,touch,wc,mkdir,rm,sh}，所以 `exec /bin/sh`
+#   之后敲 ls/cat/cp/mv/ln/mkdir/rm 是真能跑起来的，而不是
+#   `sh: /bin/ls: cannot execute`。
 #   这条场景锁住那个默认值：Makefile 里的注入列表一旦被改坏（例如用 patsubst
 #   生成 "path:name"，它只替换第一个 %，名字会变成字面量 '%'），这里立刻红。
 #
-#   断言要点：`echo nested > /d/f` + `cat /d/f` 证明 **mkdir** 造出的目录真的能
-#   进去写读；删掉 /c2 之后用 `ls /c2` 断言 `ls: /c2: cannot open`——没有 stat(2)
-#   可用，所以"文件确实被 unlink 掉了"只能这样从外部观察（`ls` 对不存在的路径
-#   报的就是这句）。
+#   断言要点：
+#   - `echo nested > /d/f` + `cat /d/f` 证明 **mkdir** 造出的目录真能进出读写；
+#   - `ln /c2 /c3` 后 `ls /` 里出现 c3、`mv /c3 /c4` 后 `ls /` 里出现 c4、
+#     而 `ls /c3` 报 `ls: /c3: cannot open` —— 一个断言覆盖 **ln** 与 **mv**
+#     （mv = link + unlink，所以新名字在、旧名字没了才算成功）；
+#   - `head -n 1 /hello.txt | wc` 必须得到 `1 4 21 -`：head 只放出一行，
+#     管道另一头数出来的就是那一行；
+#   - `rm /c2` 之后 `ls /c2` 报 `ls: /c2: cannot open` —— 没有 stat(2) 可用，
+#     这是从外部观察"文件确实被 unlink 掉了"的唯一办法。
 run_case userland 'rm -f minix.img && make minix.img' \
-    'exec /bin/sh\ncat /hello.txt\nwc < /readme.txt\ncp /hello.txt /c2\ntouch /t3\nmkdir /d\necho nested > /d/f\ncat /d/f\nls /\nrm /c2\nls /c2\nrm /d/f\nrm /d\nls /docs\nexit\n' \
+    'exec /bin/sh\ncat /hello.txt\nwc < /readme.txt\ncp /hello.txt /c2\nln /c2 /c3\nmv /c3 /c4\nhead -n 1 /hello.txt | wc\ntouch /t3\nmkdir /d\necho nested > /d/f\ncat /d/f\nls /\nls /c3\nrm /c2\nls /c2\nrm /c4\nrm /d/f\nrm /d\nls /docs\nexit\n' \
     'Hello from MINIX v1!' \
     '3 19 129 -' \
     'cp: /hello.txt -> /c2 done' \
     't3' \
+    'c4' \
     'nested' \
+    '1 4 21 -' \
+    'ls: /c3: cannot open' \
     'ls: /c2: cannot open' \
     'note.txt' \
     'exec: child 1 exit_code=0'

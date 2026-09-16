@@ -394,9 +394,9 @@ exec: child 1 exit_code=7
 - 字符串 / `ctype` / `atoi`/`strtol`
 
 **已内置示例**：`hello`（argv）· `catfile`（读文件）· `memtest`（堆复用）· `printf`（格式演示）· `ls`（列目录）· `str`（libc 演示）· `sigchld`（SIGCHLD 语义）· `pipedemo`（管道通信）· `sysdemo`（0.01 对齐 syscall）· `bigdir`（目录扩容）· `bigalloc`（堆与缓冲区缓存不重叠）· `sigdemo`（自定义信号处理器）· `cowtest`（fork 写时复制隔离）· `demandtest`（按需调页）· `oomtest`（内存耗尽只杀肇事进程）· `sh`（Ring3 shell）· `echotest`（Ring3 stdin）。
-**基础应用程序**：`cat`（读文件输出）· `wc`（统计行/词/字节）· `grep`（行内搜索）· `cp`（复制文件）· `touch`（创建空文件）· `mkdir`（建目录）· `rm`（删文件，`-r` 递归删目录）。
+**基础应用程序**：`cat`（读文件输出）· `head`（前 N 行）· `wc`（统计行/词/字节）· `grep`（行内搜索）· `cp`（复制文件）· `mv`（改名/移动，`link`+`unlink`）· `ln`（硬链接）· `touch`（创建空文件）· `mkdir`（建目录）· `rm`（删文件，`-r` 递归删目录）。
 
-这些程序**默认就在镜像里**：`make minix.img` 会把 `ls`、`cat`、`cp`、`grep`、`touch`、`wc`、`mkdir`、`rm`、`sh` 一起注入 `/bin`，所以 `exec /bin/sh` 进去之后直接敲 `ls`、`cat /hello.txt`、`wc < /readme.txt`、`mkdir /d`、`rm /d` 就能用，不需要先 `make prog NAME=...`。
+这些程序**默认就在镜像里**：`make minix.img` 会把 `ls`、`cat`、`head`、`cp`、`mv`、`ln`、`grep`、`touch`、`wc`、`mkdir`、`rm`、`sh` 一起注入 `/bin`，所以 `exec /bin/sh` 进去之后直接敲 `ls`、`cat /hello.txt`、`wc < /readme.txt`、`mkdir /d`、`mv`、`rm /d` 就能用，不需要先 `make prog NAME=...`。
 
 ---
 
