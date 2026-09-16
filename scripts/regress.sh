@@ -492,7 +492,7 @@ QEMU_MIN_WAIT=90 run_case execrace \
 #   - `rm /c2` 之后 `ls /c2` 报 `ls: /c2: cannot open` —— 没有 stat(2) 可用，
 #     这是从外部观察"文件确实被 unlink 掉了"的唯一办法。
 run_case userland 'rm -f minix.img && make minix.img' \
-    'exec /bin/sh\ncat /hello.txt\nwc < /readme.txt\ncp /hello.txt /c2\nln /c2 /c3\nmv /c3 /c4\nhead -n 1 /hello.txt | wc\necho a > /h\necho b >> /h\necho c >> /h\ntail -n 2 /h | wc\ntouch /t3\nmkdir /d\necho nested > /d/f\ncat /d/f\nls /\nls /c3\nrm /c2\nls /c2\nrm /c4\nrm /d/f\nrm /d\nls /docs\nexit\n' \
+    'exec /bin/sh\ncat /hello.txt\nwc < /readme.txt\ncp /hello.txt /c2\nln /c2 /c3\nmv /c3 /c4\nhead -n 1 /hello.txt | wc\necho a > /h\necho b >> /h\necho c >> /h\ntail -n 2 /h | wc\ngrep -n MINIX /hello.txt\ngrep -c MINIX /hello.txt | wc\ntouch /t3\nmkdir /d\necho nested > /d/f\ncat /d/f\nls /\nls /c3\nrm /c2\nls /c2\nrm /c4\nrm /d/f\nrm /d\nls /docs\nexit\n' \
     'Hello from MINIX v1!' \
     '3 19 129 -' \
     'cp: /hello.txt -> /c2 done' \
@@ -501,6 +501,8 @@ run_case userland 'rm -f minix.img && make minix.img' \
     'nested' \
     '1 4 21 -' \
     '2 2 4 -' \
+    '1:Hello from MINIX v1!' \
+    '1 1 2 -' \
     'ls: /c3: cannot open' \
     'ls: /c2: cannot open' \
     'note.txt' \
