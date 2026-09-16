@@ -490,9 +490,12 @@ QEMU_MIN_WAIT=90 run_case execrace \
 #   - `tail -n 2 /h | wc` 必须得到 `2 2 4 -`：/h 是 echo 出来的三行 a/b/c，
 #     后两行正好 2 行 2 词 4 字节（`tail -n 9 /h` 则整份输出，因为不足 9 行）；
 #   - `rm /c2` 之后 `ls /c2` 报 `ls: /c2: cannot open` —— 没有 stat(2) 可用，
-#     这是从外部观察"文件确实被 unlink 掉了"的唯一办法。
+#     这是从外部观察"文件确实被 unlink 掉了"的唯一办法；
+#   - 退出 Ring3 之后在 Ring0 shell 里 `mkdir pw1`（**相对名字**）→ `cd pw1` →
+#     `exec /bin/pwd`，断言 `/pw1`：命令文本里只有 `pw1`，`/pw1` 只可能来自 pwd 的
+#     输出，所以这条断言是强的（pwd 本身不依赖任何新系统调用，见 user/pwd.c）。
 run_case userland 'rm -f minix.img && make minix.img' \
-    'exec /bin/sh\ncat /hello.txt\nwc < /readme.txt\ncp /hello.txt /c2\nln /c2 /c3\nmv /c3 /c4\nhead -n 1 /hello.txt | wc\necho a > /h\necho b >> /h\necho c >> /h\ntail -n 2 /h | wc\ngrep -n MINIX /hello.txt\ngrep -c MINIX /hello.txt | wc\ntouch /t3\nmkdir /d\necho nested > /d/f\ncat /d/f\nls /\nls /c3\nrm /c2\nls /c2\nrm /c4\nrm /d/f\nrm /d\nls /docs\nexit\n' \
+    'exec /bin/sh\ncat /hello.txt\nwc < /readme.txt\ncp /hello.txt /c2\nln /c2 /c3\nmv /c3 /c4\nhead -n 1 /hello.txt | wc\necho a > /h\necho b >> /h\necho c >> /h\ntail -n 2 /h | wc\ngrep -n MINIX /hello.txt\ngrep -c MINIX /hello.txt | wc\ntouch /t3\nmkdir /d\necho nested > /d/f\ncat /d/f\nls /\nls /c3\nrm /c2\nls /c2\nrm /c4\nrm /d/f\nrm /d\nls /docs\nexit\nmkdir pw1\ncd pw1\nexec /bin/pwd\ncd /\n' \
     'Hello from MINIX v1!' \
     '3 19 129 -' \
     'cp: /hello.txt -> /c2 done' \
@@ -506,6 +509,7 @@ run_case userland 'rm -f minix.img && make minix.img' \
     'ls: /c3: cannot open' \
     'ls: /c2: cannot open' \
     'note.txt' \
+    '/pw1' \
     'exec: child 1 exit_code=0'
 
 # 场景 32: 没有根文件系统时也必须进 shell（而不是复位循环）
