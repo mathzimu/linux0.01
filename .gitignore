@@ -35,6 +35,9 @@ linux.vmdk
 linux-flat.vmdk
 linux-flat-flat.vmdk
 
+# VMware's lock directory, created while a VM has one of them attached
+*.lck/
+
 # Regression test serial logs
 test-logs/
 
