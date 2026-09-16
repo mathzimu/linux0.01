@@ -1,4 +1,4 @@
-﻿# Build outputs
+# Build outputs
 Image
 kernel.iso
 kernel/system
@@ -29,6 +29,11 @@ tools/mkminix
 linux.img
 disk-fs.img
 tools/mkdisk
+
+# ... and its VMware/VirtualBox containers (`make vmdk`)
+linux.vmdk
+linux-flat.vmdk
+linux-flat-flat.vmdk
 
 # Regression test serial logs
 test-logs/
