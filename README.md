@@ -111,6 +111,11 @@ make linux-flat.vmdk          # 需要 monolithicFlat（描述符 + 裸数据两
 不用 `make` 的等价命令：`qemu-img convert -f raw -O vmdk -o adapter_type=ide linux.img linux.vmdk`
 （本机没有 qemu-img 时，在构建容器里跑：`docker run --rm -v $(pwd):/kernel -w /kernel linux-0.01-builder make vmdk`）。
 
+⚠️ 虚拟机**挂上** `linux.vmdk` 之后 Windows 会锁住这个文件：再跑 `make vmdk` 会得到
+`qemu-img: Could not open ... Permission denied`。先在虚拟机里把它移除/关机，或者生成到别的路径
+（`make vmdk VMDK_IMG=/tmp/linux.vmdk`）。回归场景 35 就是这么做的——它生成到 `test-logs/`，
+所以开着虚拟机也能跑测试。
+
 **验到什么程度**：两个变体都在 QEMU 的 vmdk 驱动下**实测启动成功**（场景 35：1 条启动横幅、0 个
 `PAGE FAULT`、`MINIX: root filesystem at LBA 192`，`ls`/`cat /hello.txt`/`exec /bin/sh`/`ls /bin`/
 `wc < /readme.txt` 全部正常），描述符里的 `ddb.geometry` 正是内核 CHS 换算用的 **7 柱面 / 16 磁头 /
@@ -389,9 +394,9 @@ exec: child 1 exit_code=7
 - 字符串 / `ctype` / `atoi`/`strtol`
 
 **已内置示例**：`hello`（argv）· `catfile`（读文件）· `memtest`（堆复用）· `printf`（格式演示）· `ls`（列目录）· `str`（libc 演示）· `sigchld`（SIGCHLD 语义）· `pipedemo`（管道通信）· `sysdemo`（0.01 对齐 syscall）· `bigdir`（目录扩容）· `bigalloc`（堆与缓冲区缓存不重叠）· `sigdemo`（自定义信号处理器）· `cowtest`（fork 写时复制隔离）· `demandtest`（按需调页）· `oomtest`（内存耗尽只杀肇事进程）· `sh`（Ring3 shell）· `echotest`（Ring3 stdin）。
-**基础应用程序**：`cat`（读文件输出）· `wc`（统计行/词/字节）· `grep`（行内搜索）· `cp`（复制文件）· `touch`（创建空文件）。
+**基础应用程序**：`cat`（读文件输出）· `wc`（统计行/词/字节）· `grep`（行内搜索）· `cp`（复制文件）· `touch`（创建空文件）· `mkdir`（建目录）· `rm`（删文件，`-r` 递归删目录）。
 
-这些程序**默认就在镜像里**：`make minix.img` 会把 `ls`、`cat`、`cp`、`grep`、`touch`、`wc`、`sh` 一起注入 `/bin`，所以 `exec /bin/sh` 进去之后直接敲 `ls`、`cat /hello.txt`、`wc < /readme.txt` 就能用，不需要先 `make prog NAME=...`。
+这些程序**默认就在镜像里**：`make minix.img` 会把 `ls`、`cat`、`cp`、`grep`、`touch`、`wc`、`mkdir`、`rm`、`sh` 一起注入 `/bin`，所以 `exec /bin/sh` 进去之后直接敲 `ls`、`cat /hello.txt`、`wc < /readme.txt`、`mkdir /d`、`rm /d` 就能用，不需要先 `make prog NAME=...`。
 
 ---
 

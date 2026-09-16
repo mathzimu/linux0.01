@@ -474,16 +474,23 @@ QEMU_MIN_WAIT=90 run_case execrace \
 
 # 场景 31: 默认镜像自带一套用户态工具
 #   `make minix.img` 现在除了 mkminix 自带的 /bin/hello，还注入
-#   /bin/{ls,cat,cp,grep,touch,wc,sh}，所以 `exec /bin/sh` 之后敲 ls/cat/wc/cp
-#   是真能跑起来的，而不是 `sh: /bin/ls: cannot execute`。
+#   /bin/{ls,cat,cp,grep,touch,wc,mkdir,rm,sh}，所以 `exec /bin/sh` 之后敲
+#   ls/cat/wc/cp/mkdir/rm 是真能跑起来的，而不是 `sh: /bin/ls: cannot execute`。
 #   这条场景锁住那个默认值：Makefile 里的注入列表一旦被改坏（例如用 patsubst
 #   生成 "path:name"，它只替换第一个 %，名字会变成字面量 '%'），这里立刻红。
+#
+#   断言要点：`echo nested > /d/f` + `cat /d/f` 证明 **mkdir** 造出的目录真的能
+#   进去写读；删掉 /c2 之后用 `ls /c2` 断言 `ls: /c2: cannot open`——没有 stat(2)
+#   可用，所以"文件确实被 unlink 掉了"只能这样从外部观察（`ls` 对不存在的路径
+#   报的就是这句）。
 run_case userland 'rm -f minix.img && make minix.img' \
-    'exec /bin/sh\ncat /hello.txt\nwc < /readme.txt\ncp /hello.txt /c2\ntouch /t3\nls /\nls /docs\nexit\n' \
+    'exec /bin/sh\ncat /hello.txt\nwc < /readme.txt\ncp /hello.txt /c2\ntouch /t3\nmkdir /d\necho nested > /d/f\ncat /d/f\nls /\nrm /c2\nls /c2\nrm /d/f\nrm /d\nls /docs\nexit\n' \
     'Hello from MINIX v1!' \
     '3 19 129 -' \
     'cp: /hello.txt -> /c2 done' \
     't3' \
+    'nested' \
+    'ls: /c2: cannot open' \
     'note.txt' \
     'exec: child 1 exit_code=0'
 
@@ -531,8 +538,13 @@ unset QEMU_DISK
 #   这条场景用 QEMU 的 vmdk 驱动把**转换后的文件真的启动一遍**（`--disk-format vmdk`），
 #   证明转换是忠实的、文件系统仍在盘上。VMware 自身的 BIOS 只能在 VMware 里验，但引导只用到
 #   INT 13h AH=42h（EDD）与 IDE PIO，两者都支持（见 docs/limitations.md）。
-QEMU_DISK=linux.vmdk QEMU_DISK_FORMAT=vmdk \
-run_case vmdk 'rm -f linux.img linux.vmdk disk-fs.img && make vmdk' \
+#
+#   生成到 test-logs/ 而不是仓库根目录的 linux.vmdk：那个文件是给人挂进 VMware 的，虚拟机
+#   一旦挂上就会**锁住**它（Windows 上连删除都会 EACCES），回归不该因为用户开着虚拟机就失败。
+#   Makefile 的 VMDK_IMG 可以在命令行覆盖，正好用来指到临时路径。
+VMDK_TMP=test-logs/vmdk.img
+QEMU_DISK="$VMDK_TMP" QEMU_DISK_FORMAT=vmdk \
+run_case vmdk "rm -f $VMDK_TMP && mkdir -p test-logs && make vmdk VMDK_IMG=$VMDK_TMP" \
     'ls\ncat /hello.txt\nexec /bin/sh\nls /bin\nwc < /readme.txt\nexit\nexit\n' \
     'MINIX: root filesystem at LBA' \
     'Hello from MINIX v1!' \

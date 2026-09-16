@@ -36,17 +36,34 @@ fi
 # --------------------
 ISO_CREATED=0
 
+# Build the ISO from a scratch directory that holds *only* the boot image.
+#
+# It used to run xorriso with the project directory as the source while
+# writing its output (kernel.iso) inside that same directory.  Two things
+# went wrong: the ISO carried the whole repository (~13MB instead of
+# ~1.5MB, and nothing in the guest can read ISO9660 anyway), and on every
+# run after the first, xorriso also read the ISO it was writing - exit 32
+# ("No ISO creation tool found"), `make iso` failing, and the file
+# doubling in size.  The other two branches already used .iso_tmp, so this
+# one now does too.
 make_iso_xorriso() {
     echo "Using: xorriso"
+    rm -rf .iso_tmp
+    mkdir -p .iso_tmp/boot
+    cp "$PADDED" .iso_tmp/boot/floppy.img
     xorriso -as mkisofs \
         -o "$OUTPUT" \
-        -b "$PADDED" \
+        -b boot/floppy.img \
         -V "LINUX001" \
-        . 2>/dev/null
+        .iso_tmp 2>/dev/null
+    RC=$?
+    rm -rf .iso_tmp
+    return $RC
 }
 
 make_iso_genisoimage() {
     echo "Using: genisoimage"
+    rm -rf .iso_tmp
     mkdir -p .iso_tmp/boot
     cp "$PADDED" .iso_tmp/boot/floppy.img
     genisoimage \
@@ -61,6 +78,7 @@ make_iso_genisoimage() {
 
 make_iso_mkisofs() {
     echo "Using: mkisofs"
+    rm -rf .iso_tmp
     mkdir -p .iso_tmp/boot
     cp "$PADDED" .iso_tmp/boot/floppy.img
     mkisofs \

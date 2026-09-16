@@ -661,13 +661,41 @@ inode 表只用了 **4/64** ⇒ 不是表满；也没有 `hd:` 报错 ⇒ 不是
 - `tools/mkminix` 里那条注入日志此前写成 `as /<name>`（参数名也叫 `root_zone`），而所有调用方传的都是
   `bin_zone` —— 打印与注释一起订正为 `/bin/<name>`，避免下一个人被误导。
 
+**后续补齐（用户态真正能用的最后两块）**：`ls`/`cat`/`cp`/`wc`/`touch` 有了之后，用户态仍然缺
+`mkdir` 和 `rm` —— 内核态 shell 有这两个内建命令，所以过去只有 Ring0 能建/删目录。现在：
+
+- `user/mkdir.c`（系统调用 39）、`user/rm.c`（10 `unlink` / 40 `rmdir`，`-r` 递归）写进默认用户态；
+- `rm` 的判定顺序是刻意的：先 `unlink`（普通文件）、再 `rmdir`（空目录）、都失败且带 `-r` 才
+  `opendir`/`readdir` 深度优先删空。**没有 `stat(2)` 可用**（Linux 0.01 就没有这个系统调用），
+  所以"这是不是目录"只能从这三个调用的返回值推出来，而不是先查属性；
+- 场景 31 因此加了两段断言：`echo nested > /d/f` + `cat /d/f` 证明 **mkdir** 造出的目录真能进出读写；
+  删掉 `/c2` 之后 `ls /c2` 必须报 `ls: /c2: cannot open` —— 没有 `stat`，这是从外部观察
+  "文件确实被 unlink 了"的唯一办法。
+
 **影响面仅限 `make minix.img`**：场景 prep 一律直接调 `tools/mkminix` 并自带 `path:name`；mkminix 只在
-`user/hello.elf` 存在时额外注入 `/bin/hello`，不存在则静默跳过 —— 所以 30 个既有场景的镜像内容不变。
+`user/hello.elf` 存在时额外注入 `/bin/hello`，不存在则静默跳过 —— 所以既有场景的镜像内容不变。
 
 **回归**：场景 31 `userland` —— 用默认镜像启动，`exec /bin/sh` 后连跑
-`cat` / `wc <` / `cp` / `touch` / `ls /` / `ls /docs`，断言各程序**真实输出**
-（`Hello from MINIX v1!`、`3 19 129 -`、`cp: /hello.txt -> /c2 done`、`t3`、`note.txt`），
-而不是只断言"文件存在"。
+`cat` / `wc <` / `cp` / `touch` / `mkdir` / `rm` / `ls /` / `ls /docs`，断言各程序**真实输出**
+（`Hello from MINIX v1!`、`3 19 129 -`、`cp: /hello.txt -> /c2 done`、`t3`、`nested`、
+`ls: /c2: cannot open`、`note.txt`），而不是只断言"文件存在"。
+
+## U2 — `make iso` 把整个仓库塞进 ISO，第二次运行还会读自己在写的文件 ✅ 已修复
+
+`scripts/mkiso.sh` 的 xorriso 分支用 `.`（项目根目录）当源、却把输出 `kernel.iso` 写在这个目录里：
+
+- ISO 里装的是**整个仓库**（约 13MB，而不是 1.5MB）——而 guest 里根本没有 ISO9660 驱动，这些内容
+  一份也用不上；
+- 第二次运行起，xorriso 还会去读它正在写的那个 ISO：退出码 32 → `make iso` 失败，同时文件每跑一次
+  翻一倍（22MB → 44MB）。另外两个分支（genisoimage/mkisofs）本来就是用 `.iso_tmp` 干净的，只有
+  xorriso 这条不是。
+
+**修法**：xorriso 分支也改成先把补齐后的软盘放进 `.iso_tmp/boot/floppy.img`、再对 `.iso_tmp` 建 ISO，
+跑完删掉临时目录（三次调用共用同一段结构）。ISO 从 ~13MB 降到 ~1.5MB，`make iso` 可以反复运行。
+
+**未做（明确的边界）**：ISO 仍然只含内核，仍然需要 `-hda minix.img`。让 ISO 自带文件系统需要
+**ATAPI + ISO9660 驱动**（内核只有 IDE PIO），那是另一个量级的工程；El Torito 的"无仿真"模式也救不了：
+`boot.s` 起来后要按 EDD 从引导设备读扇区，而光盘不是 EDD 磁盘。
 
 ## D1 — 单文件自启动镜像：一张盘启动整个系统 ✅ 已完成
 
