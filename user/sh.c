@@ -278,7 +278,12 @@ static void bg_reap(int blocking, int only_pid)
 
 static int is_builtin(const char *name)
 {
-    return strcmp(name, "cd") == 0 || strcmp(name, "pwd") == 0 ||
+    /* "pwd" is deliberately NOT here: it used to be a builtin that was
+       silently rewritten into "ls" (there was no getcwd and no /bin/pwd),
+       so `pwd` printed a directory listing.  Now that /bin/pwd exists (it
+       resolves the path through ".." - see user/pwd.c), pwd is an ordinary
+       program from /bin like any other. */
+    return strcmp(name, "cd") == 0 ||
            strcmp(name, "echo") == 0 || strcmp(name, "help") == 0 ||
            strcmp(name, "exit") == 0 || strcmp(name, "wait") == 0 ||
            strcmp(name, "sleep") == 0;
@@ -396,10 +401,6 @@ static int run_one(struct cmd *c)
     if (pid == 0) {
         if (apply_redirs(c) < 0)
             exit(1);
-        if (strcmp(c->argv[0], "pwd") == 0) {
-            c->argv[0] = "ls";
-            exec_program(c);
-        }
         if (is_builtin(c->argv[0]))
             exit(builtin_run(c));           /* e.g. echo inside a pipeline */
         exec_program(c);
