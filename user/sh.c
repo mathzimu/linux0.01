@@ -489,7 +489,7 @@ int main(int argc, char *argv[])
     int n, status, background, i;
 
     printf("sh: user-mode shell (Ring3), pid=%d\n", getpid());
-    printf("sh: builtins: cd pwd echo exit help wait sleep; other names run /bin/<name>\n");
+    printf("sh: builtins: cd echo exit help wait sleep; other names run /bin/<name>\n");
     printf("sh: supports < > >> | and & (type 'help')\n");
 
     for (;;) {
