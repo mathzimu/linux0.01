@@ -170,10 +170,10 @@ prog: tools/mkminix user/$(NAME).elf
 # The userland that ships in the default image.  tools/mkminix always
 # adds hello.txt/readme.txt/big.txt and /bin/hello; these are the
 # programs that make the Ring3 shell usable the moment you get there
-# (`exec /bin/sh` -> ls, cat, head, wc, cp, mv, ln, grep, touch, mkdir,
-# rm and a nested sh all resolve instead of printing
+# (`exec /bin/sh` -> ls, cat, head, tail, wc, cp, mv, ln, grep, touch,
+# mkdir, rm and a nested sh all resolve instead of printing
 # "sh: /bin/ls: cannot execute").
-DEFAULT_USERLAND = ls cat head cp mv ln grep touch wc mkdir rm sh
+DEFAULT_USERLAND = ls cat head tail cp mv ln grep touch wc mkdir rm sh
 DEFAULT_ELVES    = $(patsubst %,user/%.elf,$(DEFAULT_USERLAND))
 # NB: patsubst substitutes only the first '%' in the replacement, so the
 # "path:name" spec pairs are built with foreach instead.

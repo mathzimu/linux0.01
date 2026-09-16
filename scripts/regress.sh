@@ -487,10 +487,12 @@ QEMU_MIN_WAIT=90 run_case execrace \
 #     （mv = link + unlink，所以新名字在、旧名字没了才算成功）；
 #   - `head -n 1 /hello.txt | wc` 必须得到 `1 4 21 -`：head 只放出一行，
 #     管道另一头数出来的就是那一行；
+#   - `tail -n 2 /h | wc` 必须得到 `2 2 4 -`：/h 是 echo 出来的三行 a/b/c，
+#     后两行正好 2 行 2 词 4 字节（`tail -n 9 /h` 则整份输出，因为不足 9 行）；
 #   - `rm /c2` 之后 `ls /c2` 报 `ls: /c2: cannot open` —— 没有 stat(2) 可用，
 #     这是从外部观察"文件确实被 unlink 掉了"的唯一办法。
 run_case userland 'rm -f minix.img && make minix.img' \
-    'exec /bin/sh\ncat /hello.txt\nwc < /readme.txt\ncp /hello.txt /c2\nln /c2 /c3\nmv /c3 /c4\nhead -n 1 /hello.txt | wc\ntouch /t3\nmkdir /d\necho nested > /d/f\ncat /d/f\nls /\nls /c3\nrm /c2\nls /c2\nrm /c4\nrm /d/f\nrm /d\nls /docs\nexit\n' \
+    'exec /bin/sh\ncat /hello.txt\nwc < /readme.txt\ncp /hello.txt /c2\nln /c2 /c3\nmv /c3 /c4\nhead -n 1 /hello.txt | wc\necho a > /h\necho b >> /h\necho c >> /h\ntail -n 2 /h | wc\ntouch /t3\nmkdir /d\necho nested > /d/f\ncat /d/f\nls /\nls /c3\nrm /c2\nls /c2\nrm /c4\nrm /d/f\nrm /d\nls /docs\nexit\n' \
     'Hello from MINIX v1!' \
     '3 19 129 -' \
     'cp: /hello.txt -> /c2 done' \
@@ -498,6 +500,7 @@ run_case userland 'rm -f minix.img && make minix.img' \
     'c4' \
     'nested' \
     '1 4 21 -' \
+    '2 2 4 -' \
     'ls: /c3: cannot open' \
     'ls: /c2: cannot open' \
     'note.txt' \
