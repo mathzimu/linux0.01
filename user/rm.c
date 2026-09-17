@@ -1,16 +1,17 @@
-/* rm：删除文件（unlink，10）与目录（rmdir，40；-r 递归）。
+/* rm [-r] <file>...：删文件（unlink，10）与目录（rmdir，40；-r 递归）。
  *
- * 和 mkdir 一样，这是用户态缺的一块。删除的判断顺序是刻意的：
+ * 用 stat(2) 先判类型，而不是像早先那样靠 unlink/rmdir 的返回值猜——
+ * 内核一直有 stat（Linux 0.01 第 18 号），所以没必要猜：
  *
- *   1. unlink()——普通文件走这条；目录会被内核拒绝；
- *   2. rmdir()——空目录走这条；
- *   3. 都给绝了再看 -r：用 opendir/readdir 深度优先删空，最后 rmdir 自己。
+ *   - 普通文件 → unlink；
+ *   - 目录 → 没有 -r 就报 "is a directory"；有 -r 就深度优先删空再 rmdir；
+ *   - stat 失败 → "no such file"。
  *
- * 没有 stat(2) 可用（Linux 0.01 没有这个系统调用），所以"这是不是目录"
- * 只能靠这三个调用的返回值推出来，而不是先查属性再决定——这也让 -r 只在
- * 真需要时才去递归。 */
+ * 这样三类错误消息各归各位，比"都猜不出来就一句'目录需要 -r 或没有权限'"
+ * 清楚得多。rm_tree 仍用 opendir/readdir 递归，因为调用它的前提已经是目录。 */
 
 #include "lib.h"
+#include <sys/stat.h>
 
 #define PATH_MAX_LOCAL 128
 
@@ -62,18 +63,26 @@ static int rm_tree(const char *path)
 
 static int rm_one(const char *path, int recursive)
 {
-    if (unlink(path) == 0)
-        return 0;                       /* plain file */
+    struct stat st;
 
-    if (rmdir(path) == 0)
-        return 0;                       /* empty directory */
-
-    if (!recursive) {
-        printf("rm: %s: cannot remove (directory needs -r, or not permitted)\n",
-               path);
+    if (stat(path, (unsigned long *)&st) < 0) {
+        printf("rm: %s: no such file\n", path);
         return 1;
     }
-    return rm_tree(path);               /* non-empty directory */
+
+    if (!S_ISDIR(st.st_mode)) {
+        if (unlink(path) < 0) {
+            printf("rm: %s: cannot remove\n", path);
+            return 1;
+        }
+        return 0;
+    }
+
+    if (!recursive) {
+        printf("rm: %s: is a directory\n", path);
+        return 1;
+    }
+    return rm_tree(path);
 }
 
 int main(int argc, char *argv[])
