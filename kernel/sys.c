@@ -251,6 +251,10 @@ long sys_write(unsigned int fd, const char *buf, unsigned long count)
 
     f = current->filp[fd];
 
+    /* /proc is read-only. */
+    if (f && f->f_dev == DEV_PROC_VERSION)
+        return -1;
+
     /* /dev/null and /dev/zero swallow writes; /dev/tty has f_inode == NULL
        and falls through to the console branch below. */
     if (f && f->f_dev == DEV_NULL)
@@ -297,6 +301,21 @@ long sys_read(unsigned int fd, char *buf, unsigned long count)
         return -1;
 
     f = current->filp[fd];
+
+    /* /proc/version: a fixed string, served across reads via f_pos so
+       cat/wc see a normal EOF-terminated file. */
+    if (f && f->f_dev == DEV_PROC_VERSION) {
+        static const char *s = "Linux 0.01 (Minimal teaching kernel)\n";
+        unsigned long len = strlen(s), i;
+
+        if (f->f_pos >= len)
+            return 0;
+        for (i = 0; i < count && f->f_pos < len; i++) {
+            put_fs_byte(s[f->f_pos], buf + i);
+            f->f_pos++;
+        }
+        return i;
+    }
 
     /* /dev/null reads as EOF, /dev/zero as an endless run of zeros;
        /dev/tty has f_inode == NULL and falls through to the console. */
@@ -378,6 +397,7 @@ int sys_open(const char *filename, int flag, int mode)
         if (strcmp(filename, "/dev/null") == 0) dev = DEV_NULL;
         else if (strcmp(filename, "/dev/zero") == 0) dev = DEV_ZERO;
         else if (strcmp(filename, "/dev/tty") == 0) dev = DEV_TTY;
+        else if (strcmp(filename, "/proc/version") == 0) dev = DEV_PROC_VERSION;
 
         if (dev) {
             for (i = 0; i < NR_FILE; i++)
