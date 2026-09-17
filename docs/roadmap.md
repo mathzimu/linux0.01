@@ -216,7 +216,7 @@ OOM 杀进程。而且 `execve` 仍然是**预先**把整个镜像拷进新页�
 | 继承 | fork 时 `sig_blocked[child] = sig_blocked[parent]`；槽位复用时这条赋值也顺便把上一个进程的掩码覆盖掉 |
 | 投递 | `do_signal` 遇到被阻塞的信号**不清 pending 位**：解除阻塞的那次 `sigprocmask` 返回时就地投递，不需要补发信号 |
 | `sigsuspend` | 临时掩码一直生效到进入 handler 为止（POSIX：唤醒它的处理器必须在 `sigsuspend` 返回**之前**跑完），旧掩码的恢复推迟到 `do_signal` 里做；`pause()` 也不再把被阻塞的信号当成"有事发生" |
-| SIGKILL | 唯一不可屏蔽的信号（本内核没有作业控制，也就没有 SIGSTOP/SIGCONT） |
+| SIGKILL/SIGSTOP | 不可屏蔽、不可捕获：SIGKILL 由掩码剔除，SIGSTOP 由 do_signal 在掩码检查前强制处理 |
 | 顺带修的老 bug | `sys_sigreturn` 曾以 `movl $0,%eax` 返回，而 `ret_from_sys_call` 会把 eax 存回"被中断系统调用的返回值槽"——于是**每次从 handler 返回，被打断的系统调用的返回值都被清成 0**。`sigdemo` 只检查 `pause()`（返回值没人看），所以这个 bug 一直藏着；现在返回恢复出来的 eax |
 | 回归 | 场景 25 `sigblock`（`user/sigblock.c`）：阻塞 → 给自己发信号（handler 不得运行）→ 解除阻塞（pending 信号立刻送达）→ 子进程发信号 + `sigsuspend`（返回 -1、hits=2、掩码随后恢复）→ SIGKILL 仍不可屏蔽 |
 
@@ -266,7 +266,7 @@ code/data 组、B3 加了镜像表），gcc 报 `braces around scalar initialize
 | 收尸 | 每次打印提示符前 `waitpid(pid, &code, WNOHANG)` 扫一遍，完成的打印 `sh: [pid] done (status N)` |
 | `wait` | 内建命令：`wait` 等所有后台任务，`wait <pid>` 等指定那个。**按 pid 等待**（而不是 `-1`）是关键：否则会吞掉前台命令的退出状态 |
 | `sleep` | 内建命令，直接调用 B5.7 的 `sleep()`（系统调用 71），把新的超时能力暴露给使用者 |
-| 没有作业控制 | 本内核没有 SIGSTOP/SIGCONT，也没有和终端绑定的进程组，所以后台任务**不能**被挂起或拉回前台；文档与 `help` 都直说 |
+| 作业控制（部分） | SIGSTOP/SIGCONT 信号语义已实现（do_signal 停住/恢复、sys_kill 唤醒 STOPPED），但**没有进程组/会话**、也没有与终端绑定的前台/后台，后台任务仍不能被挂起或拉回前台 |
 | 回归 | 场景 28 `shbg`：`sleep 1`（内建，打印 slept 1 s）、`sleep 2 &`、前台 `echo foreground ran` 在任务结束前就打印、`wait` 收到 `done (status 0)`、shell 正常 `exit` |
 
 > 注意 harness 的断言是"这些行出现过"，**不检查先后顺序**，所以这条场景验证的是功能而不是

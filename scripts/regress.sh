@@ -431,7 +431,7 @@ run_case seltest "$BASE && make prog NAME=seltest" 'exec /bin/seltest\n' \
 # 场景 28: Shell 的后台任务与 wait（B5.8）
 #   `cmd &` 用**子 shell**实现：父 shell fork 之后立刻回到提示符，子进程照常调用
 #   run_pipeline()——所以 run_pipeline/run_one 完全不需要知道"后台"这回事。
-#   没有作业控制（没有 SIGSTOP/SIGCONT，也没有和终端绑定的进程组），所以只能跟踪 pid、
+#   作业控制只做到 SIGSTOP/SIGCONT 信号语义（还没有进程组/会话与终端前台后台），所以只能跟踪 pid、
 #   每次打印提示符前用 WNOHANG 收尸、`wait` 阻塞等待。`sleep` 现在是 shell 内建命令，
 #   它直接调用内核的新系统调用 71，正好把 B5.7 的能力暴露给使用者。
 #   注：harness 只断言"这些行出现过"，不断言先后顺序；因此这条场景检查的是功能

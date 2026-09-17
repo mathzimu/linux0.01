@@ -32,8 +32,9 @@
 /* Signal masks (B5).  A blocked signal is *not* discarded: it stays
    pending and is delivered as soon as it is unblocked, which is what
    makes the mask usable for critical sections.  SIGKILL cannot be
-   blocked — this kernel has no job control (no SIGSTOP/SIGCONT), so
-   SIGKILL is the only signal a process may not take away. */
+   blocked.  SIGSTOP/SIGCONT exist as signal semantics (do_signal), but
+   there are no process groups or sessions yet, so SIGKILL is still the
+   only signal a process may not take away via the mask. */
 #define SIG_BLOCK   1        /* mask |= set   */
 #define SIG_UNBLOCK 2        /* mask &= ~set  */
 #define SIG_SETMASK 3        /* mask  = set   */

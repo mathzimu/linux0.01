@@ -228,7 +228,7 @@ static int apply_redirs(struct cmd *c)
  * real shell does it, and it means run_pipeline()/run_one() need no
  * notion of "background" at all.
  *
- * There is no job control (no SIGSTOP/SIGCONT, no process groups wired to
+ * Job control is partial: SIGSTOP/SIGCONT signals exist, but process groups are not wired to
  * the terminal), so a job cannot be suspended or brought to the
  * foreground; the shell only tracks pids, reaps them with WNOHANG before
  * each prompt, and `wait` blocks for them.  The kernel's wait(pid) makes
