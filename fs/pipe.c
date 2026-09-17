@@ -118,6 +118,7 @@ int sys_pipe(unsigned long *fildes)
     }
     f[0]->f_inode = f[1]->f_inode = inode;
     f[0]->f_pos = f[1]->f_pos = 0;
+    f[0]->f_dev = f[1]->f_dev = 0;
     f[0]->f_mode = 1;                   /* read end */
     f[1]->f_mode = 2;                   /* write end */
     put_fs_long(fd[0], 0 + fildes);

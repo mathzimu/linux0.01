@@ -251,6 +251,13 @@ long sys_write(unsigned int fd, const char *buf, unsigned long count)
 
     f = current->filp[fd];
 
+    /* /dev/null and /dev/zero swallow writes; /dev/tty has f_inode == NULL
+       and falls through to the console branch below. */
+    if (f && f->f_dev == DEV_NULL)
+        return count;
+    if (f && f->f_dev == DEV_ZERO)
+        return count;
+
     /* No descriptor, or the console (f_inode == NULL): write to the tty.
        fds 0..2 are pre-opened on the console for every task, but the
        check stays tolerant so a task that closed them still behaves. */
@@ -290,6 +297,18 @@ long sys_read(unsigned int fd, char *buf, unsigned long count)
         return -1;
 
     f = current->filp[fd];
+
+    /* /dev/null reads as EOF, /dev/zero as an endless run of zeros;
+       /dev/tty has f_inode == NULL and falls through to the console. */
+    if (f && f->f_dev == DEV_NULL)
+        return 0;
+    if (f && f->f_dev == DEV_ZERO) {
+        unsigned long i;
+
+        for (i = 0; i < count; i++)
+            put_fs_byte(0, buf + i);
+        return count;
+    }
 
     /* Console (or an fd nobody opened): read from the tty buffer. */
     if (!f || !f->f_inode) {
@@ -346,6 +365,38 @@ int sys_open(const char *filename, int flag, int mode)
         if (!current->filp[fd]) break;
     }
     if (fd >= NR_OPEN) return -1;
+
+    /* /dev/null, /dev/zero, /dev/tty: synthetic device files.  MINIX v1 has
+       no /dev directory, so these three names are recognised here and given
+       a file_table[] slot with f_inode == NULL (the console marker, so
+       close/exit skip iput) plus a device id in f_dev.  sys_read/sys_write
+       switch on f_dev before the console branch; /dev/tty needs no switch
+       because NULL already routes it to the tty. */
+    {
+        int dev = 0;
+
+        if (strcmp(filename, "/dev/null") == 0) dev = DEV_NULL;
+        else if (strcmp(filename, "/dev/zero") == 0) dev = DEV_ZERO;
+        else if (strcmp(filename, "/dev/tty") == 0) dev = DEV_TTY;
+
+        if (dev) {
+            for (i = 0; i < NR_FILE; i++)
+                if (!file_table[i].f_count) break;
+            if (i >= NR_FILE) {
+                printk("open: file_table full (%d entries)\n", NR_FILE);
+                return -1;
+            }
+            f = &file_table[i];
+            f->f_count = 1;
+            f->f_mode = 2;              /* O_RDWR; devices ignore f_mode */
+            f->f_flags = (unsigned short)flag;
+            f->f_inode = NULL;
+            f->f_pos = 0;
+            f->f_dev = (unsigned short)dev;
+            current->filp[fd] = f;
+            return fd;
+        }
+    }
 
     /* The file_table[] entry is claimed at the very end of this function,
        NOT here.  namei() below (and the whole O_CREAT path) sleeps on disk
@@ -455,6 +506,7 @@ int sys_open(const char *filename, int flag, int mode)
     f->f_flags = 0;
     f->f_inode = NULL;
     f->f_pos = 0;
+    f->f_dev = 0;
 
     if ((flag & O_TRUNC) && !(inode->i_mode & 0x4000))
         truncate_inode(inode);                 /* empty the file */

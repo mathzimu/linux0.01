@@ -105,12 +105,21 @@ struct m_inode {
 /* Open file description.  It lives here (not in sched.h) because fs.h is
  * now included very early by include/linux/memmap.h, and file_table[]
  * needs the complete type. */
+/* /dev/* device ids, stored in struct file.f_dev.  Device files keep
+   f_inode == NULL (the console marker, so close/exit skip iput) and a
+   non-zero f_dev that sys_read/sys_write switch on before the console
+   branch. */
+#define DEV_NULL 1
+#define DEV_ZERO 2
+#define DEV_TTY  3
+
 struct file {
     unsigned short f_mode;
     unsigned short f_flags;
     unsigned short f_count;
     struct m_inode *f_inode;
     unsigned long f_pos;
+    unsigned short f_dev;      /* 0 = normal inode/pipe; DEV_* = device file */
 };
 
 struct super_block {
