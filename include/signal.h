@@ -19,6 +19,8 @@
 #define SIGALRM  14
 #define SIGTERM  15
 #define SIGCHLD  17
+#define SIGCONT  18
+#define SIGSTOP  19
 
 /* Signal dispositions.  SIG_DFL/SIG_IGN are the built-in values (all
    upper addresses are rejected, so kernel text can never be handed to a

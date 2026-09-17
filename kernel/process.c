@@ -939,6 +939,27 @@ void do_signal(unsigned char *kf)
         if (!(current->signal & (1 << sig)))
             continue;
 
+        /* Job control (minimal): SIGSTOP stops, SIGCONT resumes.  Handled
+           before the mask is consulted, so neither can be blocked; neither
+           is delivered to a handler (SIGSTOP may not be caught, SIGCONT's
+           resume side effect always applies).  The stop must block like
+           sys_pause: schedule()'s c<0 path halts and returns without
+           switching, so a single schedule() would let a stopped task iret
+           back to user mode. */
+        if (sig == SIGSTOP) {
+            current->signal &= ~(1 << sig);
+            current->state = TASK_STOPPED;
+            while (current->state != TASK_RUNNING)
+                schedule();
+            continue;
+        }
+        if (sig == SIGCONT) {
+            current->signal &= ~(1 << sig);
+            if (current->state == TASK_STOPPED)
+                current->state = TASK_RUNNING;
+            continue;
+        }
+
         /* B5: a blocked signal stays pending — leave the bit set and
            look at it again on the next return to user mode, which is
            what happens right after sigprocmask(SIG_UNBLOCK).  SIGKILL

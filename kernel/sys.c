@@ -638,8 +638,13 @@ int sys_kill(int pid, int sig)
         return -1;
 
     p->signal |= (1 << sig);
-    /* wake a task that is sleeping interruptibly (e.g. in sys_pause) */
+    /* wake a task that is sleeping interruptibly (e.g. in sys_pause), or
+       resume one that a SIGSTOP has stopped (SIGCONT's side effect).
+       SIGCONT is spelled 18 here: kernel/sys.c must not include the
+       user-facing signal.h. */
     if (p->state == TASK_INTERRUPTIBLE)
+        p->state = TASK_RUNNING;
+    else if (sig == 18 && p->state == TASK_STOPPED)
         p->state = TASK_RUNNING;
     return 0;
 }
