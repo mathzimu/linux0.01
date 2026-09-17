@@ -101,6 +101,92 @@ int permission(struct m_inode *inode, int mask)
     return suser();
 }
 
+/* --- dcache: directory-entry cache -----------------------------------
+ *
+ * find_entry() re-reads directory blocks on every lookup; a shell that runs
+ * /bin/ls resolves "/bin" and "ls" from the disk each time.  The cache
+ * remembers (dev, dir inode, name) -> target inode, so repeated lookups of
+ * the same component skip the disk.  Only *positive* entries are cached.
+ *
+ * Invalidation is deliberately whole-cache: dir_add_entry() and
+ * dir_remove_entry() are the only two ways a directory changes (create,
+ * link, mknod, unlink, rmdir and rename all funnel through them), and both
+ * clear the entire cache.  Less clever than per-entry invalidation, but
+ * trivially correct - a stale entry is worse than a cache miss. */
+
+#define DCACHE_SIZE 64
+
+struct dcache_entry {
+    unsigned short dev;
+    unsigned short dir_ino;
+    unsigned short target_ino;
+    char name[15];
+    unsigned short valid;
+};
+
+static struct dcache_entry dcache[DCACHE_SIZE];
+
+static void dcache_invalidate(void)
+{
+    int i;
+
+    for (i = 0; i < DCACHE_SIZE; i++)
+        dcache[i].valid = 0;
+}
+
+/* 0 and *ino set on hit; -1 on miss. */
+static int dcache_lookup(unsigned short dev, unsigned short dir_ino,
+                         const char *name, int namelen, unsigned short *ino)
+{
+    int i;
+
+    for (i = 0; i < DCACHE_SIZE; i++) {
+        struct dcache_entry *e = &dcache[i];
+
+        if (!e->valid || e->dev != dev || e->dir_ino != dir_ino)
+            continue;
+        if (name_eq(e->name, name, namelen)) {
+            *ino = e->target_ino;
+            return 0;
+        }
+    }
+    return -1;
+}
+
+static void dcache_store(unsigned short dev, unsigned short dir_ino,
+                         const char *name, int namelen, unsigned short ino)
+{
+    int i, slot = -1;
+
+    for (i = 0; i < DCACHE_SIZE; i++) {
+        if (dcache[i].valid && dcache[i].dev == dev &&
+            dcache[i].dir_ino == dir_ino &&
+            name_eq(dcache[i].name, name, namelen)) {
+            slot = i;
+            break;
+        }
+    }
+    if (slot < 0) {
+        for (i = 0; i < DCACHE_SIZE; i++) {
+            if (!dcache[i].valid) {
+                slot = i;
+                break;
+            }
+        }
+    }
+    if (slot < 0) {
+        dcache_invalidate();
+        slot = 0;
+    }
+    dcache[slot].dev = dev;
+    dcache[slot].dir_ino = dir_ino;
+    dcache[slot].target_ino = ino;
+    dcache[slot].valid = 1;
+    for (i = 0; i < 14 && i < namelen; i++)
+        dcache[slot].name[i] = name[i];
+    dcache[slot].name[i] = '\0';
+}
+
 static int find_entry(struct m_inode *dir, const char *name, int namelen,
                       unsigned short *res_inode)
 {
@@ -109,6 +195,15 @@ static int find_entry(struct m_inode *dir, const char *name, int namelen,
     int i, entries;
 
     if (!dir || !(dir->i_mode & 0x4000)) return -1;
+
+    {
+        unsigned short cached;
+
+        if (dcache_lookup(dir->i_dev, dir->i_num, name, namelen, &cached) == 0) {
+            *res_inode = cached;
+            return 0;
+        }
+    }
 
     entries = dir->i_size / sizeof(struct minix_dir_entry);
     if (entries == 0) return -1;
@@ -119,6 +214,7 @@ static int find_entry(struct m_inode *dir, const char *name, int namelen,
             unsigned short ino = de->inode;
             brelse(bh);
             if (!ino) return -1;
+            dcache_store(dir->i_dev, dir->i_num, name, namelen, ino);
             *res_inode = ino;
             return 0;
         }
@@ -314,6 +410,7 @@ int dir_add_entry(struct m_inode *dir, const char *name, int namelen,
 
     if (!dir || namelen > 14)
         return -1;
+    dcache_invalidate();
 
     entries = dir->i_size / sizeof(struct minix_dir_entry);
 
@@ -391,6 +488,7 @@ int dir_remove_entry(struct m_inode *dir, const char *name, int namelen)
             de->inode = 0;
             bh->b_dirt = 1;
             brelse(bh);
+            dcache_invalidate();
             return 0;
         }
         brelse(bh);
