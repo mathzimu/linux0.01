@@ -206,3 +206,17 @@ int printk(const char *fmt, ...)
     tty_write(&tty_table[0], buf, i);
     return i;
 }
+
+/* Buffer formatter for kernel-internal text generation (e.g. /proc/ps):
+   printk() cannot be reused because it always writes to the console.
+   Same format subset as printk (see kernel/vsprintf.c). */
+int sprintf(char *buf, const char *fmt, ...)
+{
+    int i;
+    va_list args;
+
+    va_start(args, fmt);
+    i = vsprintf(buf, fmt, args);
+    va_end(args);
+    return i;
+}

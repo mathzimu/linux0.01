@@ -7,5 +7,6 @@ extern int _errno;
 
 void panic(const char *msg);
 int printk(const char *fmt, ...);
+int sprintf(char *buf, const char *fmt, ...);
 
 #endif

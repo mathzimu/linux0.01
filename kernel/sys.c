@@ -252,7 +252,7 @@ long sys_write(unsigned int fd, const char *buf, unsigned long count)
     f = current->filp[fd];
 
     /* /proc is read-only. */
-    if (f && f->f_dev == DEV_PROC_VERSION)
+    if (f && (f->f_dev == DEV_PROC_VERSION || f->f_dev == DEV_PROC_PS))
         return -1;
 
     /* /dev/null and /dev/zero swallow writes; /dev/tty has f_inode == NULL
@@ -291,6 +291,28 @@ long sys_write(unsigned int fd, const char *buf, unsigned long count)
     return result;
 }
 
+/* /proc/ps: format the task table as one line per task.  Regenerated on
+   the first read after an open (f_pos == 0) into a static buffer, then
+   served across reads by f_pos; a snapshot per open, which is enough. */
+static unsigned long proc_ps_format(char *buf, unsigned long bufsize)
+{
+    unsigned long len = 0;
+    int i;
+
+    for (i = 0; i < NR_TASKS; i++) {
+        struct task_struct *t = task[i];
+        int n;
+
+        if (!t)
+            continue;
+        n = sprintf(buf + len, "pid %d state %d\n", t->pid, t->state);
+        if (n < 0 || len + (unsigned long)n >= bufsize)
+            break;
+        len += (unsigned long)n;
+    }
+    return len;
+}
+
 long sys_read(unsigned int fd, char *buf, unsigned long count)
 {
     long result;
@@ -312,6 +334,24 @@ long sys_read(unsigned int fd, char *buf, unsigned long count)
             return 0;
         for (i = 0; i < count && f->f_pos < len; i++) {
             put_fs_byte(s[f->f_pos], buf + i);
+            f->f_pos++;
+        }
+        return i;
+    }
+
+    /* /proc/ps: the task table, generated on the first read of an open and
+       then served by f_pos like /proc/version. */
+    if (f && f->f_dev == DEV_PROC_PS) {
+        static char text[2048];
+        static unsigned long textlen;
+        unsigned long i;
+
+        if (f->f_pos == 0)
+            textlen = proc_ps_format(text, sizeof(text));
+        if (f->f_pos >= textlen)
+            return 0;
+        for (i = 0; i < count && f->f_pos < textlen; i++) {
+            put_fs_byte(text[f->f_pos], buf + i);
             f->f_pos++;
         }
         return i;
@@ -398,6 +438,7 @@ int sys_open(const char *filename, int flag, int mode)
         else if (strcmp(filename, "/dev/zero") == 0) dev = DEV_ZERO;
         else if (strcmp(filename, "/dev/tty") == 0) dev = DEV_TTY;
         else if (strcmp(filename, "/proc/version") == 0) dev = DEV_PROC_VERSION;
+        else if (strcmp(filename, "/proc/ps") == 0) dev = DEV_PROC_PS;
 
         if (dev) {
             for (i = 0; i < NR_FILE; i++)
