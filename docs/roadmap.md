@@ -266,7 +266,7 @@ code/data 组、B3 加了镜像表），gcc 报 `braces around scalar initialize
 | 收尸 | 每次打印提示符前 `waitpid(pid, &code, WNOHANG)` 扫一遍，完成的打印 `sh: [pid] done (status N)` |
 | `wait` | 内建命令：`wait` 等所有后台任务，`wait <pid>` 等指定那个。**按 pid 等待**（而不是 `-1`）是关键：否则会吞掉前台命令的退出状态 |
 | `sleep` | 内建命令，直接调用 B5.7 的 `sleep()`（系统调用 71），把新的超时能力暴露给使用者 |
-| 作业控制（部分） | SIGSTOP/SIGCONT 信号语义已实现（do_signal 停住/恢复、sys_kill 唤醒 STOPPED），但**没有进程组/会话**、也没有与终端绑定的前台/后台，后台任务仍不能被挂起或拉回前台 |
+| 作业控制（部分） | SIGSTOP/SIGCONT 信号语义 ✅、setpgid/getpgrp/setsid（0.01 自带）✅、kill(-pgid) 组播 ✅；**缺**：tty 前台/后台与 SIGTTIN/SIGTTOU、shell 的 fg/bg/Ctrl-Z |
 | 回归 | 场景 28 `shbg`：`sleep 1`（内建，打印 slept 1 s）、`sleep 2 &`、前台 `echo foreground ran` 在任务结束前就打印、`wait` 收到 `done (status 0)`、shell 正常 `exit` |
 
 > 注意 harness 的断言是"这些行出现过"，**不检查先后顺序**，所以这条场景验证的是功能而不是

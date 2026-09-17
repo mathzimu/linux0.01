@@ -624,29 +624,53 @@ int sys_close(unsigned int fd)
 int sys_kill(int pid, int sig)
 {
     struct task_struct *p;
+    unsigned long g;
+    int i, sent = 0;
 
-    /* pid equals the task[] index: task[0]=init(pid 0), children get
-       pid = slot index (see sys_fork). */
-    if (pid < 0 || pid >= NR_TASKS)
+    /* pid > 0  = that task (task[] index == pid).
+       pid < 0  = the process group -pid.
+       pid == 0 = the caller's own process group (POSIX). */
+    if (sig == 0) {
+        /* existence check only */
+        if (pid > 0)
+            return (pid < NR_TASKS && task[pid]) ? 0 : -1;
+        g = (pid < 0) ? (unsigned long)(-pid) : current->pgrp;
+        for (i = 0; i < NR_TASKS; i++)
+            if (task[i] && task[i]->pgrp == g)
+                return 0;
         return -1;
-    p = task[pid];
-    if (!p)
-        return -1;
-    if (sig == 0)
-        return 0;                    /* existence check only */
+    }
     if (sig < 1 || sig >= 32)
         return -1;
 
-    p->signal |= (1 << sig);
-    /* wake a task that is sleeping interruptibly (e.g. in sys_pause), or
-       resume one that a SIGSTOP has stopped (SIGCONT's side effect).
-       SIGCONT is spelled 18 here: kernel/sys.c must not include the
-       user-facing signal.h. */
-    if (p->state == TASK_INTERRUPTIBLE)
-        p->state = TASK_RUNNING;
-    else if (sig == 18 && p->state == TASK_STOPPED)
-        p->state = TASK_RUNNING;
-    return 0;
+    if (pid > 0) {
+        if (pid >= NR_TASKS || !(p = task[pid]))
+            return -1;
+        p->signal |= (1 << sig);
+        /* wake a task sleeping interruptibly, or resume one a SIGSTOP
+           stopped (SIGCONT's side effect).  SIGCONT is spelled 18 here:
+           kernel/sys.c must not include the user-facing signal.h. */
+        if (p->state == TASK_INTERRUPTIBLE)
+            p->state = TASK_RUNNING;
+        else if (sig == 18 && p->state == TASK_STOPPED)
+            p->state = TASK_RUNNING;
+        return 0;
+    }
+
+    /* Broadcast to a whole process group. */
+    g = (pid < 0) ? (unsigned long)(-pid) : current->pgrp;
+    for (i = 0; i < NR_TASKS; i++) {
+        p = task[i];
+        if (!p || p->pgrp != g)
+            continue;
+        sent = 1;
+        p->signal |= (1 << sig);
+        if (p->state == TASK_INTERRUPTIBLE)
+            p->state = TASK_RUNNING;
+        else if (sig == 18 && p->state == TASK_STOPPED)
+            p->state = TASK_RUNNING;
+    }
+    return sent ? 0 : -1;
 }
 
 int sys_sync(void)
