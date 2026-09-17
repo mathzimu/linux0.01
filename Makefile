@@ -173,7 +173,7 @@ prog: tools/mkminix user/$(NAME).elf
 # (`exec /bin/sh` -> ls, cat, head, tail, wc, cp, mv, ln, grep, touch,
 # mkdir, rm and a nested sh all resolve instead of printing
 # "sh: /bin/ls: cannot execute").
-DEFAULT_USERLAND = ls pwd cat head tail cp mv ln grep touch wc mkdir rm sh
+DEFAULT_USERLAND = ls pwd cat head tail cp mv ln grep touch wc mkdir rm chmod chown umask sh
 DEFAULT_ELVES    = $(patsubst %,user/%.elf,$(DEFAULT_USERLAND))
 # NB: patsubst substitutes only the first '%' in the replacement, so the
 # "path:name" spec pairs are built with foreach instead.
