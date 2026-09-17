@@ -114,6 +114,7 @@ struct m_inode {
 #define DEV_TTY  3
 #define DEV_PROC_VERSION 4     /* /proc/version: read-only, f_pos-tracked */
 #define DEV_PROC_PS      5     /* /proc/ps: task table, f_pos-tracked */
+#define DEV_PROC_MEMINFO 6     /* /proc/meminfo: free pages, f_pos-tracked */
 
 struct file {
     unsigned short f_mode;

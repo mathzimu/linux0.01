@@ -799,14 +799,25 @@ unsigned long nr_page_ins = 0;         /* image pages read back from the file */
 
 /* How many pages are free right now, and how many are mapped into the
  * calling task's address space. */
-void mm_report(void)
+/* Number of free page frames right now.  Shared by the shell's `memstat`
+   (mm_report) and /proc/meminfo so the two can never drift apart. */
+unsigned long count_free_pages(void)
 {
-    int i, free_pages = 0, mapped = 0;
-    unsigned long *pt;
+    unsigned long n = 0;
+    int i;
 
     for (i = 0; i < max_map_nr; i++)
         if (mem_map[i] == 0)
-            free_pages++;
+            n++;
+    return n;
+}
+
+void mm_report(void)
+{
+    int i, free_pages, mapped = 0;
+    unsigned long *pt;
+
+    free_pages = (int)count_free_pages();
 
     if (current && current->pg_dir) {
         pt = user_pt(current->pg_dir);

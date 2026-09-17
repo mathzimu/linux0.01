@@ -252,7 +252,8 @@ long sys_write(unsigned int fd, const char *buf, unsigned long count)
     f = current->filp[fd];
 
     /* /proc is read-only. */
-    if (f && (f->f_dev == DEV_PROC_VERSION || f->f_dev == DEV_PROC_PS))
+    if (f && (f->f_dev == DEV_PROC_VERSION || f->f_dev == DEV_PROC_PS ||
+              f->f_dev == DEV_PROC_MEMINFO))
         return -1;
 
     /* /dev/null and /dev/zero swallow writes; /dev/tty has f_inode == NULL
@@ -357,6 +358,25 @@ long sys_read(unsigned int fd, char *buf, unsigned long count)
         return i;
     }
 
+    /* /proc/meminfo: a snapshot of the free page count, regenerated on the
+       first read of an open. */
+    if (f && f->f_dev == DEV_PROC_MEMINFO) {
+        static char text[64];
+        static unsigned long textlen;
+        unsigned long i;
+
+        if (f->f_pos == 0)
+            textlen = (unsigned long)sprintf(text, "free_pages %lu\n",
+                                             count_free_pages());
+        if (f->f_pos >= textlen)
+            return 0;
+        for (i = 0; i < count && f->f_pos < textlen; i++) {
+            put_fs_byte(text[f->f_pos], buf + i);
+            f->f_pos++;
+        }
+        return i;
+    }
+
     /* /dev/null reads as EOF, /dev/zero as an endless run of zeros;
        /dev/tty has f_inode == NULL and falls through to the console. */
     if (f && f->f_dev == DEV_NULL)
@@ -439,6 +459,7 @@ int sys_open(const char *filename, int flag, int mode)
         else if (strcmp(filename, "/dev/tty") == 0) dev = DEV_TTY;
         else if (strcmp(filename, "/proc/version") == 0) dev = DEV_PROC_VERSION;
         else if (strcmp(filename, "/proc/ps") == 0) dev = DEV_PROC_PS;
+        else if (strcmp(filename, "/proc/meminfo") == 0) dev = DEV_PROC_MEMINFO;
 
         if (dev) {
             for (i = 0; i < NR_FILE; i++)

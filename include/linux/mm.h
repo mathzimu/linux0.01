@@ -65,6 +65,7 @@ extern unsigned long nr_page_ins;
 extern unsigned long nr_evicted;
 extern unsigned long nr_unmapped;
 void mm_report(void);
+unsigned long count_free_pages(void);
 
 /* --- swap (B4) --- */
 int swap_out_page(unsigned long pa);      /* returns a slot, or -1 */
