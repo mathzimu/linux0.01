@@ -1195,6 +1195,134 @@ int sys_link(const char *oldname, const char *newname)
 
 /* Rename (Linux 0.01 left this -ENOSYS; we implement it).  Same-device
    only: move the entry from the old parent dir to the new one. */
+/* getcwd(2): rebuild the absolute path of current->pwd by walking upward.
+ *
+ * The kernel has no d_path/cached mount tree, so this re-reads the disk:
+ * for each directory it reads the ".." entry to find the parent inode
+ * number, then scans the parent's blocks for the entry whose inode number
+ * equals the directory we came from - that entry's name is the next path
+ * component.  MINIX v1's root is inode 1, which is the loop's terminator.
+ *
+ * Each component is at most 14 bytes and the depth is capped at 64, so a
+ * bounded fixed-size name table is enough; the result is assembled into
+ * the caller's buffer (the user window is mapped while a syscall runs, so
+ * writing the caller's pointer directly is fine, exactly like sys_stat). */
+
+#define GETCWD_DEPTH 64
+
+/* Copy the name of the entry in `dir` whose inode number is `ino` into
+   name_out (NUL-terminated, at most 14 bytes).  Returns 0 or -1. */
+static int dir_entry_name(struct m_inode *dir, unsigned short ino,
+                          char *name_out)
+{
+    struct buffer_head *bh;
+    struct minix_dir_entry *de;
+    int entries, i;
+
+    if (!dir || !(dir->i_mode & 0x4000))
+        return -1;
+
+    entries = dir->i_size / sizeof(struct minix_dir_entry);
+    for (i = 0; i < entries; i++) {
+        int block = i * sizeof(struct minix_dir_entry) / BLOCK_SIZE;
+        int offset = i * sizeof(struct minix_dir_entry) % BLOCK_SIZE;
+        unsigned short blk;
+
+        if (block < 7) {
+            blk = dir->i_zone[block];
+        } else {
+            struct buffer_head *ibh;
+            unsigned short indblk = dir->i_zone[7];
+
+            if (!indblk)
+                continue;
+            ibh = bread(dir->i_dev, indblk);
+            if (!ibh)
+                continue;
+            blk = ((unsigned short *)ibh->b_data)[block - 7];
+            brelse(ibh);
+        }
+        if (!blk)
+            continue;
+        bh = bread(dir->i_dev, blk);
+        if (!bh)
+            continue;
+        de = (struct minix_dir_entry *)(bh->b_data + offset);
+        if (de->inode == ino) {
+            int k;
+
+            for (k = 0; k < 14 && de->name[k]; k++)
+                name_out[k] = de->name[k];
+            name_out[k] = '\0';
+            brelse(bh);
+            return 0;
+        }
+        brelse(bh);
+    }
+    return -1;
+}
+
+int sys_getcwd(char *buf, int size)
+{
+    struct m_inode *cwd;
+    char names[GETCWD_DEPTH][15];
+    int depth = 0, i, len;
+    unsigned short parent_ino;
+
+    if (size <= 0)
+        return -1;
+
+    cwd = current->pwd;
+    if (!cwd)
+        return -1;
+    cwd->i_count++;
+
+    while (cwd->i_num != 1 && depth < GETCWD_DEPTH) {
+        if (dir_lookup(cwd, "..", 2, &parent_ino) < 0 || !parent_ino) {
+            iput(cwd);
+            return -1;
+        }
+        {
+            struct m_inode *parent = iget(cwd->i_dev, parent_ino);
+
+            if (!parent) {
+                iput(cwd);
+                return -1;
+            }
+            if (dir_entry_name(parent, cwd->i_num, names[depth]) < 0) {
+                iput(parent);
+                iput(cwd);
+                return -1;
+            }
+            iput(cwd);
+            cwd = parent;
+        }
+        depth++;
+    }
+    iput(cwd);
+
+    if (depth == 0) {
+        if (size < 2)
+            return -1;
+        buf[0] = '/';
+        buf[1] = '\0';
+        return 0;
+    }
+
+    len = 0;
+    for (i = depth - 1; i >= 0; i--) {
+        int n = strlen(names[i]);
+
+        if (len + n + 2 > size)
+            return -1;
+        buf[len++] = '/';
+        memcpy(buf + len, names[i], n);
+        len += n;
+    }
+    buf[len] = '\0';
+    return 0;
+}
+
 int sys_rename(const char *oldname, const char *newname)
 {
     struct m_inode *oldinode, *dir_old, *dir_new;

@@ -213,10 +213,11 @@ system_call:
     /* reload saved syscall number for dispatch */
     mov 24(%esp), %eax
 
-    /* syscalls: numbers 0..66 are the Linux 0.01 table, 67 is this
-       kernel's sigreturn.  Keep this bound in step with sys_call_table
-       (an entry added without widening it is silently unreachable). */
-    cmpl $73, %eax
+    /* syscalls: numbers 0..66 are the Linux 0.01 table, 67..73 are this
+       kernel's own additions (sigreturn .. getcwd).  Keep this bound in
+       step with sys_call_table: an entry added without widening it is
+       silently unreachable. */
+    cmpl $74, %eax
     jb 1f
     movl $-1, %eax
     jmp 2f
@@ -422,3 +423,4 @@ sys_call_table:
     .long sys_sigaction          /* 70: not in Linux 0.01 (B5) */
     .long sys_sleep              /* 71: not in Linux 0.01 (B5.7) */
     .long sys_select             /* 72: not in Linux 0.01 (B5.7) */
+    .long sys_getcwd             /* 73: not in Linux 0.01 */

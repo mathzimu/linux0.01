@@ -280,6 +280,7 @@ int sys_setsid(void);
 int sys_chroot(const char *filename);
 int sys_link(const char *oldname, const char *newname);
 int sys_rename(const char *oldname, const char *newname);
+int sys_getcwd(char *buf, int size);
 int sys_pipe(unsigned long *fildes);
 int sys_fcntl(unsigned int fd, unsigned int cmd, unsigned long arg);
 int sys_brk(unsigned long end_data_seg);

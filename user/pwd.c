@@ -1,8 +1,9 @@
 /* pwd：打印当前工作目录的绝对路径。
  *
- * 这个内核还没有 getcwd(2)（要新开系统调用号，内核侧还得能从 pwd inode 沿 ".."
- * 反查出路径名），而用 chdir("..") 逐级上溯会把调用者自己的工作目录弄乱——所以这里
- * 全程用**相对路径**：
+ * 优先用 getcwd(2)（系统调用 73，内核从 pwd inode 沿 ".." 反查，见 kernel/sys.c）。
+ * 老的纯用户态实现（用 opendir/readdir 加相对路径上溯）保留为降级路径：它不依赖
+ * 新系统调用，也不 chdir，所以跑在旧内核上也不会弄乱调用者的工作目录。逐级上溯
+ * 的细节见下（第 d 层打开 ".."/"../.."，在父目录里找 inode 号等于当前目录的条目）。
  *
  *   第 d 层打开 ".."、"../.."、…，在里面找 inode 号等于"当前目录"的那个条目，
  *   它就是当前目录在父目录里的名字；父目录自己的 inode 号从**同一次** opendir 的
@@ -33,7 +34,23 @@ static DIR *open_up(int depth)
     return opendir(path);
 }
 
+static int pwd_via_walk(void);
+
 int main(void)
+{
+    char buf[512];
+
+    /* Prefer the kernel's getcwd(2) (syscall 73): it walks the tree with
+       real inode reads and does not touch the caller's cwd.  Fall back to
+       the purely userland ".." walk below for kernels without it. */
+    if (getcwd(buf, sizeof(buf)) == 0) {
+        printf("%s\n", buf);
+        return 0;
+    }
+    return pwd_via_walk();
+}
+
+static int pwd_via_walk(void)
 {
     DIR *d;
     struct dirent *e;

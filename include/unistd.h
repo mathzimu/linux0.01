@@ -88,6 +88,7 @@
 #define __NR_sigaction 70
 #define __NR_sleep 71
 #define __NR_select 72
+#define __NR_getcwd 73
 
 /* open flags (Linux 0.01) */
 #define O_RDONLY 0
@@ -195,6 +196,7 @@ _syscall1(int, nice, long, increment)
 _syscall0(int, sync)
 _syscall2(int, kill, int, pid, int, sig)
 _syscall2(int, rename, const char *, oldname, const char *, newname)
+_syscall2(int, getcwd, char *, buf, int, size)
 _syscall2(int, mkdir, const char *, dirname, int, mode)
 _syscall1(int, rmdir, const char *, dirname)
 _syscall1(int, dup, unsigned int, fd)
